@@ -17,9 +17,9 @@ export async function fetchRosters(date, unitIds) {
     s1: { field: "Date", type: "eq", data: date },
     s2: { field: "OperationalUnit", type: "in", data: unitIds },
     s3: { field: "IsLeave", type: "eq", data: "false" },
-    s4: { field: "Discarded", type: "eq", data: "false" },
+    s4: { field: "Discarded", type: "eq", data: false },
   };
-  const data = await deputyPost("resource/Roster/QUERY", { max: 500, search });
+  const data: any = await deputyPost("resource/Roster/QUERY", { max: 500, search });
   
   const allEmps = await deputyPost("resource/Employee/QUERY", { max: 500 });
   const empMap = new Map(allEmps?.items?.map(e => [e.Id, e.Name]));
