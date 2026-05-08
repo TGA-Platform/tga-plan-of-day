@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --tga-dark: #1a2e1a;
+    --tga-green: #4a7a3a;
+    --tga-light: #e8f0e8;
+  }
+  
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #f5f7f5;
+    color: #1a2e1a;
+  }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; }
+  .print-break { page-break-before: always; }
+}
