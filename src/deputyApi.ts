@@ -22,9 +22,9 @@ export async function fetchRosters(date, unitIds) {
   const data = await deputyPost("resource/Roster/QUERY", { max: 500, search });
   
   const allEmps = await deputyPost("resource/Employee/QUERY", { max: 500 });
-  const empMap = new Map(allEmps.items?.map(e => [e.Id, e.Name]));
+  const empMap = new Map(allEmps?.items?.map(e => [e.Id, e.Name]));
   
-  return (data.items || []).map(r => ({
+  return (data.items || []).map(r => ({ // Add type coercion
     employeeId: r.Employee,
     unitId: r.OperationalUnit,
     startTime: r.StartTime,
