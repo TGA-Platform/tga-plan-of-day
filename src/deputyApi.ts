@@ -7,7 +7,7 @@ function deputyPost(path, body) {
     const data=JSON.stringify(body);
     const req=https.request({hostname:DEPUTY_HOST,path:"/api/v1/"+path,method:"POST",
       headers:{"Authorization":"Bearer "+DEPUTY_TOKEN,"Content-Type":"application/json","Content-Length":Buffer.byteLength(data)}
-    },res=>{let d="";res.on("data",c=>d+=c);res.on("end",()=>resolve(JSON.parse(d)));});
+    },res=>{let d="";res.on("data",c=>d+=c);res.on("end",()=>resolve(JSON.parse(d) as any));});
     req.on("error",reject);req.write(data);req.end();
   });
 }
@@ -21,10 +21,10 @@ export async function fetchRosters(date, unitIds) {
   };
   const data: any = await deputyPost("resource/Roster/QUERY", { max: 500, search });
   
-  const allEmps = await deputyPost("resource/Employee/QUERY", { max: 500 });
+  const allEmps: any = await deputyPost("resource/Employee/QUERY", { max: 500 });
   const empMap = new Map(allEmps?.items?.map(e => [e.Id, e.Name]));
   
-  return (data.items || []).map(r => ({ // Add type coercion
+  return (data.items || []).map((r: any) => ({ // Add type coercion
     employeeId: r.Employee,
     unitId: r.OperationalUnit,
     startTime: r.StartTime,
