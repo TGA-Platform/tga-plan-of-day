@@ -41,10 +41,10 @@ export async function fetchAbsentStaff(date, unitIds) {
   };
   const data = await deputyPost("resource/Timesheet/QUERY", { max: 500, search });
   
-  const allEmps = await deputyPost("resource/Employee/QUERY", { max: 500 });
+  const allEmps: any = await deputyPost("resource/Employee/QUERY", { max: 500 });
   const empMap = new Map(allEmps.items?.map(e => [e.Id, e.Name]));
   
-  return (data.items || []).map(r => ({
+  return (data.items || []).map((r: any) => ({
     employeeId: r.Employee,
     reason: r.EmployeeComment || "Unspecified Leave",
     unitId: r.OperationalUnit,
