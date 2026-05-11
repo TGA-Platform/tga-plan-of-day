@@ -1,10 +1,4 @@
-import { DEPUTY_BASE, DEPUTY_TOKEN } from './config';
 import type { RosteredStaff, AbsentStaff } from './types';
-
-const headers = {
-  'Authorization': `Bearer ${DEPUTY_TOKEN}`,
-  'Content-Type': 'application/json',
-};
 
 // Cache employee names to avoid repeated lookups
 const employeeCache: Record<number, string> = {};
@@ -12,16 +6,9 @@ const employeeCache: Record<number, string> = {};
 export async function fetchEmployeeName(employeeId: number): Promise<string> {
   if (employeeCache[employeeId]) return employeeCache[employeeId];
   
-  try {
-    const res = await fetch(`${DEPUTY_BASE}/resource/Employee/${employeeId}`, { headers });
-    if (!res.ok) return `Staff #${employeeId}`;
-    const data = await res.json();
-    const name = data.DisplayName || `${data.FirstName || ''} ${data.LastName || ''}`.trim() || `Staff #${employeeId}`;
-    employeeCache[employeeId] = name;
-    return name;
-  } catch {
-    return `Staff #${employeeId}`;
-  }
+  // Batch through the employee proxy
+  const names = await fetchEmployeeNames([employeeId]);
+  return names[employeeId] || `Staff #${employeeId}`;
 }
 
 export async function fetchEmployeeNames(ids: number[]): Promise<Record<number, string>> {
@@ -29,23 +16,18 @@ export async function fetchEmployeeNames(ids: number[]): Promise<Record<number, 
   
   if (uniqueIds.length > 0) {
     try {
-      // Batch fetch with QUERY
-      const body = {
-        max: 500,
-        search: {
-          s1: { field: 'Id', type: 'in', data: uniqueIds }
-        }
-      };
-      const res = await fetch(`${DEPUTY_BASE}/resource/Employee/QUERY`, {
+      const res = await fetch('/api/deputy-employees', {
         method: 'POST',
-        headers,
-        body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: uniqueIds }),
       });
       if (res.ok) {
         const employees = await res.json();
-        for (const emp of employees) {
-          const name = emp.DisplayName || `${emp.FirstName || ''} ${emp.LastName || ''}`.trim() || `Staff #${emp.Id}`;
-          employeeCache[emp.Id] = name;
+        if (Array.isArray(employees)) {
+          for (const emp of employees) {
+            const name = emp.DisplayName || `${emp.FirstName || ''} ${emp.LastName || ''}`.trim() || `Staff #${emp.Id}`;
+            employeeCache[emp.Id] = name;
+          }
         }
       }
     } catch (err) {
@@ -62,23 +44,15 @@ export async function fetchEmployeeNames(ids: number[]): Promise<Record<number, 
 
 export async function fetchRosters(date: string, unitIds: number[]): Promise<RosteredStaff[]> {
   try {
-    const body = {
-      max: 500,
-      search: {
-        s1: { field: 'Date', type: 'eq', data: date },
-        s2: { field: 'OperationalUnit', type: 'in', data: unitIds },
-      }
-    };
-    
-    const res = await fetch(`${DEPUTY_BASE}/resource/Roster/QUERY`, {
+    const res = await fetch('/api/deputy-rosters', {
       method: 'POST',
-      headers,
-      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, unitIds }),
     });
     
     if (!res.ok) {
-      console.error('Deputy API failed:', res.status, await res.text());
-      throw new Error(`Deputy ${res.status} - Check VITE_DEPUTY_TOKEN env var in Vercel`);
+      console.error('Deputy proxy failed:', res.status, await res.text());
+      throw new Error(`Deputy proxy ${res.status}`);
     }
     
     const rosters = await res.json();
@@ -104,18 +78,10 @@ export async function fetchRosters(date: string, unitIds: number[]): Promise<Ros
 
 export async function fetchAbsentStaff(date: string, unitIds: number[]): Promise<AbsentStaff[]> {
   try {
-    const body = {
-      max: 200,
-      search: {
-        s1: { field: 'Date', type: 'eq', data: date },
-        s2: { field: 'OperationalUnit', type: 'in', data: unitIds },
-      }
-    };
-    
-    const res = await fetch(`${DEPUTY_BASE}/resource/Roster/QUERY`, {
+    const res = await fetch('/api/deputy-rosters', {
       method: 'POST',
-      headers,
-      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, unitIds }),
     });
     
     if (!res.ok) return [];
@@ -123,8 +89,7 @@ export async function fetchAbsentStaff(date: string, unitIds: number[]): Promise
     const rosters = await res.json();
     if (!Array.isArray(rosters)) return [];
     
-    // Absent staff are those with Open = false and no timesheet, or those on Leave units
-    // For now, look for any roster with Comment containing "leave" or matching leave unit IDs
+    // Absent staff: rosters with Open === false or leave-related comments
     const leaveRosters = rosters.filter((r: any) => 
       r.Open === false || 
       r.Comment?.toLowerCase().includes('leave') ||
@@ -133,7 +98,6 @@ export async function fetchAbsentStaff(date: string, unitIds: number[]): Promise
     );
     
     if (leaveRosters.length === 0) {
-      // Also try the Leave timesheets approach
       return fetchAbsentFromTimesheets(date);
     }
     
@@ -153,18 +117,10 @@ export async function fetchAbsentStaff(date: string, unitIds: number[]): Promise
 
 async function fetchAbsentFromTimesheets(date: string): Promise<AbsentStaff[]> {
   try {
-    const body = {
-      max: 200,
-      search: {
-        s1: { field: 'Date', type: 'eq', data: date },
-        s2: { field: 'IsLeave', type: 'eq', data: true },
-      }
-    };
-    
-    const res = await fetch(`${DEPUTY_BASE}/resource/Timesheet/QUERY`, {
+    const res = await fetch('/api/deputy-timesheets', {
       method: 'POST',
-      headers,
-      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date }),
     });
     
     if (!res.ok) return [];
