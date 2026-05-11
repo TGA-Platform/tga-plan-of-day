@@ -1,7 +1,11 @@
 import type { Centre, User } from './types';
 
-export const DEPUTY_TOKEN = 'cf73b1628a5e3498d713879bcf07a974';
+export const DEPUTY_TOKEN = import.meta.env.VITE_DEPUTY_TOKEN || 'cf73b1628a5e3498d713879bcf07a974';
 export const DEPUTY_HOST = 'thegroveacademy.au.deputy.com';
+export const OWNA_BASE = 'https://hq.owna.com.au';
+export const OWNA_USER = 'claude@tga.edu.au';
+export const OWNA_PASS = import.meta.env.VITE_OWNA_PASS || 'Orange6512*';
+export const OWNA_OATLEY_CENTRE_ID = parseInt(import.meta.env.VITE_OWNA_OATLEY_CENTRE_ID || '1'); // Oatley ID
 export const DEPUTY_BASE = `https://${DEPUTY_HOST}/api/v1`;
 
 // Oatley room IDs discovered from Deputy API

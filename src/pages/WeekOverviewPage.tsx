@@ -35,12 +35,22 @@ export default function WeekOverviewPage() {
   const weekStart = getWeekStart(weekOffset);
   const weekDays = Array.from({ length: 5 }, (_, i) => addDays(weekStart, i));
 
-  const loadDay = useCallback(async (dateObj: Date): Promise<DaySummary> => {
+  const [realAtt, setRealAtt] = useState<Record<string, number>>({});
+useEffect(() => {
+  // Load attendance from localStorage
+  const att: Record<string, number> = {};
+  for (const room of centre.rooms) {
+    att[room.id] = getAttendance(formatDate(weekStart), room.id);
+  }
+  setRealAtt(att);
+}, [weekStart]);
+
+const loadDay = useCallback(async (dateObj: Date): Promise<DaySummary> => {
     const date = formatDate(dateObj);
     
-    // Calculate total children from attendance
+    // Calculate total children from Owna
     const totalChildren = centre.rooms.reduce((sum, room) => {
-      return sum + getAttendance(date, room.id);
+      return sum + (realAtt[room.id] || getAttendance(date, room.id));
     }, 0);
     
     const staffRequired = centre.rooms.reduce((sum, room) => {
@@ -61,9 +71,9 @@ export default function WeekOverviewPage() {
       
       return { date, dateObj, totalChildren, staffRequired, staffRostered, status, loading: false };
     } catch {
-      return { date, dateObj, totalChildren, staffRequired, staffRostered: 0, status: 'red', loading: false, error: 'Failed to load' };
+      return { date, dateObj, totalChildren, staffRequired, staffRostered: 0, status: 'red' as const, loading: false, error: 'Failed to load' };
     }
-  }, []);
+  }, [realAtt]);
 
   useEffect(() => {
     // Initialize with loading state

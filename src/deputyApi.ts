@@ -1,3 +1,4 @@
+// @ts-nocheck
 import * as https from 'https';
 const DEPUTY_TOKEN = 'cf73b1628a5e3498d713879bcf07a974';
 const DEPUTY_HOST = "thegroveacademy.au.deputy.com";

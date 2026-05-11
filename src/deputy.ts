@@ -77,8 +77,8 @@ export async function fetchRosters(date: string, unitIds: number[]): Promise<Ros
     });
     
     if (!res.ok) {
-      console.error('Roster fetch failed:', res.status, await res.text());
-      return [];
+      console.error('Deputy API failed:', res.status, await res.text());
+      throw new Error(`Deputy ${res.status} - Check VITE_DEPUTY_TOKEN env var in Vercel`);
     }
     
     const rosters = await res.json();
