@@ -9,11 +9,17 @@ CREATE TABLE IF NOT EXISTS pod_attendance (
   date date NOT NULL,
   child_name text,
   room_name text,
-  sign_in timestamptz,
-  sign_out timestamptz,
+  sign_in timestamptz,           -- confirmed actual sign-in time
+  sign_out timestamptz,          -- confirmed actual sign-out time
+  predicted_sign_in timestamptz, -- from booked session window start
+  predicted_sign_out timestamptz,-- from booked session window end
   session text,
   scraped_at timestamptz DEFAULT now()
 );
+
+-- Migration: add predicted columns if table already exists
+ALTER TABLE pod_attendance ADD COLUMN IF NOT EXISTS predicted_sign_in timestamptz;
+ALTER TABLE pod_attendance ADD COLUMN IF NOT EXISTS predicted_sign_out timestamptz;
 
 -- Daily summary stats (approved, attended, absent, % per day per centre)
 CREATE TABLE IF NOT EXISTS pod_daily_stats (

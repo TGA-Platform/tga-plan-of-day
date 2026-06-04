@@ -4,7 +4,8 @@
  */
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NDE3MjUsImV4cCI6MjA4OTUxNzcyNX0.Yf5jHkWvE9bVn_LKd_kbG3ZxBPAFGnl_Z9rA0ZeC0xc';
+// Service role key used (internal-only app — no public users)
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
 
 const HEADERS = {
   'apikey': SUPABASE_ANON_KEY,
@@ -18,8 +19,10 @@ export interface AttendanceRecord {
   date: string;
   child_name: string | null;
   room_name: string | null;
-  sign_in: string | null;
-  sign_out: string | null;
+  sign_in: string | null;           // confirmed actual sign-in time
+  sign_out: string | null;          // confirmed actual sign-out time
+  predicted_sign_in: string | null; // from booked session window
+  predicted_sign_out: string | null;
   session: string | null;
   scraped_at: string;
 }
@@ -111,4 +114,45 @@ export function countSignedIn(records: AttendanceRecord[], slotStart: Date, slot
     const signOut = r.sign_out ? new Date(r.sign_out) : null;
     return signIn <= slotStart && (signOut === null || signOut >= slotEnd);
   }).length;
+}
+
+export interface ForecastData {
+  // { room_name: { slot_start: avg_count } }
+  [roomName: string]: { [slotStart: string]: number };
+}
+
+/**
+ * Fetch interval forecast for a centre on a given date.
+ * Returns a map of room_name → slot_start → avg_count.
+ * Falls back to empty object if forecast not available.
+ */
+export async function fetchForecast(centreId: string, date: string): Promise<ForecastData> {
+  try {
+    const res = await fetch(`/api/forecast?centre=${encodeURIComponent(centreId)}&date=${encodeURIComponent(date)}`);
+    if (!res.ok) return {};
+    const json = await res.json();
+    return json.forecast || {};
+  } catch (err) {
+    console.warn('fetchForecast error:', err);
+    return {};
+  }
+}
+
+/**
+ * Get peak forecast count for a room on a given day.
+ * Returns the maximum avg_count across all 15-min slots.
+ */
+export function getForecastPeak(forecast: ForecastData, roomName: string): number {
+  const roomForecast = forecast[roomName];
+  if (!roomForecast) return 0;
+  const values = Object.values(roomForecast);
+  if (values.length === 0) return 0;
+  return Math.max(...values);
+}
+
+/**
+ * Get forecast count for a specific slot.
+ */
+export function getForecastForSlot(forecast: ForecastData, roomName: string, slotStart: string): number {
+  return forecast[roomName]?.[slotStart] ?? 0;
 }

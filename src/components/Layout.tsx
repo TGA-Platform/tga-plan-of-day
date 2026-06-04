@@ -1,59 +1,77 @@
-import React from 'react';
+﻿import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { logout, getUser } from '../auth';
+import { canAccess } from '../lib/rolePermissions';
 
-interface LayoutProps {
-  children: React.ReactNode;
-}
-
-export default function Layout({ children }: LayoutProps) {
-  const navigate = useNavigate();
+export default function Layout({ children }: { children: React.ReactNode }) {
+  const navigate  = useNavigate();
   const user = getUser();
 
-  function handleLogout() {
-    logout();
-    navigate('/login');
-  }
-
   return (
-    <div className="min-h-screen flex flex-col" style={{ backgroundColor: '#f5f7f5' }}>
+    <div className="min-h-screen flex flex-col" style={{ backgroundColor: '#F5FAF3' }}>
       {/* Header */}
-      <header className="no-print text-white px-4 py-3 flex items-center justify-between shadow-lg" style={{ backgroundColor: '#1a2e1a' }}>
+      <header
+        className="no-print px-5 py-3 flex items-center justify-between border-b"
+        style={{ backgroundColor: '#ffffff', borderColor: '#E2F1DA', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
+      >
+        {/* Logo */}
         <Link to="/" className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm" style={{ backgroundColor: '#4a7a3a' }}>
-            TGA
-          </div>
+          <img src="/tga-logo.jpg" alt="The Grove Academy" className="h-10 w-auto object-contain" />
           <div>
-            <div className="font-bold text-base leading-tight">Plan of the Day</div>
-            <div className="text-xs opacity-70">The Grove Academy</div>
+            <div className="font-bold text-sm leading-tight" style={{ color: '#050505' }}>
+              Plan of the Day
+            </div>
+            <div className="text-xs" style={{ color: '#596570' }}>Ratio Dashboard</div>
           </div>
         </Link>
 
+        {/* Nav */}
         <div className="flex items-center gap-4">
           {user && (
-            <div className="hidden sm:flex items-center gap-2 text-sm">
-              <span className="opacity-70">Oatley</span>
-              <span className="opacity-40">•</span>
-              <span className="opacity-70">{user.name}</span>
-            </div>
+            <nav className="hidden sm:flex items-center gap-3 text-sm font-medium">
+              {canAccess(user.role, 'dashboard') && (
+                <>
+                  <Link to="/ratio" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Dashboard</Link>
+                  <span style={{ color: '#D0E8B8' }}>|</span>
+                </>
+              )}
+              {canAccess(user.role, 'reporting') && (
+                <>
+                  <Link to="/reporting" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Reports</Link>
+                  <span style={{ color: '#D0E8B8' }}>|</span>
+                </>
+              )}
+              {canAccess(user.role, 'summary') && (
+                <>
+                  <Link to="/summary" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">All Centres</Link>
+                  <span style={{ color: '#D0E8B8' }}>|</span>
+                </>
+              )}
+              {canAccess(user.role, 'settings') && (
+                <>
+                  <Link to="/settings" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Settings</Link>
+                  <span style={{ color: '#D0E8B8' }}>|</span>
+                </>
+              )}
+              <span style={{ color: '#596570' }}>{user.name}</span>
+            </nav>
           )}
           <button
-            onClick={handleLogout}
-            className="text-sm px-3 py-1 rounded border border-white/30 hover:bg-white/10 transition-colors"
+            onClick={() => { logout(); navigate('/login'); }}
+            className="text-sm px-4 py-1.5 rounded-full font-semibold border transition-all hover:opacity-80"
+            style={{ borderColor: '#2d5c18', color: '#5a9228', backgroundColor: '#F5FAF3' }}
           >
             Logout
           </button>
         </div>
       </header>
 
-      {/* Main content */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
         {children}
       </main>
 
-      {/* Footer */}
-      <footer className="no-print text-center py-3 text-xs opacity-40">
-        TGA Plan of the Day © {new Date().getFullYear()} The Grove Academy
+      <footer className="no-print text-center py-3 text-xs" style={{ color: '#D0E8B8' }}>
+        © {new Date().getFullYear()} The Grove Academy
       </footer>
     </div>
   );

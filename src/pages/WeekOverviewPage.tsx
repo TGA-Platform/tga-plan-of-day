@@ -6,6 +6,7 @@ import { CENTRES } from '../config';
 import { fetchRosters } from '../deputy';
 import { getAttendance, getStaffRequired, getStatus } from '../attendance';
 import { formatDate } from '../dateUtils';
+import { fetchAttendanceForDate, fetchForecast, getForecastPeak } from '../api/ownaData';
 
 const centre = CENTRES[0]; // Oatley
 const allRoomUnitIds = centre.rooms.map(r => r.deputyUnitId);
@@ -19,6 +20,7 @@ interface DaySummary {
   status: 'green' | 'amber' | 'red';
   loading: boolean;
   error?: string;
+  isForecast?: boolean; // true if children count came from forecast (not live/booked)
 }
 
 function getWeekStart(offset: number): Date {
@@ -48,30 +50,68 @@ useEffect(() => {
 const loadDay = useCallback(async (dateObj: Date): Promise<DaySummary> => {
     const date = formatDate(dateObj);
     
-    // Calculate total children from Owna
-    const totalChildren = centre.rooms.reduce((sum, room) => {
-      return sum + (realAtt[room.id] || getAttendance(date, room.id));
-    }, 0);
+    // Fetch real attendance from Owna (Supabase) — fall back to forecast, then localStorage
+    let totalChildren = 0;
+    let staffRequired = 0;
+    let isForecast = false;
+    try {
+      const ownaRecords = await fetchAttendanceForDate('oatley', date);
+      if (ownaRecords.length > 0) {
+        // Use actual attendance: count unique children who signed in
+        totalChildren = new Set(ownaRecords.filter(r => r.sign_in).map(r => r.child_name)).size;
+        // Staff required based on actual room attendance counts
+        staffRequired = centre.rooms.reduce((sum, room) => {
+          const roomCount = ownaRecords.filter(r => r.room_name === (room.ownaRoomName || room.name) && r.sign_in).length;
+          return sum + getStaffRequired(roomCount, room.ratio);
+        }, 0);
+      } else {
+        // No Owna data — try forecast first
+        const forecast = await fetchForecast('oatley', date);
+        const hasForecast = Object.keys(forecast).length > 0;
+        
+        if (hasForecast) {
+          // Use forecast peak counts per room
+          isForecast = true;
+          totalChildren = centre.rooms.reduce((sum, room) => {
+            const ownaName = room.ownaRoomName || room.name;
+            const peak = getForecastPeak(forecast, ownaName);
+            return sum + Math.round(peak);
+          }, 0);
+          staffRequired = centre.rooms.reduce((sum, room) => {
+            const ownaName = room.ownaRoomName || room.name;
+            const peak = getForecastPeak(forecast, ownaName);
+            return sum + getStaffRequired(Math.round(peak), room.ratio);
+          }, 0);
+        } else {
+          // Fall back to booked counts from localStorage
+          totalChildren = centre.rooms.reduce((sum, room) => sum + (realAtt[room.id] || getAttendance(date, room.id)), 0);
+          staffRequired = centre.rooms.reduce((sum, room) => {
+            const att = realAtt[room.id] || getAttendance(date, room.id);
+            return sum + getStaffRequired(att, room.ratio);
+          }, 0);
+        }
+      }
+    } catch {
+      totalChildren = centre.rooms.reduce((sum, room) => sum + (realAtt[room.id] || getAttendance(date, room.id)), 0);
+      staffRequired = centre.rooms.reduce((sum, room) => {
+        const att = realAtt[room.id] || getAttendance(date, room.id);
+        return sum + getStaffRequired(att, room.ratio);
+      }, 0);
+    }
     
-    const staffRequired = centre.rooms.reduce((sum, room) => {
-      const attendance = getAttendance(date, room.id);
-      return sum + getStaffRequired(attendance, room.ratio);
-    }, 0);
-    
-    // Fetch live rosters
+    // Fetch live rosters from Deputy
     try {
       const rosters = await fetchRosters(date, allRoomUnitIds);
-      // Count unique staff (by employee ID) across room units only
+      // Count unique staff (by employee ID) across room units only (exclude float/leave)
       const roomUnitIds = new Set(centre.rooms.map(r => r.deputyUnitId));
       const uniqueStaff = new Set(
         rosters.filter(r => roomUnitIds.has(r.unitId)).map(r => r.employeeId)
       );
       const staffRostered = uniqueStaff.size;
       const status = getStatus(staffRostered, staffRequired);
-      
-      return { date, dateObj, totalChildren, staffRequired, staffRostered, status, loading: false };
+      return { date, dateObj, totalChildren, staffRequired, staffRostered, status, loading: false, isForecast };
     } catch {
-      return { date, dateObj, totalChildren, staffRequired, staffRostered: 0, status: 'red' as const, loading: false, error: 'Failed to load' };
+      return { date, dateObj, totalChildren, staffRequired, staffRostered: 0, status: 'red' as const, loading: false, error: 'Failed to load', isForecast };
     }
   }, [realAtt]);
 
@@ -105,28 +145,28 @@ const loadDay = useCallback(async (dateObj: Date): Promise<DaySummary> => {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold" style={{ color: '#1a2e1a' }}>Week Overview</h1>
-          <p className="text-sm mt-1" style={{ color: '#6a8a6a' }}>Oatley Centre — {weekLabel}</p>
+          <h1 className="text-2xl font-bold" style={{ color: '#2d5c18' }}>Week Overview</h1>
+          <p className="text-sm mt-1" style={{ color: '#596570' }}>Oatley Centre — {weekLabel}</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setWeekOffset(w => w - 1)}
             className="px-3 py-2 rounded-lg border font-medium text-sm transition-colors hover:bg-gray-100"
-            style={{ borderColor: '#c0d0c0', color: '#1a2e1a' }}
+            style={{ borderColor: '#c0d0c0', color: '#2d5c18' }}
           >
             ←
           </button>
           <button
             onClick={() => setWeekOffset(0)}
             className="px-3 py-2 rounded-lg border font-medium text-sm transition-colors hover:bg-gray-100"
-            style={{ borderColor: '#c0d0c0', color: '#1a2e1a' }}
+            style={{ borderColor: '#c0d0c0', color: '#2d5c18' }}
           >
             Today
           </button>
           <button
             onClick={() => setWeekOffset(w => w + 1)}
             className="px-3 py-2 rounded-lg border font-medium text-sm transition-colors hover:bg-gray-100"
-            style={{ borderColor: '#c0d0c0', color: '#1a2e1a' }}
+            style={{ borderColor: '#c0d0c0', color: '#2d5c18' }}
           >
             →
           </button>
@@ -154,20 +194,20 @@ const loadDay = useCallback(async (dateObj: Date): Promise<DaySummary> => {
               onClick={() => navigate(`/day/${day.date}`)}
               className="rounded-xl p-4 cursor-pointer transition-all hover:shadow-md border-2"
               style={{
-                backgroundColor: isCurrentDay ? '#e8f0e8' : 'white',
-                borderColor: isCurrentDay ? '#4a7a3a' : '#e0e8e0',
+                backgroundColor: isCurrentDay ? '#E2F1DA' : 'white',
+                borderColor: isCurrentDay ? '#5a9228' : '#e0e8e0',
               }}
             >
               {/* Date header */}
               <div className="mb-3">
-                <div className="text-sm font-semibold" style={{ color: '#4a7a3a' }}>
+                <div className="text-sm font-semibold" style={{ color: '#5a9228' }}>
                   {format(day.dateObj, 'EEE')}
                 </div>
-                <div className="text-xl font-bold" style={{ color: '#1a2e1a' }}>
+                <div className="text-xl font-bold" style={{ color: '#2d5c18' }}>
                   {format(day.dateObj, 'd MMM')}
                 </div>
                 {isCurrentDay && (
-                  <span className="text-xs font-medium px-2 py-0.5 rounded-full text-white mt-1 inline-block" style={{ backgroundColor: '#4a7a3a' }}>
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full text-white mt-1 inline-block" style={{ backgroundColor: '#5a9228' }}>
                     Today
                   </span>
                 )}
@@ -182,17 +222,24 @@ const loadDay = useCallback(async (dateObj: Date): Promise<DaySummary> => {
               ) : (
                 <>
                   <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span style={{ color: '#6a8a6a' }}>Children</span>
-                      <span className="font-semibold" style={{ color: '#1a2e1a' }}>{day.totalChildren}</span>
+                    <div className="flex justify-between items-center">
+                      <span style={{ color: '#596570' }}>Children</span>
+                      <div className="flex items-center gap-1">
+                        <span className="font-semibold" style={{ color: '#2d5c18' }}>{day.totalChildren}</span>
+                        {day.isForecast && (
+                          <span className="text-xs px-1.5 py-0.5 rounded font-medium" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', fontSize: '10px' }}>
+                            📊
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex justify-between">
-                      <span style={{ color: '#6a8a6a' }}>Required</span>
-                      <span className="font-semibold" style={{ color: '#1a2e1a' }}>{day.staffRequired}</span>
+                      <span style={{ color: '#596570' }}>Required</span>
+                      <span className="font-semibold" style={{ color: '#2d5c18' }}>{day.staffRequired}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span style={{ color: '#6a8a6a' }}>Rostered</span>
-                      <span className="font-semibold" style={{ color: '#1a2e1a' }}>{day.staffRostered}</span>
+                      <span style={{ color: '#596570' }}>Rostered</span>
+                      <span className="font-semibold" style={{ color: '#2d5c18' }}>{day.staffRostered}</span>
                     </div>
                   </div>
 
@@ -211,7 +258,7 @@ const loadDay = useCallback(async (dateObj: Date): Promise<DaySummary> => {
       </div>
 
       {/* Legend */}
-      <div className="mt-6 flex flex-wrap gap-4 text-sm" style={{ color: '#6a8a6a' }}>
+      <div className="mt-6 flex flex-wrap gap-4 text-sm" style={{ color: '#596570' }}>
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full bg-green-500"></div>
           <span>Staffed (≥ required)</span>

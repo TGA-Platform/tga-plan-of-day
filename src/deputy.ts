@@ -62,26 +62,40 @@ export async function fetchRosters(date: string, unitIds: number[]): Promise<Ros
     const employeeIds = rosters.map((r: any) => r.Employee).filter(Boolean);
     const names = await fetchEmployeeNames(employeeIds);
     
-    return rosters.map((r: any) => ({
-      employeeId: r.Employee,
-      employeeName: names[r.Employee] || `Staff #${r.Employee}`,
-      startTime: r.StartTime || '',
-      endTime: r.EndTime || '',
-      unitId: r.OperationalUnit,
-      unitName: r._DPMetaData?.OperationalUnitObject?.OperationalUnitName || '',
-    }));
+    return rosters
+      .filter((r: any) => {
+        // Exclude open/unassigned shifts (Employee = 0) — these show as "Staff #0"
+        if (!r.Employee || r.Employee === 0) return false;
+        const uName = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
+        return !uName.includes('staff meeting');
+      })
+      .map((r: any) => ({
+        employeeId: r.Employee,
+        // Prefer the display name already embedded in the roster response metadata
+        employeeName: r._DPMetaData?.EmployeeInfo?.DisplayName || names[r.Employee] || `Staff #${r.Employee}`,
+        startTime: r.StartTime || '',
+        endTime: r.EndTime || '',
+        unitId: r.OperationalUnit,
+        // Deputy uses OperationalUnitInfo (not OperationalUnitObject) in _DPMetaData
+        unitName: r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '',
+      }));
   } catch (err) {
     console.error('fetchRosters error:', err);
     return [];
   }
 }
 
+// Deputy leave operational unit IDs for Oatley
+const LEAVE_UNIT_IDS = [134, 142]; // 134 = Annual Leave, 142 = Sick Leave
+
 export async function fetchAbsentStaff(date: string, unitIds: number[]): Promise<AbsentStaff[]> {
   try {
+    // Include leave units in query so we can detect absences
+    const allUnitIds = [...new Set([...unitIds, ...LEAVE_UNIT_IDS])];
     const res = await fetch('/api/deputy-rosters', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, unitIds }),
+      body: JSON.stringify({ date, unitIds: allUnitIds }),
     });
     
     if (!res.ok) return [];
@@ -89,9 +103,10 @@ export async function fetchAbsentStaff(date: string, unitIds: number[]): Promise
     const rosters = await res.json();
     if (!Array.isArray(rosters)) return [];
     
-    // Absent staff: rosters with Open === false or leave-related comments
+    // Absent = rostered in a leave unit OR comment mentions leave/sick/absent
+    // Note: Open===false just means the shift is ASSIGNED (not open) — do NOT use it to detect leave
     const leaveRosters = rosters.filter((r: any) => 
-      r.Open === false || 
+      LEAVE_UNIT_IDS.includes(r.OperationalUnit) ||
       r.Comment?.toLowerCase().includes('leave') ||
       r.Comment?.toLowerCase().includes('sick') ||
       r.Comment?.toLowerCase().includes('absent')
@@ -101,13 +116,10 @@ export async function fetchAbsentStaff(date: string, unitIds: number[]): Promise
       return fetchAbsentFromTimesheets(date);
     }
     
-    const employeeIds = leaveRosters.map((r: any) => r.Employee).filter(Boolean);
-    const names = await fetchEmployeeNames(employeeIds);
-    
     return leaveRosters.map((r: any) => ({
       employeeId: r.Employee,
-      employeeName: names[r.Employee] || `Staff #${r.Employee}`,
-      reason: r.Comment || 'Absent',
+      employeeName: r._DPMetaData?.EmployeeInfo?.DisplayName || `Staff #${r.Employee}`,
+      reason: r.Comment || (LEAVE_UNIT_IDS.includes(r.OperationalUnit) ? 'On Leave' : 'Absent'),
     }));
   } catch (err) {
     console.error('fetchAbsentStaff error:', err);

@@ -40,17 +40,30 @@ export function getStatus(staffRostered: number, staffRequired: number): 'green'
   return 'red';
 }
 
-export function formatTime(timeStr: string): string {
-  if (!timeStr) return '';
+export function formatTime(timeStr: string | number): string {
+  if (!timeStr && timeStr !== 0) return '';
   try {
-    // Deputy times can be ISO or "HH:MM:SS"
-    const date = new Date(timeStr);
-    if (!isNaN(date.getTime())) {
-      return date.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
+    // Deputy StartTime/EndTime fields are Unix timestamps in SECONDS
+    // e.g. 1778630400 → 2026-05-13T10:00:00+10:00
+    const num = Number(timeStr);
+    if (!isNaN(num) && num > 1_000_000_000) {
+      // Unix seconds → convert to ms, then format in Sydney time
+      return new Date(num * 1000).toLocaleTimeString('en-AU', {
+        hour: '2-digit', minute: '2-digit', hour12: false,
+        timeZone: 'Australia/Sydney',
+      });
     }
-    // Try parsing HH:MM:SS
-    return timeStr.substring(0, 5);
+    // ISO string or localized Deputy time string
+    const date = new Date(String(timeStr));
+    if (!isNaN(date.getTime())) {
+      return date.toLocaleTimeString('en-AU', {
+        hour: '2-digit', minute: '2-digit', hour12: false,
+        timeZone: 'Australia/Sydney',
+      });
+    }
+    // Fallback: raw HH:MM:SS slice
+    return String(timeStr).substring(0, 5);
   } catch {
-    return timeStr;
+    return String(timeStr);
   }
 }
