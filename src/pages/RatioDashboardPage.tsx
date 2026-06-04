@@ -701,8 +701,12 @@ export default function RatioDashboardPage() {
   const [planSubView, setPlanSubView] = useState<'live' | 'plan'>('live');
 
   // Expected mode: use same weekday 7 days ago as attendance source for planning
-  // showCurrentOnly: Live mode shows currently signed-in children; Plan uses historical all-day data
-  const showCurrentOnly = planSubView === 'live';
+  // showCurrentOnly: Live mode shows currently signed-in children; Plan uses historical all-day data.
+  // For future dates the attendance data comes from last week (effectiveDate = date - 7 days),
+  // and every child from that past day will have a sign_out — so showCurrentOnly would
+  // filter all of them out. Always use all-day mode for future dates.
+  const isFutureDate = date > todayStr();
+  const showCurrentOnly = !isFutureDate && planSubView === 'live';
 
   // effectiveDate: which date's attendance data to fetch.
   // - For today or past dates: actual Owna data exists — use it directly.
@@ -1178,23 +1182,31 @@ export default function RatioDashboardPage() {
 
       {/* Attendance overview — Plan of the Day */}
       {activeView === 'plan-of-day' && (<>
-      {/* -- Plan / Live sub-tabs -- */}
+      {/* -- Plan / Live sub-tabs (hidden for future dates — always all-day) -- */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-        <div style={{ display: 'flex' }}>
-          <button onClick={() => setPlanSubView('plan')}
-            style={{ padding: '6px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
-              backgroundColor: planSubView === 'plan' ? '#0369a1' : 'white',
-              color: planSubView === 'plan' ? 'white' : '#0369a1',
-              border: '1px solid #0369a1', borderRadius: '8px 0 0 8px' }}
-          >All Day</button>
-          <button onClick={() => setPlanSubView('live')}
-            style={{ padding: '6px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
-              backgroundColor: planSubView === 'live' ? '#0369a1' : 'white',
-              color: planSubView === 'live' ? 'white' : '#0369a1',
-              border: '1px solid #0369a1', borderRadius: '0 8px 8px 0' }}
-          >Currently Present</button>
-        </div>
-        {planSubView === 'plan' && (
+        {!isFutureDate && (
+          <div style={{ display: 'flex' }}>
+            <button onClick={() => setPlanSubView('plan')}
+              style={{ padding: '6px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+                backgroundColor: planSubView === 'plan' ? '#0369a1' : 'white',
+                color: planSubView === 'plan' ? 'white' : '#0369a1',
+                border: '1px solid #0369a1', borderRadius: '8px 0 0 8px' }}
+            >All Day</button>
+            <button onClick={() => setPlanSubView('live')}
+              style={{ padding: '6px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+                backgroundColor: planSubView === 'live' ? '#0369a1' : 'white',
+                color: planSubView === 'live' ? 'white' : '#0369a1',
+                border: '1px solid #0369a1', borderRadius: '0 8px 8px 0' }}
+            >Currently Present</button>
+          </div>
+        )}
+        {isFutureDate && (
+          <span style={{ fontSize: '11px', borderRadius: '4px', padding: '2px 8px',
+            color: '#92400e', backgroundColor: '#fef3c7', border: '1px solid #fcd34d' }}>
+            📅 Predicted from {effectiveDate} (same weekday last week)
+          </span>
+        )}
+        {!isFutureDate && planSubView === 'plan' && (
           <span style={{ fontSize: '11px', borderRadius: '4px', padding: '2px 8px',
             color: effectiveDate !== date ? '#92400e' : '#166534',
             backgroundColor: effectiveDate !== date ? '#fef3c7' : '#dcfce7',
@@ -1205,7 +1217,7 @@ export default function RatioDashboardPage() {
               : '✅ Actual Owna data'}
           </span>
         )}
-        {planSubView === 'live' && (
+        {!isFutureDate && planSubView === 'live' && (
           <span style={{ fontSize: '11px', color: '#166534', backgroundColor: '#dcfce7', border: '1px solid #86efac', borderRadius: '4px', padding: '2px 8px' }}>
             👁️ Snapshot · right now
           </span>
