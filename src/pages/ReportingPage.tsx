@@ -125,6 +125,8 @@ export default function ReportingPage() {
   const [groupingTrends, setGroupingTrends] = useState<{ date: string; campus: string; sessions: any[] }[]>([]);
   const [generated, setGenerated]      = useState(false);
   const [roomFilter, setRoomFilter]    = useState<string>('all');
+  // WWCC lookup: normalised name → { wwcc_number, wwcc_expiry }
+  const [wwccMap, setWwccMap] = useState<Record<string, { wwcc_number: string; wwcc_expiry: string | null }>>({});
   const printRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
@@ -169,7 +171,7 @@ export default function ReportingPage() {
               <td><strong>${e.inTime}</strong></td>
               <td>${e.outTime}</td>
               <td><span style="font-size:9px">${typeLabel}</span></td>
-              <td><em>See register</em></td>
+              <td>${(() => { const k = e.name.toLowerCase().replace(/\s+/g,' ').trim(); const r2 = wwccMap[k]; return r2 ? r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : '') : '<em>—</em>'; })()}</td>
               <td>${e.note ?? '—'}</td>
             </tr>`;
           }).join('');
@@ -639,6 +641,22 @@ export default function ReportingPage() {
     setRatioSnaps(snaps);
     setGroupingTrends(groupingTrendRows);
     setGenerated(true);
+
+    // Fetch WWCC data for all unique educators in this report
+    const uniqueNames = [...new Set(rows.flatMap(r => r.entries.map(e => e.name)))];
+    if (uniqueNames.length > 0) {
+      fetch('/api/staff-wwcc')
+        .then(r => r.ok ? r.json() : [])
+        .then((records: { full_name: string; full_name_norm: string; wwcc_number: string; wwcc_expiry: string | null }[]) => {
+          const map: Record<string, { wwcc_number: string; wwcc_expiry: string | null }> = {};
+          for (const rec of records) {
+            map[rec.full_name_norm] = { wwcc_number: rec.wwcc_number, wwcc_expiry: rec.wwcc_expiry };
+          }
+          setWwccMap(map);
+        })
+        .catch(() => {});
+    }
+
     setLoading(false);
   }, [selectedCentres, fromDate, toDate]); // eslint-disable-line
 
@@ -905,7 +923,29 @@ export default function ReportingPage() {
                                     {isLunch ? 'Lunch' : isGrouping ? 'Grouped' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : 'Shift'}
                                   </span>
                                 </td>
-                                <td className="py-2 px-4"><span className="text-xs italic" style={{ color: '#9ca3af' }}>See register</span></td>
+                                <td className="py-2 px-4">
+                                  {(() => {
+                                    const key = e.name.toLowerCase().replace(/\s+/g, ' ').trim();
+                                    const rec = wwccMap[key];
+                                    if (!rec) return <span className="text-xs italic" style={{ color: '#9ca3af' }}>—</span>;
+                                    const expDate = rec.wwcc_expiry ? new Date(rec.wwcc_expiry) : null;
+                                    const today   = new Date();
+                                    const daysLeft = expDate ? Math.ceil((expDate.getTime() - today.getTime()) / 86400000) : null;
+                                    const expColour = daysLeft === null ? '#9ca3af'
+                                      : daysLeft < 0    ? '#dc2626'   // expired
+                                      : daysLeft < 90   ? '#d97706'   // expiring soon
+                                      : '#059669';                     // valid
+                                    const expLabel = expDate
+                                      ? `Exp: ${expDate.toLocaleDateString('en-AU', { day:'2-digit', month:'short', year:'numeric' })}`
+                                      : '';
+                                    return (
+                                      <div>
+                                        <div className="text-xs font-mono font-medium" style={{ color: '#1e3a5f' }}>{rec.wwcc_number}</div>
+                                        {expLabel && <div className="text-xs" style={{ color: expColour }}>{expLabel}{daysLeft !== null && daysLeft < 90 && daysLeft >= 0 ? ` (${daysLeft}d)` : daysLeft !== null && daysLeft < 0 ? ' ⚠ EXPIRED' : ''}</div>}
+                                      </div>
+                                    );
+                                  })()}
+                                </td>
                                 <td className="py-2 px-4 text-xs" style={{ color: e.note ? '#d97706' : '#9ca3af' }}>{e.note ?? '-'}</td>
                               </tr>
                               );

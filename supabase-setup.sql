@@ -5,6 +5,21 @@
 -- Deputy Roster Cache: pre-fetched roster data keyed by date.
 -- Populated by the Tuesday 6am AEST prefetch cron so next-week rosters
 -- are available before directors start planning on Tuesday/Wednesday.
+-- Staff WWCC register: synced weekly from Monday.com board 977112282
+CREATE TABLE IF NOT EXISTS staff_wwcc (
+  monday_item_id  TEXT        NOT NULL PRIMARY KEY,
+  full_name       TEXT        NOT NULL,
+  full_name_norm  TEXT        NOT NULL,  -- lowercase trimmed, used for name matching
+  first_name      TEXT,
+  last_name       TEXT,
+  wwcc_number     TEXT,
+  wwcc_expiry     DATE,
+  centre          TEXT,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS staff_wwcc_name_idx ON staff_wwcc (full_name_norm);
+ALTER TABLE staff_wwcc ENABLE ROW LEVEL SECURITY;
+
 CREATE TABLE IF NOT EXISTS deputy_roster_cache (
   date        DATE        NOT NULL PRIMARY KEY,
   rosters     JSONB       NOT NULL DEFAULT '[]',
