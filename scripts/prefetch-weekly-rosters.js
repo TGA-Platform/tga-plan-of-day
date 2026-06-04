@@ -5,12 +5,16 @@
  * the Supabase deputy_roster_cache table so directors can browse next week
  * without waiting on live Deputy API calls.
  *
- * Scheduled: every Tuesday at 6:00 AM AEST via OpenClaw cron.
- * Manual run: node scripts/prefetch-weekly-rosters.js [--week +1|+2|YYYY-MM-DD]
+ * Scheduled: every weekday at 6:00 AM AEST via OpenClaw cron.
+ * Fetches both the current week and the following week so directors always
+ * have fresh roster data regardless of when changes were made in Deputy.
+ *
+ * Manual run: node scripts/prefetch-weekly-rosters.js [--week +0|+1|+2|YYYY-MM-DD|both]
  *
  * Examples:
- *   node scripts/prefetch-weekly-rosters.js            # next week (default)
- *   node scripts/prefetch-weekly-rosters.js --week +2  # week after next
+ *   node scripts/prefetch-weekly-rosters.js             # both weeks (default)
+ *   node scripts/prefetch-weekly-rosters.js --week +0   # current week only
+ *   node scripts/prefetch-weekly-rosters.js --week +1   # next week only
  *   node scripts/prefetch-weekly-rosters.js --week 2026-06-09  # specific Monday
  */
 
@@ -38,18 +42,28 @@ function monday(d) {
   return m;
 }
 
-/** Parse --week argument: "+1" (next week), "+2" (week after), or "YYYY-MM-DD" */
-function resolveWeekStart() {
+/**
+ * Parse --week argument.
+ * Returns an array of week-start Dates to fetch.
+ * Default (no arg or "both"): current week + next week.
+ */
+function resolveWeekStarts() {
   const idx = process.argv.indexOf('--week');
-  const arg = idx !== -1 ? process.argv[idx + 1] : '+1';
-  if (!arg || arg.startsWith('--')) return monday(new Date(Date.now() + 7 * 86400000));
+  const arg = idx !== -1 ? process.argv[idx + 1] : 'both';
+
+  // Default / explicit "both": current week + next week
+  if (!arg || arg.startsWith('--') || arg === 'both') {
+    const now = Date.now();
+    return [monday(new Date(now)), monday(new Date(now + 7 * 86400000))];
+  }
 
   if (/^\+\d+$/.test(arg)) {
     const weeks = parseInt(arg.slice(1));
-    return monday(new Date(Date.now() + weeks * 7 * 86400000));
+    return [monday(new Date(Date.now() + weeks * 7 * 86400000))];
   }
+
   // Specific date supplied — find its Monday
-  return monday(new Date(arg));
+  return [monday(new Date(arg))];
 }
 
 // ── Deputy fetch ─────────────────────────────────────────────────────────────
@@ -182,14 +196,22 @@ ${SQL}
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const weekStart = resolveWeekStart();
-  const dates = Array.from({ length: 5 }, (_, i) => {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + i);
-    return fmt(d);
-  });
+  const weekStarts = resolveWeekStarts();
 
-  console.log(`\n📅 Prefetching Deputy rosters for week: ${dates[0]} – ${dates[4]}\n`);
+  // Build flat list of dates across all requested weeks (Mon–Fri each)
+  const dates = weekStarts.flatMap(weekStart =>
+    Array.from({ length: 5 }, (_, i) => {
+      const d = new Date(weekStart);
+      d.setDate(d.getDate() + i);
+      return fmt(d);
+    })
+  );
+
+  const label = weekStarts.length > 1
+    ? `${dates[0]} – ${dates[dates.length - 1]} (${weekStarts.length} weeks)`
+    : `${dates[0]} – ${dates[dates.length - 1]}`;
+
+  console.log(`\n📅 Prefetching Deputy rosters: ${label}\n`);
   await ensureTable();
 
   let totalRecords = 0;
