@@ -2,6 +2,17 @@
 -- Run this in the Supabase Dashboard > SQL Editor
 -- URL: https://supabase.com/dashboard/project/tgxpvzlibquqnldgmwho/sql
 
+-- Deputy Roster Cache: pre-fetched roster data keyed by date.
+-- Populated by the Tuesday 6am AEST prefetch cron so next-week rosters
+-- are available before directors start planning on Tuesday/Wednesday.
+CREATE TABLE IF NOT EXISTS deputy_roster_cache (
+  date        DATE        NOT NULL PRIMARY KEY,
+  rosters     JSONB       NOT NULL DEFAULT '[]',
+  fetched_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS deputy_roster_cache_fetched_idx
+  ON deputy_roster_cache (date, fetched_at DESC);
+
 -- Daily attendance records (sign-in/out per child per day)
 CREATE TABLE IF NOT EXISTS pod_attendance (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
