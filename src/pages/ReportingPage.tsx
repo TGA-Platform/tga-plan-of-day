@@ -441,8 +441,9 @@ export default function ReportingPage() {
           for (const rslot of ROSTER_SLOTS_30) {
             const [rsh, rsm] = rslot.split(':').map(Number);
             const slotMinutes = rsh * 60 + rsm;
-            // sign_in/sign_out are HH:MM strings — use hhmm() helper
-            const childrenPresent = (att as any[]).filter(r => {
+            // sign_in/sign_out are HH:MM strings — use hhmm() helper.
+            // Build the full child array (with age) so we can apply real NSW ratios.
+            const childrenAtSlot = (att as any[]).filter(r => {
               const siM = hhmm(r.sign_in);
               if (siM === null || siM > slotMinutes) return false;
               const soM  = hhmm(r.sign_out);
@@ -450,7 +451,10 @@ export default function ReportingPage() {
               const psoM = hhmm(r.predicted_sign_out);
               if (soM === null && psoM !== null && psoM <= slotMinutes) return false;
               return true;
-            }).length;
+            }).map((r: any) => ({ ageMonths: parseAgeMonths(r.age ?? null), child_name: r.child_name ?? '', room: r.room ?? '', sign_in: r.sign_in, sign_out: r.sign_out, predicted_sign_out: r.predicted_sign_out, age: r.age }));
+            const childrenPresent = childrenAtSlot.length;
+            // Real NSW ratios via cascade algorithm (0-2y → 1:4, 2-3y → 1:5, 3-6y → 1:10)
+            const { required: reqStaff } = calcRequiredStaff(childrenAtSlot as any);
             // RosteredStaff.startTime/endTime are unix timestamps stored as strings
             const staffOnShift = campusRostersFiltered.filter((r: any) => {
               const toM = (ts: string | number | null) => {
@@ -464,7 +468,6 @@ export default function ReportingPage() {
               if (startM === null || endM === null) return true;
               return startM <= slotMinutes && endM > slotMinutes;
             }).length;
-            const reqStaff = Math.ceil(childrenPresent / 5);
             rosterAccum[campus][rslot].sumChildren += childrenPresent;
             rosterAccum[campus][rslot].sumStaff    += staffOnShift;
             rosterAccum[campus][rslot].sumRequired += reqStaff;
