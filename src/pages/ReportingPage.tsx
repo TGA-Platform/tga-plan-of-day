@@ -128,8 +128,6 @@ export default function ReportingPage() {
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean };
   // WWCC lookup function — tries multiple strategies to handle name mismatches
   const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
-  // Keep a plain map too for the print view template string context
-  const [wwccMap, setWwccMap] = useState<Record<string, WwccRec>>({});
   const printRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
@@ -725,7 +723,6 @@ export default function ReportingPage() {
           };
 
           setWwccLookup(() => lookup);
-          setWwccMap(exactMap); // keep for print view
         })
         .catch(() => {});
     }
