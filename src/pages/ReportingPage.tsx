@@ -125,8 +125,11 @@ export default function ReportingPage() {
   const [groupingTrends, setGroupingTrends] = useState<{ date: string; campus: string; sessions: any[] }[]>([]);
   const [generated, setGenerated]      = useState(false);
   const [roomFilter, setRoomFilter]    = useState<string>('all');
-  // WWCC lookup: normalised name → { wwcc_number, wwcc_expiry }
-  const [wwccMap, setWwccMap] = useState<Record<string, { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }>>({});
+  type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean };
+  // WWCC lookup function — tries multiple strategies to handle name mismatches
+  const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
+  // Keep a plain map too for the print view template string context
+  const [wwccMap, setWwccMap] = useState<Record<string, WwccRec>>({});
   const printRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
@@ -171,7 +174,7 @@ export default function ReportingPage() {
               <td><strong>${e.inTime}</strong></td>
               <td>${e.outTime}</td>
               <td><span style="font-size:9px">${typeLabel}</span></td>
-              <td>${(() => { const k = e.name.toLowerCase().replace(/\s+/g,' ').trim(); const r2 = wwccMap[k]; const noData = !r2||(!r2.wwcc_number&&!r2.under_18); const rl = e.room.toLowerCase(); if (noData && ['chef','kitchen','cook'].some(kw => rl.includes(kw))) return '<span style="color:#854d0e;font-size:10px">Kitchen Staff</span>'; if (noData) return '<em>—</em>'; if (r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : ''); })()}</td>
+              <td>${(() => { const r2 = wwccLookup(e.name); const noData = !r2||(!r2.wwcc_number&&!r2.under_18); const rl = e.room.toLowerCase(); if (noData && ['chef','kitchen','cook'].some(kw => rl.includes(kw))) return '<span style="color:#854d0e;font-size:10px">Kitchen Staff</span>'; if (noData) return '<em>—</em>'; if (r2&&r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2&&r2.wwcc_number ? r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : '') : '<em>—</em>'; })()}</td>
               <td>${e.note ?? '—'}</td>
             </tr>`;
           }).join('');
@@ -654,25 +657,75 @@ export default function ReportingPage() {
       fetch('/api/staff-wwcc')
         .then(r => r.ok ? r.json() : [])
         .then((records: { full_name: string; full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }[]) => {
-          const map: Record<string, { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }> = {};
-          // Last-name index for fallback: last_name → list of records
-          // Used when Deputy uses a different first name to the staffing board (e.g. Caitlin vs Catey)
-          const lastNameIndex: Record<string, typeof records> = {};
+          // Strip hyphens/apostrophes/spaces for fuzzy comparison
+          const bare = (s: string) => s.replace(/[-'\s]/g, '').toLowerCase();
+
+          // Build indexes
+          const exactMap: Record<string, WwccRec>   = {}; // full_name_norm → rec
+          const strippedMap: Record<string, WwccRec> = {}; // bare(norm) → rec (first wins)
+          const lastNameMap: Record<string, typeof records> = {}; // bare(lastName) → [recs]
+
           for (const rec of records) {
-            const entry = { wwcc_number: rec.wwcc_number, wwcc_expiry: rec.wwcc_expiry, under_18: rec.under_18 ?? false };
-            map[rec.full_name_norm] = entry;
-            // Index by last word of normalised name
-            const parts = rec.full_name_norm.trim().split(' ');
-            const lastName = parts[parts.length - 1];
+            const entry: WwccRec = { wwcc_number: rec.wwcc_number, wwcc_expiry: rec.wwcc_expiry, under_18: rec.under_18 ?? false };
+            exactMap[rec.full_name_norm] = entry;
+
+            const b = bare(rec.full_name_norm);
+            if (!strippedMap[b]) strippedMap[b] = entry;
+
+            const parts = rec.full_name_norm.replace(/[-']/g, ' ').trim().split(/\s+/);
+            const lastName = bare(parts[parts.length - 1]);
             if (lastName) {
-              if (!lastNameIndex[lastName]) lastNameIndex[lastName] = [];
-              lastNameIndex[lastName].push(rec);
+              if (!lastNameMap[lastName]) lastNameMap[lastName] = [];
+              lastNameMap[lastName].push(rec);
             }
           }
-          // Also index aliases: first name → any record where that word appears in the name
-          // so e.g. 'catey cardwell' gets the 'caitlin cardwell' record via last name 'cardwell'
-          (window as any).__wwccLastNameIndex = lastNameIndex;
-          setWwccMap(map);
+
+          /**
+           * Multi-strategy lookup:
+           * 1. Exact normalised match
+           * 2. Bare match (strip hyphens/apostrophes/spaces) — catches Al-Maarrawie vs Almaarrawie
+           * 3. Unique last-name match — catches any first-name mismatch when surname is unique
+           * 4. Same last-name + matching first initial — narrows when multiple share a surname
+           */
+          const lookup = (name: string): WwccRec | null => {
+            const norm = name.toLowerCase().replace(/\s+/g, ' ').trim();
+
+            // 1. Exact
+            if (exactMap[norm]) return exactMap[norm];
+
+            // 2. Bare (hyphens/apostrophes stripped)
+            const b = bare(norm);
+            if (strippedMap[b]) return strippedMap[b];
+
+            // Build last name from lookup name
+            const parts = norm.replace(/[-']/g, ' ').trim().split(/\s+/);
+            const lastName = bare(parts[parts.length - 1]);
+            const candidates = lastNameMap[lastName] ?? [];
+
+            // 3. Unique last name — any first name mismatch is fine
+            if (candidates.length === 1) {
+              const c = candidates[0];
+              return { wwcc_number: c.wwcc_number, wwcc_expiry: c.wwcc_expiry, under_18: c.under_18 ?? false };
+            }
+
+            // 4. Multiple with same last name — narrow by first initial
+            if (candidates.length > 1 && parts.length > 1) {
+              const firstInitial = bare(parts[0])[0];
+              const initialMatches = candidates.filter(c => {
+                const cParts = c.full_name_norm.replace(/[-']/g, ' ').trim().split(/\s+/);
+                return bare(cParts[0])[0] === firstInitial;
+              });
+              if (initialMatches.length === 1) {
+                const m = initialMatches[0];
+                return { wwcc_number: m.wwcc_number, wwcc_expiry: m.wwcc_expiry, under_18: m.under_18 ?? false };
+              }
+            }
+
+            return null;
+          };
+
+          setWwccLookup(() => lookup);
+          setWwccMap(exactMap); // keep for print view
         })
         .catch(() => {});
     }
@@ -945,19 +998,7 @@ export default function ReportingPage() {
                                 </td>
                                 <td className="py-2 px-4">
                                   {(() => {
-                                    const key = e.name.toLowerCase().replace(/\s+/g, ' ').trim();
-                                    let rec = wwccMap[key];
-                                    // Last-name fallback: handles mismatched first names (e.g. Caitlin vs Catey)
-                                    if (!rec) {
-                                      const keyParts = key.split(' ');
-                                      const lastName = keyParts[keyParts.length - 1];
-                                      const lastNameIdx = (window as any).__wwccLastNameIndex as Record<string, { full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }[]> | undefined;
-                                      const candidates = lastNameIdx?.[lastName] ?? [];
-                                      // Only use if exactly one candidate — avoids false matches on common surnames
-                                      if (candidates.length === 1) {
-                                        rec = { wwcc_number: candidates[0].wwcc_number, wwcc_expiry: candidates[0].wwcc_expiry, under_18: candidates[0].under_18 ?? false };
-                                      }
-                                    }
+                                    const rec = wwccLookup(e.name);
                                     // Treat a record with no WWCC number and not under_18 the same as no record
                                     const noUsefulData = !rec || (!rec.wwcc_number && !rec.under_18);
                                     const roomLower = e.room.toLowerCase();
