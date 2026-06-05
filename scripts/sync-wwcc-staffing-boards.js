@@ -63,6 +63,8 @@ function gql(query) {
   });
 }
 
+const ROLE_KEYWORDS = /^(room leader|educational leader|director|assistant director|ect|educator|replacement|mat leave|maternity leave|leave|relief|casual|part time|full time|on hold|copy|\d)$/i;
+
 /**
  * Staffing board item names often include role/status suffixes in brackets,
  * e.g. "Paris-Renee Stewart (Room Leader)" or "Jane Smith (Mat Leave)".
@@ -74,6 +76,24 @@ function stripRoleSuffix(name) {
     .replace(/\s*-\s*(Room Leader|Educational Leader|Director|Assistant Director|ECT|Educator|Replacement|Mat Leave|Maternity Leave|Leave|Relief|Casual|Part Time|Full Time|On Hold)[^$]*/i, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * If the name contains a bracket with what looks like a preferred/nick name
+ * (e.g. "Xue Yang (Cherise)"), return that preferred name.
+ * Returns null if the bracket content looks like a role title.
+ */
+function extractPreferredName(rawName) {
+  const match = rawName.match(/\(([^)]+)\)/);
+  if (!match) return null;
+  const content = match[1].trim();
+  // Skip if it matches a known role keyword or is suspiciously long
+  if (ROLE_KEYWORDS.test(content)) return null;
+  if (/\d/.test(content)) return null; // contains a number — not a name
+  if (content.split(/\s+/).length > 3) return null; // too many words
+  // Must look like a name (letters, hyphens, apostrophes only)
+  if (!/^[A-Za-z\s'\-]+$/.test(content)) return null;
+  return content;
 }
 
 async function fetchBoardWwcc(boardId, centreName) {
@@ -105,10 +125,35 @@ async function fetchBoardWwcc(boardId, centreName) {
       if (!cleanWwcc && !under18) continue;
       // Use clean name (without role suffix) for matching
       const cleanName = stripRoleSuffix(item.name);
+      const norm = cleanName.toLowerCase().replace(/\s+/g, ' ').trim();
+
+      // If a preferred/nickname is in brackets (e.g. "Xue Yang (Cherise)"),
+      // also store an alias record: "Cherise Yang" so Deputy display names match
+      const preferredName = extractPreferredName(item.name);
+      if (preferredName) {
+        const lastName  = cleanName.split(' ').filter(Boolean).pop() ?? '';
+        const aliasName = `${preferredName} ${lastName}`.trim();
+        const aliasNorm = aliasName.toLowerCase();
+        if (aliasNorm !== norm) {
+          results.push({
+            monday_item_id: `alias_sb_${boardId}_${item.id}`,
+            full_name:      aliasName,
+            full_name_norm: aliasNorm,
+            first_name:     null,
+            last_name:      null,
+            wwcc_number:    cleanWwcc || null,
+            wwcc_expiry:    cleanWwcc ? wwccExpiry : null,
+            under_18:       under18,
+            centre:         centreName,
+            updated_at:     new Date().toISOString(),
+          });
+        }
+      }
+
       results.push({
         monday_item_id: `sb_${boardId}_${item.id}`,
         full_name:      cleanName,
-        full_name_norm: cleanName.toLowerCase().replace(/\s+/g, ' ').trim(),
+        full_name_norm: norm,
         first_name:     null,
         last_name:      null,
         wwcc_number:    cleanWwcc || null,
@@ -243,7 +288,7 @@ async function main() {
   if (DRY_RUN) {
     console.log(`\nDry run — would upsert ${toUpsert.length} records. First 10:`);
     toUpsert.slice(0, 10).forEach(r =>
-      console.log(`  [${r.centre.padEnd(18)}] ${r.full_name.padEnd(30)} ${r.wwcc_number.padEnd(16)} exp:${r.wwcc_expiry ?? 'n/a'} ${!existing[r.full_name_norm] ? '(NEW)' : '(UPDATED)'}`)
+      console.log(`  [${(r.centre??'alias').padEnd(18)}] ${r.full_name.padEnd(30)} ${(r.wwcc_number??'under18').padEnd(16)} exp:${r.wwcc_expiry ?? 'n/a'} ${!existing[r.full_name_norm] ? '(NEW)' : '(UPDATED)'}`)
     );
     return;
   }
