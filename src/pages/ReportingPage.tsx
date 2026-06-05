@@ -105,6 +105,20 @@ interface RosterRec {
   type:   'overstaffed' | 'understaffed';
 }
 
+interface StaffingAnalysisRow {
+  date:                string;
+  campus:              string;
+  children:            number;
+  required:            number;       // total required staff (per-room sum)
+  totalFloorStaff:     number;       // room staff count
+  bufferRequired:      number;       // floor / 6
+  floatCount:          number;       // float entries (not unique)
+  adAvailable:         number;       // AD entries (0 if children >= 100)
+  totalFloatersNeeded: number;       // buffer + net shortage
+  floatSurplus:        number;       // floatCount + adAvailable - totalFloatersNeeded
+  status:              'green' | 'amber' | 'red' | 'unknown';
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function fmtTime(t: string | number | null): string {
   if (!t) return '-';
@@ -181,6 +195,7 @@ export default function ReportingPage() {
   const [occupancyRows, setOccupancyRows]   = useState<OccupancyRow[]>([]);
   const [rosterOptData, setRosterOptData]   = useState<RosterOptResult[]>([]);
   const [rosterRecs, setRosterRecs]         = useState<RosterRec[]>([]);
+  const [staffingAnalysisRows, setStaffingAnalysisRows] = useState<StaffingAnalysisRow[]>([]);
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean };
   // WWCC lookup function - tries multiple strategies to handle name mismatches
   const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
@@ -192,7 +207,8 @@ export default function ReportingPage() {
     { id: 'trends',      icon: '📈', label: 'Trends',                    desc: 'Family grouping patterns and session trends over time.' },
     { id: 'occupancy',   icon: '🏫', label: 'Attendance Trends',         desc: 'Booked vs attended vs last week - see your absence rate per centre per day.' },
     { id: 'roster-opt',  icon: '🗓️', label: 'Roster Optimisation',       desc: 'Compare child attendance curves against the roster to find over/understaffed windows and get recommendations.' },
-    { id: 'wwcc-expiry', icon: '🛡️', label: 'WWCC Expiries',             desc: 'Working With Children Check expiry dates for all active staff. Sorted by soonest expiring.' },
+    { id: 'wwcc-expiry',        icon: '🛡️', label: 'WWCC Expiries',             desc: 'Working With Children Check expiry dates for all active staff. Sorted by soonest expiring.' },
+    { id: 'staffing-analysis', icon: '📊', label: 'Staffing Analysis',          desc: 'Float pool surplus/deficit per centre per day — mirrors the staffing analysis Float Pool panel. Shows buffer required (1:6 floor staff), floats available, AD coverage for small centres (<100 children).' },
   ];
 
   const handlePrint = () => {
@@ -392,16 +408,18 @@ export default function ReportingPage() {
     setGenerated(false);
 
     // Only fetch data relevant to the selected reports
-    const needsEducator   = selectedReports.has('educator') || selectedReports.has('ratio') || selectedReports.has('trends');
-    const needsOccupancy  = selectedReports.has('occupancy');
-    const needsRosterOpt  = selectedReports.has('roster-opt');
-    const needsWwccExpiry = selectedReports.has('wwcc-expiry');
-    const needsDateLoop   = needsEducator || needsOccupancy || needsRosterOpt;
+    const needsEducator        = selectedReports.has('educator') || selectedReports.has('ratio') || selectedReports.has('trends');
+    const needsOccupancy       = selectedReports.has('occupancy');
+    const needsRosterOpt       = selectedReports.has('roster-opt');
+    const needsWwccExpiry      = selectedReports.has('wwcc-expiry');
+    const needsStaffingAnalysis = selectedReports.has('staffing-analysis');
+    const needsDateLoop        = needsEducator || needsOccupancy || needsRosterOpt || needsStaffingAnalysis;
 
     const rows: typeof educatorRows = [];
     const snaps: RatioSnap[] = [];
     const groupingTrendRows: { date: string; campus: string; sessions: any[] }[] = [];
     const occRows: OccupancyRow[] = [];
+    const staffingRowsAccum: StaffingAnalysisRow[] = [];
     const rosterAccum: Record<string, Record<string, { sumChildren: number; sumStaff: number; sumOffFloor: number; sumISS: number; sumRequired: number; days: number }>> = {};
     const ROSTER_SLOTS_30: string[] = [];
     for (let rmi = 7 * 60; rmi < 18 * 60; rmi += 30) {
@@ -883,6 +901,51 @@ export default function ReportingPage() {
           required,
           compliant: staffCount + floatCount >= required,
         });
+
+        // ── Staffing Analysis ──────────────────────────────────────────────────
+        if (needsStaffingAnalysis) {
+          const saChildren = (att as any[]).filter((c: any) => c.sign_in).length;
+          const saRoomData = centre.rooms.map(room => {
+            const owna = (room.ownaRoomName ?? room.name).toLowerCase();
+            const rk = (att as any[]).filter((c: any) => c.sign_in && c.room?.toLowerCase().includes(owna));
+            const { required: roomRequired } = calcRequiredStaff(rk.map((c: any) => ({ ageMonths: parseAgeMonths(c.age) } as any)));
+            const roomStaff = (rosters as any[]).filter(r => r.OperationalUnit === room.deputyUnitId);
+            return { required: roomRequired, staffCount: roomStaff.length };
+          });
+          const saRequired = saRoomData.reduce((s, r) => s + r.required, 0);
+          const saTotalRatioShortage = saRoomData.reduce((s, r) => s + Math.max(0, r.required - r.staffCount), 0);
+          const saTotalSurplus       = saRoomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
+          const saNetShortage        = Math.max(0, saTotalRatioShortage - saTotalSurplus);
+          const saTotalFloorStaff    = saRoomData.reduce((s, r) => s + r.staffCount, 0);
+          const saBufferRequired     = saTotalFloorStaff > 0 ? saTotalFloorStaff / 6 : 0;
+          const saTotalFloatersNeeded = Math.max(0, saNetShortage + saBufferRequired);
+          const saFloatUnitIds       = new Set(centre.floatUnitIds ?? []);
+          const saNonRatioUnitIds    = new Set(centre.nonRatioUnitIds ?? []);
+          const saFloatCount         = (rosters as any[]).filter(r => saFloatUnitIds.has(r.OperationalUnit)).length;
+          const saAdCount            = (rosters as any[]).filter(r => {
+            if (!saNonRatioUnitIds.has(r.OperationalUnit)) return false;
+            const un = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '').toLowerCase();
+            return un.includes('assistant director') || un.includes('asst director') || un.includes('ass. director');
+          }).length;
+          const saAdAvailable  = (saChildren > 0 && saChildren < 100) ? saAdCount : 0;
+          const saFloatSurplus = saFloatCount + saAdAvailable - saTotalFloatersNeeded;
+          const saStatus: StaffingAnalysisRow['status'] = saChildren === 0 ? 'unknown'
+            : saFloatSurplus < 0 ? 'red'
+            : saFloatSurplus === 0 ? 'amber'
+            : 'green';
+          staffingRowsAccum.push({
+            date, campus,
+            children:            saChildren,
+            required:            saRequired,
+            totalFloorStaff:     saTotalFloorStaff,
+            bufferRequired:      saBufferRequired,
+            floatCount:          saFloatCount,
+            adAvailable:         saAdAvailable,
+            totalFloatersNeeded: saTotalFloatersNeeded,
+            floatSurplus:        saFloatSurplus,
+            status:              saStatus,
+          });
+        }
       }
     }
 
@@ -890,6 +953,7 @@ export default function ReportingPage() {
     setRatioSnaps(snaps);
     setGroupingTrends(groupingTrendRows);
     setOccupancyRows(occRows);
+    setStaffingAnalysisRows(staffingRowsAccum);
 
     // ── Process roster-opt results ─────────────────────────────────────────────────
     {
@@ -2000,6 +2064,139 @@ export default function ReportingPage() {
               </div>
             )}
 
+
+            {/* ── STAFFING ANALYSIS ── */}
+            {viewingReport === 'staffing-analysis' && (() => {
+              // Group rows by campus
+              const byCampus: Record<string, StaffingAnalysisRow[]> = {};
+              for (const row of staffingAnalysisRows) {
+                (byCampus[row.campus] ??= []).push(row);
+              }
+              const campuses = Object.keys(byCampus);
+
+              const avgSurplus = staffingAnalysisRows.length
+                ? staffingAnalysisRows.reduce((s, r) => s + r.floatSurplus, 0) / staffingAnalysisRows.length
+                : 0;
+              const daysGreen   = staffingAnalysisRows.filter(r => r.status === 'green').length;
+              const daysAmber   = staffingAnalysisRows.filter(r => r.status === 'amber').length;
+              const daysRed     = staffingAnalysisRows.filter(r => r.status === 'red').length;
+              const daysUnknown = staffingAnalysisRows.filter(r => r.status === 'unknown').length;
+
+              return (
+                <div className="space-y-4">
+                  <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
+                    <strong>Staffing Analysis</strong> — Float pool surplus/deficit per centre per day. Buffer = 1 per 6 floor staff (1:6 ratio). AD counts only for centres with fewer than 100 children. Mirrors the Float Pool panel on the morning briefing.
+                  </div>
+
+                  {/* Summary stats */}
+                  {staffingAnalysisRows.length > 0 && (
+                    <div className="flex gap-3 flex-wrap">
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: avgSurplus >= 0 ? '#E2F1DA' : '#fee2e2', color: avgSurplus >= 0 ? '#2d5c18' : '#991b1b' }}>
+                        <div className="text-2xl font-bold">{avgSurplus >= 0 ? '+' : ''}{avgSurplus.toFixed(1)}</div>
+                        <div className="text-xs">Avg Float Surplus</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[100px]" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>
+                        <div className="text-2xl font-bold">{daysGreen}</div>
+                        <div className="text-xs">Days Green</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[100px]" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>
+                        <div className="text-2xl font-bold">{daysAmber}</div>
+                        <div className="text-xs">Days Amber</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[100px]" style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>
+                        <div className="text-2xl font-bold">{daysRed}</div>
+                        <div className="text-xs">Days Red</div>
+                      </div>
+                      {daysUnknown > 0 && (
+                        <div className="rounded-xl p-3 flex-1 min-w-[100px]" style={{ backgroundColor: '#f3f4f6', color: '#6b7280' }}>
+                          <div className="text-2xl font-bold">{daysUnknown}</div>
+                          <div className="text-xs">No Data</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {campuses.length === 0 ? (
+                    <div className="text-sm italic" style={{ color: '#596570' }}>No staffing data for selected period.</div>
+                  ) : campuses.map(campus => {
+                    const campusRows = byCampus[campus];
+                    const campusAvg  = campusRows.reduce((s, r) => s + r.floatSurplus, 0) / campusRows.length;
+                    const cpGreen    = campusRows.filter(r => r.status === 'green').length;
+                    const cpAmber    = campusRows.filter(r => r.status === 'amber').length;
+                    const cpRed      = campusRows.filter(r => r.status === 'red').length;
+                    return (
+                      <div key={campus} className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                        <div className="px-5 py-3 flex items-center justify-between" style={{ backgroundColor: '#2d5c18' }}>
+                          <div>
+                            <div className="font-bold text-sm text-white">{campus}</div>
+                            <div className="text-xs" style={{ color: '#A0D083' }}>
+                              {campusRows.length} day{campusRows.length !== 1 ? 's' : ''}
+                              {' - avg surplus '}{campusAvg >= 0 ? '+' : ''}{campusAvg.toFixed(1)}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            {cpGreen > 0 && <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>G:{cpGreen}</span>}
+                            {cpAmber > 0 && <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>A:{cpAmber}</span>}
+                            {cpRed   > 0 && <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>R:{cpRed}</span>}
+                          </div>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr style={{ backgroundColor: '#F5FAF3' }}>
+                                {['Date','Children','Floor Staff','Required','Buffer (1:6)','Floats','AD','Floats Needed','Surplus','Status'].map(h => (
+                                  <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {campusRows.map((r, i) => {
+                                const rowBg = r.status === 'green' ? (i % 2 === 0 ? '#f0fdf4' : '#dcfce7')
+                                  : r.status === 'amber' ? (i % 2 === 0 ? '#fefce8' : '#fef9c3')
+                                  : r.status === 'red'   ? (i % 2 === 0 ? '#fff1f2' : '#fee2e2')
+                                  : (i % 2 === 0 ? 'white' : '#fafffe');
+                                const surplusColor = r.floatSurplus > 0 ? '#166534' : r.floatSurplus < 0 ? '#dc2626' : '#854d0e';
+                                const statusBadge = r.status === 'green'
+                                  ? { bg: '#dcfce7', color: '#166534', label: 'Green' }
+                                  : r.status === 'amber'
+                                  ? { bg: '#fef9c3', color: '#854d0e', label: 'Amber' }
+                                  : r.status === 'red'
+                                  ? { bg: '#fee2e2', color: '#991b1b', label: 'Red' }
+                                  : { bg: '#f3f4f6', color: '#6b7280', label: 'Unknown' };
+                                const dateFmt = (() => { try { return format(new Date(r.date + 'T12:00:00'), 'EEE d MMM'); } catch { return r.date; } })();
+                                return (
+                                  <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: rowBg }}>
+                                    <td className="py-2 px-3 font-medium text-xs" style={{ color: '#2d5c18' }}>{dateFmt}</td>
+                                    <td className="py-2 px-3 text-xs" style={{ color: '#596570' }}>{r.children}</td>
+                                    <td className="py-2 px-3 text-xs font-medium" style={{ color: '#050505' }}>{r.totalFloorStaff}</td>
+                                    <td className="py-2 px-3 text-xs" style={{ color: '#596570' }}>{r.required}</td>
+                                    <td className="py-2 px-3 text-xs" style={{ color: '#7c3aed' }}>{r.bufferRequired.toFixed(1)}</td>
+                                    <td className="py-2 px-3 text-xs font-medium" style={{ color: '#1d4ed8' }}>{r.floatCount}</td>
+                                    <td className="py-2 px-3 text-xs" style={{ color: r.adAvailable > 0 ? '#059669' : '#9ca3af' }}>
+                                      {r.adAvailable > 0 ? r.adAvailable : '-'}
+                                    </td>
+                                    <td className="py-2 px-3 text-xs" style={{ color: '#d97706' }}>{r.totalFloatersNeeded.toFixed(1)}</td>
+                                    <td className="py-2 px-3 text-xs font-bold" style={{ color: surplusColor }}>
+                                      {r.floatSurplus >= 0 ? `+${r.floatSurplus.toFixed(1)}` : r.floatSurplus.toFixed(1)}
+                                    </td>
+                                    <td className="py-2 px-3">
+                                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                                        style={{ backgroundColor: statusBadge.bg, color: statusBadge.color }}>
+                                        {statusBadge.label}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         </>
       )}
