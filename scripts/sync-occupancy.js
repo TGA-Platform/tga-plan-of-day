@@ -95,30 +95,44 @@ async function main() {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(filePath);
 
-  const ws = wb.getWorksheet('Occupancy');
-  if (!ws) throw new Error('No "Occupancy" tab found in the spreadsheet');
+  // Prefer the "Daily Occupancy" tab (real historical data from Owna daily runs)
+  // Fall back to "Occupancy" tab (future booking data) if Daily Occupancy not yet populated
+  const ws = wb.getWorksheet('Daily Occupancy') || wb.getWorksheet('Occupancy');
+  if (!ws) throw new Error('No "Daily Occupancy" or "Occupancy" tab found in the spreadsheet');
+  console.log(`  Using sheet: "${ws.name}"`);
+  const isDailyTab = ws.name === 'Daily Occupancy';
 
   // Accumulate: { "Campus|YYYY-MM-DD" => booked total }
   const totals = new Map();
 
   ws.eachRow((row, i) => {
     if (i === 1) return; // skip header
-    const rawCentre = String(row.getCell(COL.centre).value || '').trim();
-    const weekVal   = row.getCell(COL.week).value;
-    if (!rawCentre || !weekVal) return;
 
-    const centre = normaliseCentre(rawCentre);
-    // Week can be a Date object or a string
-    const weekDate = weekVal instanceof Date ? weekVal : new Date(String(weekVal));
-    if (isNaN(weekDate.getTime())) return;
-
-    for (const { offset, col } of DAY_COLS) {
-      const date   = fmt(addDays(weekDate, offset));
-      const booked = Number(row.getCell(col).value || 0);
-      if (booked === 0) continue;
-
-      const key = `${centre}|${date}`;
+    if (isDailyTab) {
+      // Daily Occupancy tab: Campus | Date | Booked | Attended | Absent
+      const campus = String(row.getCell(1).value || '').trim();
+      const dateVal = row.getCell(2).value;
+      const booked  = Number(row.getCell(3).value || 0);
+      if (!campus || !dateVal || booked === 0) return;
+      const date = dateVal instanceof Date ? fmt(dateVal) : String(dateVal).slice(0, 10);
+      if (!date || date.length < 10) return;
+      const key = `${campus}|${date}`;
       totals.set(key, (totals.get(key) || 0) + booked);
+    } else {
+      // Occupancy tab (future bookings): Centre | Week | Room | Capacity | Mon/Tue/... Enrolled
+      const rawCentre = String(row.getCell(COL.centre).value || '').trim();
+      const weekVal   = row.getCell(COL.week).value;
+      if (!rawCentre || !weekVal) return;
+      const centre = normaliseCentre(rawCentre);
+      const weekDate = weekVal instanceof Date ? weekVal : new Date(String(weekVal));
+      if (isNaN(weekDate.getTime())) return;
+      for (const { offset, col } of DAY_COLS) {
+        const date   = fmt(addDays(weekDate, offset));
+        const booked = Number(row.getCell(col).value || 0);
+        if (booked === 0) continue;
+        const key = `${centre}|${date}`;
+        totals.set(key, (totals.get(key) || 0) + booked);
+      }
     }
   });
 
