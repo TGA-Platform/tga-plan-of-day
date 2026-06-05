@@ -655,9 +655,23 @@ export default function ReportingPage() {
         .then(r => r.ok ? r.json() : [])
         .then((records: { full_name: string; full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }[]) => {
           const map: Record<string, { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }> = {};
+          // Last-name index for fallback: last_name → list of records
+          // Used when Deputy uses a different first name to the staffing board (e.g. Caitlin vs Catey)
+          const lastNameIndex: Record<string, typeof records> = {};
           for (const rec of records) {
-            map[rec.full_name_norm] = { wwcc_number: rec.wwcc_number, wwcc_expiry: rec.wwcc_expiry, under_18: rec.under_18 ?? false };
+            const entry = { wwcc_number: rec.wwcc_number, wwcc_expiry: rec.wwcc_expiry, under_18: rec.under_18 ?? false };
+            map[rec.full_name_norm] = entry;
+            // Index by last word of normalised name
+            const parts = rec.full_name_norm.trim().split(' ');
+            const lastName = parts[parts.length - 1];
+            if (lastName) {
+              if (!lastNameIndex[lastName]) lastNameIndex[lastName] = [];
+              lastNameIndex[lastName].push(rec);
+            }
           }
+          // Also index aliases: first name → any record where that word appears in the name
+          // so e.g. 'catey cardwell' gets the 'caitlin cardwell' record via last name 'cardwell'
+          (window as any).__wwccLastNameIndex = lastNameIndex;
           setWwccMap(map);
         })
         .catch(() => {});
@@ -932,7 +946,18 @@ export default function ReportingPage() {
                                 <td className="py-2 px-4">
                                   {(() => {
                                     const key = e.name.toLowerCase().replace(/\s+/g, ' ').trim();
-                                    const rec = wwccMap[key];
+                                    let rec = wwccMap[key];
+                                    // Last-name fallback: handles mismatched first names (e.g. Caitlin vs Catey)
+                                    if (!rec) {
+                                      const keyParts = key.split(' ');
+                                      const lastName = keyParts[keyParts.length - 1];
+                                      const lastNameIdx = (window as any).__wwccLastNameIndex as Record<string, { full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }[]> | undefined;
+                                      const candidates = lastNameIdx?.[lastName] ?? [];
+                                      // Only use if exactly one candidate — avoids false matches on common surnames
+                                      if (candidates.length === 1) {
+                                        rec = { wwcc_number: candidates[0].wwcc_number, wwcc_expiry: candidates[0].wwcc_expiry, under_18: candidates[0].under_18 ?? false };
+                                      }
+                                    }
                                     // Treat a record with no WWCC number and not under_18 the same as no record
                                     const noUsefulData = !rec || (!rec.wwcc_number && !rec.under_18);
                                     const roomLower = e.room.toLowerCase();
