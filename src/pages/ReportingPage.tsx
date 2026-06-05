@@ -331,6 +331,14 @@ export default function ReportingPage() {
   const generate = useCallback(async () => {
     setLoading(true);
     setGenerated(false);
+
+    // Only fetch data relevant to the currently selected report tab
+    const needsEducator  = ['educator','ratio','trends'].includes(activeReport);
+    const needsOccupancy = activeReport === 'occupancy';
+    const needsRosterOpt = activeReport === 'roster-opt';
+    const needsWwccExpiry = activeReport === 'wwcc-expiry';
+    const needsDateLoop  = needsEducator || needsOccupancy || needsRosterOpt;
+
     const rows: typeof educatorRows = [];
     const snaps: RatioSnap[] = [];
     const groupingTrendRows: { date: string; campus: string; sessions: any[] }[] = [];
@@ -351,7 +359,7 @@ export default function ReportingPage() {
       cur = new Date(Date.UTC(y, m - 1, dy + 1)).toISOString().slice(0, 10);
     }
 
-    for (const centre of selectedCentres) {
+    if (needsDateLoop) for (const centre of selectedCentres) {
       const campus = centre.ownaName ?? centre.name;
       const allUnitIds = [
         ...centre.rooms.map(r => r.deputyUnitId),
@@ -376,10 +384,10 @@ export default function ReportingPage() {
             .then(r => r.ok ? r.json() : []).catch(() => []),
           Promise.resolve([]), // rosterCacheDay removed — use rosters variable instead
         ]);
-        groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
+        if (needsEducator) groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
 
         // ── Occupancy ────────────────────────────────────────────────────
-        {
+        if (needsOccupancy) {
           // All rows have sign_in (Owna only stores signed-in children).
           // Compare against same weekday last week as the expected baseline.
           const actual = (att as any[]).length;
@@ -397,7 +405,7 @@ export default function ReportingPage() {
         }
 
         // ── Roster Optimisation ──────────────────────────────────────────
-        {
+        if (needsRosterOpt) {
           // Use rosters already fetched via /api/deputy-rosters (service key, bypasses RLS).
           // Exclude non-ratio (directors, chefs, admin) and leave units.
           const nonRatioIdsSet = new Set([...(centre.nonRatioUnitIds ?? []), ...(centre.leaveUnitIds ?? [])]);
@@ -802,7 +810,7 @@ export default function ReportingPage() {
     }
 
     // ── WWCC Expiry ─────────────────────────────────────────────────────────────
-    {
+    if (needsWwccExpiry) {
       let wwccExpRows: WwccExpiryRow[] = [];
       try {
         const todayNow = Date.now();
@@ -975,7 +983,7 @@ export default function ReportingPage() {
     }
 
     setLoading(false);
-  }, [selectedCentres, fromDate, toDate]); // eslint-disable-line
+  }, [selectedCentres, fromDate, toDate, activeReport]); // eslint-disable-line
 
   // Group ratio snaps by campus for trends
   const centreSnaps: Record<string, RatioSnap[]> = {};
@@ -1092,7 +1100,7 @@ export default function ReportingPage() {
         <button onClick={generate} disabled={loading}
           className={btn + ' mt-4 text-white disabled:opacity-50'}
           style={{ backgroundColor: '#5a9228' }}>
-          {loading ? '⟳ Generating...' : '📊 Generate Report'}
+          {loading ? '⟳ Generating...' : ('📊 Generate ' + ({educator:'Educator Record',ratio:'Ratio Report',trends:'Trends',occupancy:'Attendance Trends','roster-opt':'Roster Optimisation','wwcc-expiry':'WWCC Expiries'}[activeReport] || 'Report'))}
         </button>
       </div>
 
