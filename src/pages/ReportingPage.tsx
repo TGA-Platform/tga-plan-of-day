@@ -470,12 +470,12 @@ export default function ReportingPage() {
 
         // ── Roster Optimisation ──────────────────────────────────────────
         if (needsRosterOpt) {
-          // Use rosters already fetched via /api/deputy-rosters (service key, bypasses RLS).
-          // Exclude non-ratio (directors, chefs, admin) and leave units.
+          // Use rosters already fetched via /api/deputy-rosters — raw Deputy API format:
+          // r.OperationalUnit (number), r.StartTime / r.EndTime (unix timestamps in seconds)
           const nonRatioIdsSet = new Set([...(centre.nonRatioUnitIds ?? []), ...(centre.leaveUnitIds ?? [])]);
-          // rosters is RosteredStaff[] with unitId, startTime, endTime (unix timestamps as strings)
           const campusRostersFiltered = (rosters as any[]).filter((r: any) =>
-            !nonRatioIdsSet.has(r.unitId)
+            r.Employee && r.Employee !== 0 &&          // skip open/unassigned shifts
+            !nonRatioIdsSet.has(r.OperationalUnit)     // skip directors, chefs, admin, leave
           );
           if (!rosterAccum[campus]) {
             rosterAccum[campus] = {};
@@ -500,17 +500,15 @@ export default function ReportingPage() {
             const childrenPresent = childrenAtSlot.length;
             // Real NSW ratios via cascade algorithm (0-2y → 1:4, 2-3y → 1:5, 3-6y → 1:10)
             const { required: reqStaff } = calcRequiredStaff(childrenAtSlot as any);
-            // RosteredStaff.startTime/endTime are unix timestamps stored as strings
+            // Raw Deputy fields: r.StartTime and r.EndTime are unix timestamps in seconds
             const staffOnShift = campusRostersFiltered.filter((r: any) => {
-              const toM = (ts: string | number | null) => {
-                if (!ts) return null;
-                const n = typeof ts === 'string' ? parseInt(ts, 10) : ts;
-                if (isNaN(n) || n <= 0) return null;
-                const d = new Date(new Date(n * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+              const toM = (ts: number | null | undefined) => {
+                if (!ts || ts <= 0) return null;
+                const d = new Date(new Date(ts * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
                 return d.getHours() * 60 + d.getMinutes();
               };
-              const startM = toM(r.startTime), endM = toM(r.endTime);
-              if (startM === null || endM === null) return false; // skip entries with no valid shift times
+              const startM = toM(r.StartTime), endM = toM(r.EndTime);
+              if (startM === null || endM === null) return false;
               return startM <= slotMinutes && endM > slotMinutes;
             }).length;
             rosterAccum[campus][rslot].sumChildren += childrenPresent;
