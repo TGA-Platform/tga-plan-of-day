@@ -123,7 +123,10 @@ async function main() {
 
       const firstName  = col(item, 'text00');
       const lastName   = col(item, 'text02');
-      const wwccNumber = col(item, 'wwcc_number8').replace(/,\s*$/, '').trim();
+      const rawWwcc    = col(item, 'wwcc_number8').replace(/,\s*$/, '').trim();
+      // Treat placeholder values (N/A, None, TBA, -) as no WWCC number
+      const FAKE_WWCC  = /^(n\/a|na|none|nil|tba|tbd|-)$/i;
+      const wwccNumber = FAKE_WWCC.test(rawWwcc) ? '' : rawWwcc;
       const wwccExpiry = col(item, 'date354') || null;
       const centre     = col(item, 'status_1');
       const dob        = col(item, 'date3') || null; // YYYY-MM-DD

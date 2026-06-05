@@ -35,6 +35,17 @@ const STAFFING_BOARDS = {
   'Wilton':            '8719103624',
 };
 
+const FAKE_WWCC = /^(n\/a|na|none|nil|tba|tbd|-)$/i;
+
+function isUnder18(dobStr) {
+  if (!dobStr) return false;
+  const dob = new Date(dobStr);
+  if (isNaN(dob)) return false;
+  const cutoff = new Date(dob);
+  cutoff.setFullYear(cutoff.getFullYear() + 18);
+  return new Date() < cutoff;
+}
+
 // ── Monday helpers ────────────────────────────────────────────────────────────
 
 function gql(query) {
@@ -76,7 +87,7 @@ async function fetchBoardWwcc(boardId, centreName) {
           cursor
           items {
             id name
-            column_values(ids:["wwccnum20","wwccexp20"]) { id text }
+            column_values(ids:["wwccnum20","wwccexp20","dob20"]) { id text }
           }
         }
       }
@@ -84,22 +95,25 @@ async function fetchBoardWwcc(boardId, centreName) {
     const page = r.data?.boards?.[0]?.items_page;
     if (!page) break;
     for (const item of page.items) {
-      const wwccNumber = item.column_values.find(c => c.id === 'wwccnum20')?.text?.trim() || '';
+      const rawWwcc    = item.column_values.find(c => c.id === 'wwccnum20')?.text?.trim() || '';
       const wwccExpiry = item.column_values.find(c => c.id === 'wwccexp20')?.text?.trim() || null;
-      if (!wwccNumber) continue;
-      // Strip trailing punctuation from WWCC number
-      const cleanWwcc = wwccNumber.replace(/[,\s]+$/, '').trim();
-      if (!cleanWwcc) continue;
+      const dob        = item.column_values.find(c => c.id === 'dob20')?.text?.trim() || null;
+      // Treat placeholder values as no WWCC
+      const cleanWwcc  = FAKE_WWCC.test(rawWwcc) ? '' : rawWwcc.replace(/[,\s]+$/, '').trim();
+      const under18    = !cleanWwcc && isUnder18(dob);
+      // Skip if no WWCC and not under 18
+      if (!cleanWwcc && !under18) continue;
       // Use clean name (without role suffix) for matching
       const cleanName = stripRoleSuffix(item.name);
       results.push({
-        monday_item_id: `sb_${boardId}_${item.id}`, // prefix to distinguish from onboarding board
+        monday_item_id: `sb_${boardId}_${item.id}`,
         full_name:      cleanName,
         full_name_norm: cleanName.toLowerCase().replace(/\s+/g, ' ').trim(),
         first_name:     null,
         last_name:      null,
-        wwcc_number:    cleanWwcc,
-        wwcc_expiry:    wwccExpiry,
+        wwcc_number:    cleanWwcc || null,
+        wwcc_expiry:    cleanWwcc ? wwccExpiry : null,
+        under_18:       under18,
         centre:         centreName,
         updated_at:     new Date().toISOString(),
       });
@@ -176,18 +190,25 @@ async function main() {
       const ex   = existing[norm];
 
       if (!ex) {
-        // Completely new — not in onboarding board at all
+        // Completely new
         toUpsert.push(rec);
         centreNew++;
         newCount++;
+      } else if (rec.under_18 && !ex.under_18) {
+        // Staffing board knows this person is under 18; update existing record
+        toUpsert.push({ ...rec, monday_item_id: ex.monday_item_id, wwcc_number: null, wwcc_expiry: null });
+        toDelete.push(rec.monday_item_id);
+        centreUpdated++;
+        updatedCount++;
       } else if (
-        (isExpired(ex.wwcc_expiry) && rec.wwcc_expiry && !isExpired(rec.wwcc_expiry)) ||
-        (rec.wwcc_expiry && ex.wwcc_expiry && rec.wwcc_expiry > ex.wwcc_expiry)
+        !rec.under_18 && (
+          (isExpired(ex.wwcc_expiry) && rec.wwcc_expiry && !isExpired(rec.wwcc_expiry)) ||
+          (rec.wwcc_expiry && ex.wwcc_expiry && rec.wwcc_expiry > ex.wwcc_expiry)
+        )
       ) {
-        // Staffing board has a newer/valid expiry — UPDATE the existing record in place
-        // (reuse the existing monday_item_id so we patch rather than insert a duplicate)
+        // Staffing board has a newer/valid WWCC expiry
         toUpsert.push({ ...rec, monday_item_id: ex.monday_item_id });
-        toDelete.push(rec.monday_item_id); // remove the staffing-board record if it's a dupe
+        toDelete.push(rec.monday_item_id);
         centreUpdated++;
         updatedCount++;
       } else {
