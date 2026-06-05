@@ -70,6 +70,7 @@ interface WwccExpiryRow {
   wwcc_expiry:   string | null;
   under_18:      boolean;
   daysRemaining: number | null;
+  exemptReason?: 'under_18' | 'kitchen'; // why they have no WWCC (exempt)
 }
 
 interface OccupancyRow {
@@ -863,50 +864,59 @@ export default function ReportingPage() {
         const activeResp = await fetch(
           `/api/active-staff?from=${activeFrom}&to=${activeTo}&unitIds=${allUnitIds.join(',')}`
         );
-        const activeNames: string[] = activeResp.ok ? await activeResp.json() : [];
+        // activeStaff: [{ name, unitName }] — unitName lets us detect kitchen staff
+        const activeStaff: { name: string; unitName: string }[] = activeResp.ok ? await activeResp.json() : [];
 
-        if (activeNames.length === 0) {
+        if (activeStaff.length === 0) {
           console.warn('WWCC expiry: no active staff found from Deputy roster — showing all for selected centres');
         }
 
-        // Normalise function (same as wwccLookup)
+        const KITCHEN_KEYWORDS = ['chef','kitchen','cook'];
         const normN = (n: string) => n
           .replace(/\s*[\(\[{][^\)\]{}]*[\)\]{}]\s*/g, ' ')
           .replace(/[-']/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 
-        // Fetch all WWCC records
         const wwccAllResp = await fetch('/api/staff-wwcc');
         const wwccAll: any[] = wwccAllResp.ok ? await wwccAllResp.json() : [];
         const wwccByNorm: Record<string, any> = {};
         for (const rec of wwccAll) { wwccByNorm[rec.full_name_norm] = rec; }
 
-        // For each active Deputy name, find their WWCC record
-        for (const name of activeNames) {
+        for (const { name, unitName } of activeStaff) {
           const nn = normN(name);
           let rec = wwccByNorm[nn];
           if (!rec) {
-            // Try bare match (strip spaces)
             const bare = nn.replace(/\s/g, '');
             rec = Object.values(wwccByNorm).find((r: any) =>
               (r as any).full_name_norm.replace(/\s/g, '') === bare
             );
           }
-          if (!rec || rec.under_18 || !rec.wwcc_number) continue;
 
-          // Determine which centre this person belongs to from WWCC record
-          const centre = rec.centre ?? '';
+          const centre = rec?.centre ?? '';
+          const unitLower = unitName.toLowerCase();
+          const isKitchen = KITCHEN_KEYWORDS.some(k => unitLower.includes(k));
+          const isUnder18 = rec?.under_18 === true;
+
+          // Determine exempt reason if no WWCC
+          const hasWwcc = rec?.wwcc_number && !rec?.under_18;
+          const exemptReason: 'under_18' | 'kitchen' | undefined =
+            isUnder18 ? 'under_18' : isKitchen ? 'kitchen' : undefined;
+
+          // Skip if no WWCC and not an exempt category
+          if (!hasWwcc && !exemptReason) continue;
 
           // Deduplicate
-          if (wwccExpRows.some(r => r.wwcc_number === rec.wwcc_number && r.centre === centre)) continue;
+          const dupKey = (rec?.wwcc_number ?? name) + '|' + centre;
+          if (wwccExpRows.some(r => (r.wwcc_number ?? r.full_name) + '|' + r.centre === dupKey)) continue;
 
-          const expDate = rec.wwcc_expiry ? new Date(rec.wwcc_expiry) : null;
+          const expDate = rec?.wwcc_expiry ? new Date(rec.wwcc_expiry) : null;
           wwccExpRows.push({
-            full_name:     rec.full_name ?? name,
+            full_name:     rec?.full_name ?? name,
             centre,
-            wwcc_number:   rec.wwcc_number,
-            wwcc_expiry:   rec.wwcc_expiry,
-            under_18:      false,
+            wwcc_number:   hasWwcc ? rec.wwcc_number : null,
+            wwcc_expiry:   hasWwcc ? rec.wwcc_expiry : null,
+            under_18:      isUnder18,
             daysRemaining: expDate ? Math.ceil((expDate.getTime() - todayNow) / 86400000) : null,
+            exemptReason,
           });
         }
 
@@ -1780,7 +1790,7 @@ export default function ReportingPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr style={{ backgroundColor: '#F5FAF3' }}>
-                        {['Name','Centre','WWCC Number','Expiry Date','Days Remaining'].map(h => (
+                        {['Name','Centre','Status','WWCC Number','Expiry Date','Days Remaining'].map(h => (
                           <th key={h} className="py-2 px-4 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                         ))}
                       </tr>
@@ -1818,6 +1828,11 @@ export default function ReportingPage() {
                             <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
                               <td className="py-2 px-4 font-medium" style={{ color: '#050505' }}>{r.full_name}</td>
                               <td className="py-2 px-4" style={{ color: '#596570' }}>{r.centre || '—'}</td>
+                              <td className="py-2 px-4">
+                                {r.exemptReason === 'under_18' && <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>Under 18</span>}
+                                {r.exemptReason === 'kitchen'  && <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>Kitchen Staff</span>}
+                                {!r.exemptReason && <span className="text-xs" style={{ color: '#9ca3af' }}>—</span>}
+                              </td>
                               <td className="py-2 px-4 font-mono text-xs" style={{ color: '#1e3a5f' }}>{r.wwcc_number ?? '—'}</td>
                               <td className="py-2 px-4 text-xs" style={{ color: '#596570' }}>
                                 {r.wwcc_expiry ? new Date(r.wwcc_expiry).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}

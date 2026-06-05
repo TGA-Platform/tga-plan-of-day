@@ -47,14 +47,18 @@ export default async function handler(req, res) {
   const rows = await r.json();
   const names = new Set();
 
+  // name -> unitName (last seen wins — unit name tells us role e.g. Chef, Kitchen)
+  const staffMap = new Map();
+
   for (const row of rows) {
     for (const entry of (row.rosters || [])) {
-      // Filter to requested unit IDs if provided
       if (unitSet && !unitSet.has(entry.OperationalUnit)) continue;
-      const name = entry._DPMetaData?.EmployeeInfo?.DisplayName;
-      if (name) names.add(name);
+      const name     = entry._DPMetaData?.EmployeeInfo?.DisplayName;
+      const unitName = entry._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '';
+      if (name) staffMap.set(name, unitName);
     }
   }
 
-  res.status(200).json([...names]);
+  const result = [...staffMap.entries()].map(([name, unitName]) => ({ name, unitName }));
+  res.status(200).json(result);
 }
