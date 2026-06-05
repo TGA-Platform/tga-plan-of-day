@@ -77,8 +77,8 @@ interface OccupancyRow {
   campus:         string;
   expected:       number;
   actual:         number;
-  absent:         number;
-  attendanceRate: number;
+  lastWeek:       number;
+  change:         number;   // actual - lastWeek (positive = more children than last week)
 }
 
 interface RosterSlotData {
@@ -391,9 +391,10 @@ export default function ReportingPage() {
           const expected  = (priorAtt as any[]).length;
           occRows.push({
             date, campus,
-            expected, actual,
-            absent: Math.max(0, expected - actual),
-            attendanceRate: expected > 0 ? Math.round(actual / expected * 100) : 100,
+            expected: actual,      // "this week" actual
+            actual,                 // same field kept for compat
+            lastWeek: expected,     // prior week actual (real data)
+            change: actual - expected,
           });
         }
 
@@ -1485,26 +1486,28 @@ export default function ReportingPage() {
             {activeReport === 'occupancy' && (
               <div className="space-y-4">
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
-                  <strong>Occupancy Trends</strong> — Expected vs. actual attendance per day. Amber = below 80%, Red = below 60%.
+                  <strong>Attendance Trends</strong> — Real daily attendance vs the same day last week. Green = up, Red = down significantly.
                 </div>
 
                 {occupancyRows.length > 0 && (() => {
-                  const validRows = occupancyRows.filter(r => r.expected > 0);
-                  const avgRate = validRows.length ? Math.round(validRows.reduce((s, r) => s + r.attendanceRate, 0) / validRows.length) : 0;
-                  const totalAbsent = occupancyRows.reduce((s, r) => s + r.absent, 0);
+                  const totalThis = occupancyRows.reduce((s, r) => s + r.actual, 0);
+                  const totalLast  = occupancyRows.reduce((s, r) => s + r.lastWeek, 0);
+                  const netChange  = totalThis - totalLast;
+                  const daysUp   = occupancyRows.filter(r => r.change > 0).length;
+                  const daysDown = occupancyRows.filter(r => r.change < 0).length;
                   return (
                     <div className="flex gap-3 flex-wrap">
                       <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
-                        <div className="text-2xl font-bold">{avgRate}%</div>
-                        <div className="text-xs">Avg Attendance Rate</div>
+                        <div className="text-2xl font-bold">{totalThis}</div>
+                        <div className="text-xs">Total Children This Period</div>
                       </div>
-                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>
-                        <div className="text-2xl font-bold">{totalAbsent}</div>
-                        <div className="text-xs">Total Absent Slots</div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: netChange >= 0 ? '#E2F1DA' : '#fef2f2', color: netChange >= 0 ? '#2d5c18' : '#991b1b' }}>
+                        <div className="text-2xl font-bold">{netChange >= 0 ? '+' : ''}{netChange}</div>
+                        <div className="text-xs">vs Same Period Last Week</div>
                       </div>
-                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fef2f2', color: '#991b1b' }}>
-                        <div className="text-2xl font-bold">{occupancyRows.filter(r => r.expected > 0 && r.attendanceRate < 80).length}</div>
-                        <div className="text-xs">Days below 80%</div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#f0fdf4', color: '#166534' }}>
+                        <div className="text-2xl font-bold">{daysUp} ↑ / {daysDown} ↓</div>
+                        <div className="text-xs">Days up / down vs last week</div>
                       </div>
                     </div>
                   );
@@ -1514,37 +1517,39 @@ export default function ReportingPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr style={{ backgroundColor: '#F5FAF3' }}>
-                        {['Date','Campus','Expected','Actual','Absent','Attendance Rate'].map(h => (
+                        {['Date','Campus','Attended','Last Week (Same Day)','Change','Trend'].map(h => (
                           <th key={h} className="py-2 px-4 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {occupancyRows.length === 0 ? (
-                        <tr><td colSpan={6} className="py-6 text-center text-sm italic" style={{ color: '#596570' }}>No occupancy data for selected period.</td></tr>
+                        <tr><td colSpan={6} className="py-6 text-center text-sm italic" style={{ color: '#596570' }}>No attendance data for selected period.</td></tr>
                       ) : occupancyRows.map((r, i) => {
-                        const rowBg = r.expected > 0 && r.attendanceRate < 60
+                        const rowBg = r.lastWeek > 0 && r.change < -5
                           ? '#fef2f2'
-                          : r.expected > 0 && r.attendanceRate < 80
-                          ? '#fffbeb'
+                          : r.lastWeek > 0 && r.change > 5
+                          ? '#f0fdf4'
                           : i % 2 === 0 ? 'white' : '#fafffe';
                         return (
                           <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: rowBg }}>
                             <td className="py-2 px-4" style={{ color: '#050505' }}>{safeFormat(new Date(r.date), 'd MMM yyyy')}</td>
                             <td className="py-2 px-4" style={{ color: '#050505' }}>{r.campus}</td>
-                            <td className="py-2 px-4" style={{ color: '#596570' }}>{r.expected}</td>
-                            <td className="py-2 px-4" style={{ color: '#596570' }}>{r.actual}</td>
-                            <td className="py-2 px-4" style={{ color: r.absent > 0 ? '#d97706' : '#596570' }}>{r.absent}</td>
+                            <td className="py-2 px-4 font-medium" style={{ color: '#050505' }}>{r.actual}</td>
+                            <td className="py-2 px-4" style={{ color: '#596570' }}>{r.lastWeek > 0 ? r.lastWeek : '—'}</td>
+                            <td className="py-2 px-4 font-medium" style={{ color: r.change > 0 ? '#166534' : r.change < 0 ? '#991b1b' : '#596570' }}>
+                              {r.change > 0 ? `+${r.change}` : r.change < 0 ? String(r.change) : '—'}
+                            </td>
                             <td className="py-2 px-4">
                               <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
-                                style={r.expected === 0
+                                style={r.lastWeek === 0
                                   ? { backgroundColor: '#f3f4f6', color: '#6b7280' }
-                                  : r.attendanceRate < 60
+                                  : r.change < -5
                                   ? { backgroundColor: '#fee2e2', color: '#991b1b' }
-                                  : r.attendanceRate < 80
-                                  ? { backgroundColor: '#fef9c3', color: '#854d0e' }
-                                  : { backgroundColor: '#dcfce7', color: '#166534' }}>
-                                {r.expected === 0 ? '—' : `${r.attendanceRate}%`}
+                                  : r.change > 5
+                                  ? { backgroundColor: '#dcfce7', color: '#166534' }
+                                  : { backgroundColor: '#f3f4f6', color: '#374151' }}>
+                                {r.lastWeek === 0 ? 'No prior data' : r.change > 5 ? '↑ Up' : r.change < -5 ? '↓ Down' : '→ Stable'}
                               </span>
                             </td>
                           </tr>
