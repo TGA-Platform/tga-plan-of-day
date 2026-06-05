@@ -88,9 +88,7 @@ interface RosterSlotData {
   time:        string;
   totalDays:   number;
   sumChildren: number;
-  sumRoomStaff: number;   // room-allocated staff only (direct ratio coverage)
-  sumFloat:     number;   // float pool staff (reserve/buffer)
-  sumStaff:     number;   // kept for compat (= sumRoomStaff)
+  sumStaff:    number;    // floor staff = room + floats (used for surplus)
   sumOffFloor: number;    // non-ratio staff (directors, chefs, admin) on shift
   sumISS:      number;    // ISS staff on shift (shown separately, not in ratio count)
   sumRequired: number;
@@ -404,7 +402,7 @@ export default function ReportingPage() {
     const snaps: RatioSnap[] = [];
     const groupingTrendRows: { date: string; campus: string; sessions: any[] }[] = [];
     const occRows: OccupancyRow[] = [];
-    const rosterAccum: Record<string, Record<string, { sumChildren: number; sumRoomStaff: number; sumFloat: number; sumStaff: number; sumOffFloor: number; sumISS: number; sumRequired: number; days: number }>> = {};
+    const rosterAccum: Record<string, Record<string, { sumChildren: number; sumStaff: number; sumOffFloor: number; sumISS: number; sumRequired: number; days: number }>> = {};
     const ROSTER_SLOTS_30: string[] = [];
     for (let rmi = 7 * 60; rmi < 18 * 60; rmi += 30) {
       ROSTER_SLOTS_30.push(`${String(Math.floor(rmi/60)).padStart(2,'0')}:${String(rmi%60).padStart(2,'0')}`);
@@ -497,7 +495,7 @@ export default function ReportingPage() {
           if (!rosterAccum[campus]) {
             rosterAccum[campus] = {};
             for (const rslot of ROSTER_SLOTS_30) {
-              rosterAccum[campus][rslot] = { sumChildren: 0, sumRoomStaff: 0, sumFloat: 0, sumStaff: 0, sumOffFloor: 0, sumISS: 0, sumRequired: 0, days: 0 };
+              rosterAccum[campus][rslot] = { sumChildren: 0, sumStaff: 0, sumOffFloor: 0, sumISS: 0, sumRequired: 0, days: 0 };
             }
           }
           for (const rslot of ROSTER_SLOTS_30) {
@@ -535,11 +533,10 @@ export default function ReportingPage() {
               const d2 = new Date(new Date(r.EndTime   * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
               return (d1.getHours()*60+d1.getMinutes()) <= slotMinutes && (d2.getHours()*60+d2.getMinutes()) > slotMinutes;
             };
-            // Room staff = unique employees directly in rooms (ratio coverage)
+            // Floor staff = room + float combined (both count toward ratio coverage)
             const roomStaffOnShift = new Set(campusRostersFiltered.filter(shiftCheck).map((r: any) => r.Employee)).size;
-            // Float staff = reserve/buffer pool (separate from room surplus)
-            const floatOnShift = new Set(floatRostersFiltered.filter(shiftCheck).map((r: any) => r.Employee)).size;
-            // surplus = room staff vs required (floats are reserve, not counted in surplus)
+            const floatOnShift     = new Set(floatRostersFiltered.filter(shiftCheck).map((r: any) => r.Employee)).size;
+            const staffOnShift     = roomStaffOnShift + floatOnShift;
             // Off floor = unique non-ratio employees (directors, chefs, admin), not leave
             const offFloorOnShift = new Set(
               (rosters as any[]).filter((r: any) =>
@@ -558,9 +555,7 @@ export default function ReportingPage() {
               ).map((r: any) => r.Employee)
             ).size;
             rosterAccum[campus][rslot].sumChildren  += childrenPresent;
-            rosterAccum[campus][rslot].sumRoomStaff += roomStaffOnShift;
-            rosterAccum[campus][rslot].sumFloat     += floatOnShift;
-            rosterAccum[campus][rslot].sumStaff     += roomStaffOnShift;
+            rosterAccum[campus][rslot].sumStaff     += staffOnShift;
             rosterAccum[campus][rslot].sumOffFloor  += offFloorOnShift;
             rosterAccum[campus][rslot].sumISS       += issOnShift;
             rosterAccum[campus][rslot].sumRequired  += reqStaff;
@@ -903,14 +898,12 @@ export default function ReportingPage() {
       for (const [campusKey, slotMap] of Object.entries(rosterAccum)) {
         const slots: RosterSlotData[] = ROSTER_SLOTS_30.map(time => ({
           time,
-          totalDays:    slotMap[time].days,
-          sumChildren:  slotMap[time].sumChildren,
-          sumRoomStaff: slotMap[time].sumRoomStaff,
-          sumFloat:     slotMap[time].sumFloat,
-          sumStaff:     slotMap[time].sumRoomStaff,
-          sumOffFloor:  slotMap[time].sumOffFloor,
-          sumISS:       slotMap[time].sumISS,
-          sumRequired:  slotMap[time].sumRequired,
+          totalDays:   slotMap[time].days,
+          sumChildren: slotMap[time].sumChildren,
+          sumStaff:    slotMap[time].sumStaff,
+          sumOffFloor: slotMap[time].sumOffFloor,
+          sumISS:      slotMap[time].sumISS,
+          sumRequired: slotMap[time].sumRequired,
         }));
         rosterResults.push({ campus: campusKey, slots });
         const overSlots  = slots.filter(s => s.totalDays > 0 && (s.sumStaff - s.sumRequired) / s.totalDays > 1);
@@ -1832,8 +1825,8 @@ export default function ReportingPage() {
                       {(() => {
                         const singleDay = fromDate === toDate;
                         const colHeaders = singleDay
-                          ? ['Time','Children','Room Staff','Float','Required','Surplus','Status','Off Floor','ISS']
-                          : ['Time','Avg Children','Avg Room Staff','Float','Required','Surplus','Status','Off Floor','ISS'];
+                          ? ['Time','Children','Staff (Floor)','Required','Surplus','Status','Off Floor','ISS']
+                          : ['Time','Avg Children','Avg Staff (Floor)','Required','Surplus','Status','Off Floor','ISS'];
                         return (
                       <table className="w-full text-sm">
                         <thead>
@@ -1848,8 +1841,7 @@ export default function ReportingPage() {
                             const singleDay = fromDate === toDate;
                             const fmt1 = (n: number) => singleDay ? String(Math.round(n)) : n.toFixed(1);
                             const avgCh   = s.totalDays > 0 ? fmt1(s.sumChildren  / s.totalDays) : '—';
-                            const avgSt   = s.totalDays > 0 ? fmt1(s.sumRoomStaff / s.totalDays) : '—';
-                            const avgFloat = s.totalDays > 0 ? fmt1(s.sumFloat    / s.totalDays) : '—';
+                            const avgSt   = s.totalDays > 0 ? fmt1(s.sumStaff     / s.totalDays) : '—';
                             const avgOff  = s.totalDays > 0 ? fmt1(s.sumOffFloor / s.totalDays) : '—';
                             const avgISS  = s.totalDays > 0 ? fmt1(s.sumISS      / s.totalDays) : '—';
                             const avgReq  = s.totalDays > 0 ? fmt1(s.sumRequired  / s.totalDays) : '—';
@@ -1867,7 +1859,6 @@ export default function ReportingPage() {
                                 <td className="py-1.5 px-3 font-mono text-xs font-bold" style={{ color: '#2d5c18' }}>{s.time}</td>
                                 <td className="py-1.5 px-3 text-xs" style={{ color: '#596570' }}>{avgCh}</td>
                                 <td className="py-1.5 px-3 text-xs font-medium" style={{ color: '#2d5c18' }}>{avgSt}</td>
-                                <td className="py-1.5 px-3 text-xs" style={{ color: '#0d9488' }}>{avgFloat}</td>
                                 <td className="py-1.5 px-3 text-xs" style={{ color: '#596570' }}>{avgReq}</td>
                                 <td className="py-1.5 px-3 text-xs font-semibold"
                                   style={{ color: surplus < 0 ? '#dc2626' : surplus > 1 ? '#d97706' : '#166534' }}>
