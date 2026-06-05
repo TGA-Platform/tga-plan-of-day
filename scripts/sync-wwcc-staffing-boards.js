@@ -96,6 +96,8 @@ async function fetchBoardWwcc(boardId, centreName) {
         monday_item_id: `sb_${boardId}_${item.id}`, // prefix to distinguish from onboarding board
         full_name:      cleanName,
         full_name_norm: cleanName.toLowerCase().replace(/\s+/g, ' ').trim(),
+        first_name:     null,
+        last_name:      null,
         wwcc_number:    cleanWwcc,
         wwcc_expiry:    wwccExpiry,
         centre:         centreName,
@@ -111,7 +113,7 @@ async function fetchBoardWwcc(boardId, centreName) {
 // ── Supabase helpers ──────────────────────────────────────────────────────────
 
 async function getExistingWwcc() {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/staff_wwcc?select=full_name_norm,wwcc_number,wwcc_expiry&limit=2000`, {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/staff_wwcc?select=monday_item_id,full_name_norm,wwcc_number,wwcc_expiry&limit=3000`, {
     headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
   });
   if (!r.ok) throw new Error(`Supabase fetch failed: ${r.status}`);
@@ -152,6 +154,7 @@ async function main() {
   console.log(`  ${Object.keys(existing).length} existing records loaded.\n`);
 
   const toUpsert  = [];
+  const toDelete   = []; // staffing-board duplicate IDs to clean up after updating
   let newCount    = 0;
   let updatedCount = 0;
   let skippedCount = 0;
@@ -177,15 +180,14 @@ async function main() {
         toUpsert.push(rec);
         centreNew++;
         newCount++;
-      } else if (isExpired(ex.wwcc_expiry) && rec.wwcc_expiry && !isExpired(rec.wwcc_expiry)) {
-        // Existing record is expired — staffing board has a newer one
-        // Keep the onboarding board's monday_item_id if it exists
-        toUpsert.push({ ...rec, monday_item_id: ex.monday_item_id ?? rec.monday_item_id });
-        centreUpdated++;
-        updatedCount++;
-      } else if (rec.wwcc_expiry && ex.wwcc_expiry && rec.wwcc_expiry > ex.wwcc_expiry) {
-        // Staffing board has a later expiry date — use it
-        toUpsert.push({ ...rec, monday_item_id: ex.monday_item_id ?? rec.monday_item_id });
+      } else if (
+        (isExpired(ex.wwcc_expiry) && rec.wwcc_expiry && !isExpired(rec.wwcc_expiry)) ||
+        (rec.wwcc_expiry && ex.wwcc_expiry && rec.wwcc_expiry > ex.wwcc_expiry)
+      ) {
+        // Staffing board has a newer/valid expiry — UPDATE the existing record in place
+        // (reuse the existing monday_item_id so we patch rather than insert a duplicate)
+        toUpsert.push({ ...rec, monday_item_id: ex.monday_item_id });
+        toDelete.push(rec.monday_item_id); // remove the staffing-board record if it's a dupe
         centreUpdated++;
         updatedCount++;
       } else {
@@ -204,6 +206,19 @@ async function main() {
     return;
   }
 
+  // Deduplicate toUpsert by monday_item_id — keep the record with the latest expiry
+  const upsertMap = new Map();
+  for (const rec of toUpsert) {
+    const existing = upsertMap.get(rec.monday_item_id);
+    if (!existing || (rec.wwcc_expiry && (!existing.wwcc_expiry || rec.wwcc_expiry > existing.wwcc_expiry))) {
+      upsertMap.set(rec.monday_item_id, rec);
+    }
+  }
+  const deduped = [...upsertMap.values()];
+  if (deduped.length !== toUpsert.length) {
+    console.log(`  (Deduplicated ${toUpsert.length - deduped.length} duplicate entries)`);
+  }
+
   if (DRY_RUN) {
     console.log(`\nDry run — would upsert ${toUpsert.length} records. First 10:`);
     toUpsert.slice(0, 10).forEach(r =>
@@ -214,14 +229,24 @@ async function main() {
 
   // Upsert in batches
   const BATCH = 200;
-  for (let i = 0; i < toUpsert.length; i += BATCH) {
-    const slice = toUpsert.slice(i, i + BATCH);
-    process.stdout.write(`  Upserting ${i + 1}–${Math.min(i + BATCH, toUpsert.length)} / ${toUpsert.length} …`);
+  for (let i = 0; i < deduped.length; i += BATCH) {
+    const slice = deduped.slice(i, i + BATCH);
+    process.stdout.write(`  Upserting ${i + 1}–${Math.min(i + BATCH, deduped.length)} / ${deduped.length} …`);
     await supabaseUpsert(slice);
     console.log(' ✓');
   }
 
-  console.log(`\n✅  Done — ${toUpsert.length} records upserted (${newCount} new, ${updatedCount} updated).\n`);
+  // Clean up any staffing-board duplicate records that were superseded
+  for (const dupId of toDelete) {
+    if (!dupId.startsWith('sb_')) continue; // only delete staffing-board records
+    await fetch(`${SUPABASE_URL}/rest/v1/staff_wwcc?monday_item_id=eq.${encodeURIComponent(dupId)}`, {
+      method: 'DELETE',
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+    }).catch(() => {});
+  }
+  if (toDelete.length > 0) console.log(`  Cleaned up ${toDelete.filter(id => id.startsWith('sb_')).length} duplicate staffing-board records.`);
+
+  console.log(`\n✅  Done — ${deduped.length} records upserted (${newCount} new, ${updatedCount} updated).\n`);
 }
 
 main().catch(err => { console.error('Fatal:', err); process.exit(1); });
