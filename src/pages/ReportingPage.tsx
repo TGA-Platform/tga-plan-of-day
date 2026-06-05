@@ -363,7 +363,7 @@ export default function ReportingPage() {
 
       for (const date of dates) {
         // Fetch in parallel
-        const [att, rosters, allocations, floatScheds, groupingSessionRows, ratioCheckRows, rosterCacheDay] = await Promise.all([
+        const [att, rosters, allocations, floatScheds, groupingSessionRows, ratioCheckRows] = await Promise.all([
           fetchAttendance(campus, date),
           fetchRostersForDate(allUnitIds, date),
           fetch(`/api/staff-allocations?centre=${encodeURIComponent(centre.id)}&date=${date}`)
@@ -374,9 +374,7 @@ export default function ReportingPage() {
             .then(r => r.ok ? r.json() : []).catch(() => []),
           fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centre.id)}&date=${date}`)
             .then(r => r.ok ? r.json() : []).catch(() => []),
-          fetch(`${SUPABASE_URL}/rest/v1/deputy_roster_cache?date=eq.${date}&select=rosters`,
-            { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
-          ).then(r => r.ok ? r.json() : []).catch(() => []),
+          Promise.resolve([]), // rosterCacheDay removed — use rosters variable instead
         ]);
         groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
 
@@ -400,15 +398,12 @@ export default function ReportingPage() {
 
         // ── Roster Optimisation ──────────────────────────────────────────
         {
-          const dayRostersCache: any[] = (rosterCacheDay as any[])[0]?.rosters ?? [];
+          // Use rosters already fetched via /api/deputy-rosters (service key, bypasses RLS).
+          // Exclude non-ratio (directors, chefs, admin) and leave units.
           const nonRatioIdsSet = new Set([...(centre.nonRatioUnitIds ?? []), ...(centre.leaveUnitIds ?? [])]);
-          const centreUnitIdsSet = new Set([
-            ...centre.rooms.map(rm => rm.deputyUnitId),
-            ...(centre.floatUnitIds ?? []),
-            ...(centre.issUnitIds ?? []),
-          ]);
-          const campusRostersFiltered = dayRostersCache.filter(r =>
-            centreUnitIdsSet.has(r.OperationalUnit) && !nonRatioIdsSet.has(r.OperationalUnit)
+          // rosters is RosteredStaff[] with unitId, startTime, endTime (unix timestamps as strings)
+          const campusRostersFiltered = (rosters as any[]).filter((r: any) =>
+            !nonRatioIdsSet.has(r.unitId)
           );
           if (!rosterAccum[campus]) {
             rosterAccum[campus] = {};
@@ -429,13 +424,17 @@ export default function ReportingPage() {
               if (soM === null && psoM !== null && psoM <= slotMinutes) return false;
               return true;
             }).length;
-            // Deputy StartTime/EndTime are Unix timestamps (seconds) — convert to Sydney HH:MM
-            const staffOnShift = campusRostersFiltered.filter(r => {
-              const toM = (ts: number) => {
-                const d = new Date(new Date(ts * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+            // RosteredStaff.startTime/endTime are unix timestamps stored as strings
+            const staffOnShift = campusRostersFiltered.filter((r: any) => {
+              const toM = (ts: string | number | null) => {
+                if (!ts) return null;
+                const n = typeof ts === 'string' ? parseInt(ts, 10) : ts;
+                if (isNaN(n) || n <= 0) return null;
+                const d = new Date(new Date(n * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
                 return d.getHours() * 60 + d.getMinutes();
               };
-              const startM = toM(r.StartTime), endM = toM(r.EndTime);
+              const startM = toM(r.startTime), endM = toM(r.endTime);
+              if (startM === null || endM === null) return true;
               return startM <= slotMinutes && endM > slotMinutes;
             }).length;
             const reqStaff = Math.ceil(childrenPresent / 5);
