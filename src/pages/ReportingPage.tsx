@@ -910,8 +910,13 @@ export default function ReportingPage() {
             const owna = (room.ownaRoomName ?? room.name).toLowerCase();
             const rk = (att as any[]).filter((c: any) => c.sign_in && c.room?.toLowerCase().includes(owna));
             const { required: roomRequired } = calcRequiredStaff(rk.map((c: any) => ({ ageMonths: parseAgeMonths(c.age) } as any)));
-            const roomStaff = (rosters as any[]).filter(r => r.OperationalUnit === room.deputyUnitId);
-            return { required: roomRequired, staffCount: roomStaff.length };
+            // Only count assigned staff (Employee !== 0) — open/unassigned shifts must not inflate the count
+            const roomStaff = (rosters as any[]).filter(r =>
+              r.OperationalUnit === room.deputyUnitId && r.Employee && r.Employee !== 0
+            );
+            // Count unique employees to avoid double-counting split shifts
+            const roomStaffCount = new Set(roomStaff.map((r: any) => r.Employee)).size;
+            return { required: roomRequired, staffCount: roomStaffCount };
           });
           const saRequired = saRoomData.reduce((s, r) => s + r.required, 0);
           const saTotalFloorStaff    = saRoomData.reduce((s, r) => s + r.staffCount, 0);
