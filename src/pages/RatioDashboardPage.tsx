@@ -389,9 +389,12 @@ function FloatPoolSection({
   const centreChildCount = _totalChildren ?? children.length;
   const adAvailable = (centreChildCount > 0 && centreChildCount < 100) ? (adStaff ?? []).length : 0;
 
+  // Room net surplus (after covering shortages) counts as effective floats
+  const roomNetSurplus      = Math.max(0, totalSurplus - totalRatioShortage);
+  const effectiveFloatCount = floats.length + roomNetSurplus;
   // Totals (surplus realloc first, then floaters, then casuals)
   const totalFloatersNeeded = Math.max(0, netShortageAfterRealloc + bufferRequired);
-  const casualsNeeded = Math.max(0, totalFloatersNeeded - floats.length - adAvailable);
+  const casualsNeeded = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
   const casualsFull   = Math.floor(casualsNeeded);
   const casualsHalf   = casualsNeeded - casualsFull >= 0.5 ? 1 : 0;
 
@@ -469,7 +472,7 @@ function FloatPoolSection({
             </div>
             <div className="flex justify-between text-xs mt-0.5">
               <span style={{ color: '#596570' }}>Available (floats{adAvailable > 0 ? ` + ${adAvailable} AD` : ''})</span>
-              <span className="font-medium" style={{ color: '#2d5c18' }}>{floats.length + adAvailable}</span>
+              <span className="font-medium" style={{ color: '#2d5c18' }}>{effectiveFloatCount + adAvailable}{roomNetSurplus > 0 && <span style={{ color: '#7c3aed', fontSize: '11px' }}> (+{roomNetSurplus} rm)</span>}</span>
             </div>
           </div>
 
@@ -478,9 +481,9 @@ function FloatPoolSection({
             <div className="pt-0.5 space-y-0.5">
               <div className="flex justify-between text-xs">
                 <span style={{ color: '#16a34a', fontWeight: 600 }}>✅ No casuals needed</span>
-                {floats.length + adAvailable > totalFloatersNeeded && (
+                {effectiveFloatCount + adAvailable > totalFloatersNeeded && (
                   <span style={{ color: '#16a34a', fontWeight: 600 }}>
-                    +{formatFTE(floats.length + adAvailable - totalFloatersNeeded)} FTE over
+                    +{formatFTE(effectiveFloatCount + adAvailable - totalFloatersNeeded)} FTE over
                   </span>
                 )}
               </div>

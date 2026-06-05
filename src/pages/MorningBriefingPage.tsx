@@ -33,15 +33,17 @@ interface CentreCard {
   staffRostered:    number;
   staffAbsent:      number;
   staffAvailable:   number;   // room + float staff, minus any who are also on leave
-  roomStaffAvailable: number; // room staff only (no floats) — matches staffing analysis surplus
+  roomStaffAvailable: number; // room staff only (no floats) - matches staffing analysis surplus
   floatsRostered:   number;
   requiredStaff:    number;    // based on all-day
   requiredPresent:  number;    // based on currently present
   requiredExpected: number;    // based on expected (Day view)
   shortage:         number;   // positive = short, 0 = exact, negative = surplus (based on room+float)
   roomShortage:     number;   // positive = short, negative = surplus (room staff only)
-  floatSurplus:     number;   // floats+AD available minus floaters needed (matches staffing analysis “+4.3 FTE over”)
-  casualsNeeded:    number;
+  floatSurplus:       number;   // floats+AD available minus floaters needed
+  effectiveFloatCount: number;   // floats + room net surplus (surplus room staff act as floats)
+  roomNetSurplus:      number;   // net room surplus carried into float pool
+  casualsNeeded:       number;
   status:           'green' | 'amber' | 'red' | 'unknown';
 }
 
@@ -126,7 +128,7 @@ export default function MorningBriefingPage() {
           fetch(`/api/attendance?date=${lastWeek}`).then(r => r.json()), 60 * 60 * 1000),
         withCache('deputy-units', () =>
           fetch('/api/deputy-units').then(r => r.json()), 10 * 60 * 1000),
-        // Most recent updated_at from today's attendance — tells us when the last snapshot ran
+        // Most recent updated_at from today's attendance - tells us when the last snapshot ran
         fetch(`https://tgxpvzlibquqnldgmwho.supabase.co/rest/v1/attendance_daily?date=eq.${date}&select=updated_at&order=updated_at.desc&limit=1`, {
           headers: { apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NDE3MjUsImV4cCI6MjA4OTUxNzcyNX0.v_thHOU7xq0gaFhcnb2A3iBl5H7bAp9IbT9IPMg_jTY' }
         }).then(r => r.json()).catch(() => []),
@@ -158,7 +160,7 @@ export default function MorningBriefingPage() {
         (unitMap.get(u.centre) ?? unitMap.set(u.centre,[]).get(u.centre)!).push(u);
       }
 
-      // ONE bulk fetchRosters call for all centres combined—avoids rate-limiting 16+ parallel calls
+      // ONE bulk fetchRosters call for all centres combined-avoids rate-limiting 16+ parallel calls
       // Then filter per-centre from the result
       const allCentreUnitIds = [...new Set(allowed.flatMap(c => [
         ...c.rooms.map(r => r.deputyUnitId),
@@ -257,12 +259,12 @@ export default function MorningBriefingPage() {
         // Only subtract absent staff who were ALSO rostered to a room or float
         // (they called in sick from their scheduled shift).
         // People who are ONLY in a leave unit (no room/float roster) should NOT be
-        // subtracted — they were never in totalStaff to begin with.
+        // subtracted - they were never in totalStaff to begin with.
         const roomAndFloatAbsent = [...absentIds].filter(id => staffIds.has(id) || floatIds.has(id)).length;
         const totalAvailable = totalStaff - roomAndFloatAbsent;
         const statusShortage = required - totalAvailable; // >0 = short, ==0 = exact, <0 = surplus
 
-        // Room-staff-only surplus — matches the staffing analysis (floats are a separate buffer)
+        // Room-staff-only surplus - matches the staffing analysis (floats are a separate buffer)
         const roomAbsent = [...absentIds].filter(id => staffIds.has(id)).length;
         const roomStaffAvailable = staffIds.size - roomAbsent;
         const roomShortage = required - roomStaffAvailable; // >0 = short, negative = surplus
@@ -275,12 +277,15 @@ export default function MorningBriefingPage() {
         // 2. Buffer: 1 per 6 floor staff
         const totalFloorStaff = roomData.reduce((s, r) => s + r.staffCount, 0);
         const bufferRequired  = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
-        // 3. Total floaters needed → casuals = what floats+AD can't cover
-        // Use floatCount (array length) + adCount (array length) to exactly match staffing analysis
+        // 3. Room net surplus (after covering all shortages) counts as effective floats
+        // e.g. a room with 1 extra staff when all rooms are compliant = 1 extra available float
+        const roomNetSurplus       = Math.max(0, totalSurplus - totalRatioShortage);
+        const effectiveFloatCount  = floatCount + roomNetSurplus;
+        // 4. Total floaters needed → casuals = what effective floats+AD can't cover
         const totalFloatersNeeded = Math.max(0, netShortageAfterRealloc + bufferRequired);
-        const casualsNeeded       = Math.max(0, totalFloatersNeeded - floatCount - adAvailable);
-        // Float surplus: matches the "+4.3 FTE over" label in the staffing analysis Float Pool
-        const floatSurplus = casualsNeeded <= 0 ? (floatCount + adAvailable - totalFloatersNeeded) : 0;
+        const casualsNeeded       = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
+        // Float surplus: includes room surplus contribution
+        const floatSurplus = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
 
 
         // Status = ratio compliance only (not buffer/casuals)
@@ -308,6 +313,8 @@ export default function MorningBriefingPage() {
           shortage:         statusShortage,  // positive = short, 0 = exact, negative = surplus (room+float)
           roomShortage,                      // positive = short, negative = surplus (room staff only)
           floatSurplus,
+          effectiveFloatCount,
+          roomNetSurplus,
           casualsNeeded,
           status,
         });
@@ -535,12 +542,12 @@ export default function MorningBriefingPage() {
                         <div className="text-xs" style={{ color: '#dc2626' }}>{card.staffAbsent} absent</div>
                       )}
                     </div>
-                    {/* 4. Surplus / Deficit — matches staffing analysis float pool */}
+                    {/* 4. Surplus / Deficit - matches staffing analysis float pool */}
                     <div className="text-center rounded-xl px-1 py-1"
                       style={{ backgroundColor: shortfall ? '#fee2e2' : surplus ? '#dcfce7' : '#fef9c3' }}>
                       <div className="text-xl font-bold"
                         style={{ color: shortfall ? '#dc2626' : surplus ? '#16a34a' : '#b45309' }}>
-                        {viewChildren === 0 ? '—' : surplusStr}
+                        {viewChildren === 0 ? '-' : surplusStr}
                       </div>
                       <div className="text-xs font-semibold"
                         style={{ color: shortfall ? '#dc2626' : surplus ? '#16a34a' : '#b45309' }}>
