@@ -102,8 +102,31 @@ async function main() {
   console.log(`  Using sheet: "${ws.name}"`);
   const isDailyTab = ws.name === 'Daily Occupancy';
 
-  // Accumulate: { "Campus|YYYY-MM-DD" => booked total }
-  const totals = new Map();
+  // Always read capacity from the "Occupancy" tab (room capacities defined there)
+  const capacity = new Map(); // centre => total licensed places
+  const occWs = wb.getWorksheet('Occupancy');
+  if (occWs) {
+    const seen = new Set(); // avoid double-counting rooms across term entries
+    occWs.eachRow((row, i) => {
+      if (i === 1) return;
+      const rawC = String(row.getCell(1).value || '').trim();
+      const room  = String(row.getCell(3).value || '').trim();
+      const cap   = Number(row.getCell(4).value || 0);
+      if (!rawC || cap === 0) return;
+      const centre = normaliseCentre(rawC);
+      const key = `${centre}|${room}`;
+      if (!seen.has(key)) { // count each room once regardless of how many term entries
+        seen.add(key);
+        capacity.set(centre, (capacity.get(centre) || 0) + cap);
+      }
+    });
+    console.log(`  Capacity: ${capacity.size} centres loaded from Occupancy tab`);
+  } else {
+    console.warn('  No Occupancy tab found — capacity will be 0');
+  }
+
+  // Accumulate booked totals per campus+date
+  const totals = new Map(); // "Campus|YYYY-MM-DD" => booked
 
   ws.eachRow((row, i) => {
     if (i === 1) return; // skip header
@@ -119,7 +142,7 @@ async function main() {
       const key = `${campus}|${date}`;
       totals.set(key, (totals.get(key) || 0) + booked);
     } else {
-      // Occupancy tab (future bookings): Centre | Week | Room | Capacity | Mon/Tue/... Enrolled
+      // Occupancy tab: Centre | Week | Room | Capacity | Mon Enrolled | ...
       const rawCentre = String(row.getCell(COL.centre).value || '').trim();
       const weekVal   = row.getCell(COL.week).value;
       if (!rawCentre || !weekVal) return;
@@ -138,7 +161,8 @@ async function main() {
 
   const rows = [...totals.entries()].map(([key, booked]) => {
     const [campus, date] = key.split('|');
-    return { campus, date, booked, updated_at: new Date().toISOString() };
+    const cap = capacity.get(campus) || 0;
+    return { campus, date, booked, capacity: cap, updated_at: new Date().toISOString() };
   });
 
   console.log(`  Parsed ${rows.length} campus-day records from ${ws.rowCount - 1} rows`);

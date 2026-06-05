@@ -79,6 +79,7 @@ interface OccupancyRow {
   expected:       number;
   actual:         number;
   booked:         number;   // from daily_occupancy (Owna bookings)
+  capacity:       number;   // total licensed places for this centre
   lastWeek:       number;
   change:         number;   // actual - lastWeek (positive = more children than last week)
 }
@@ -452,18 +453,20 @@ export default function ReportingPage() {
           const priorDate = new Date(Date.UTC(yy, mo - 1, dday - 7)).toISOString().slice(0, 10);
           const priorAtt  = await fetchAttendance(campus, priorDate);
           const lastWeek  = (priorAtt as any[]).length;
-          // Booked count from daily_occupancy (synced from Owna Occupancy tab in SharePoint)
+          // Booked + capacity from daily_occupancy (synced from Owna)
           const bookRes = await fetch(
-            `${SUPABASE_URL}/rest/v1/daily_occupancy?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=booked`,
+            `${SUPABASE_URL}/rest/v1/daily_occupancy?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=booked,capacity`,
             { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
           ).catch(() => null);
           const bookRows: any[] = bookRes?.ok ? await bookRes.json() : [];
-          const booked = bookRows[0]?.booked ?? 0;
+          const booked   = bookRows[0]?.booked   ?? 0;
+          const capacity = bookRows[0]?.capacity ?? 0;
           occRows.push({
             date, campus,
             expected: actual,
             actual,
             booked,
+            capacity,
             lastWeek,
             change: actual - lastWeek,
           });
@@ -1667,14 +1670,14 @@ export default function ReportingPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr style={{ backgroundColor: '#F5FAF3' }}>
-                        {['Date','Campus','Booked','Attended','Absent','Last Week','Change','Trend'].map(h => (
+                        {['Date','Campus','Occupancy %','Booked','Attended','Absent','Last Week','Change','Trend'].map(h => (
                           <th key={h} className="py-2 px-4 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {occupancyRows.length === 0 ? (
-                        <tr><td colSpan={8} className="py-6 text-center text-sm italic" style={{ color: '#596570' }}>No attendance data for selected period.</td></tr>
+                        <tr><td colSpan={9} className="py-6 text-center text-sm italic" style={{ color: '#596570' }}>No attendance data for selected period.</td></tr>
                       ) : occupancyRows.map((r, i) => {
                         const rowBg = r.lastWeek > 0 && r.change < -5
                           ? '#fef2f2'
@@ -1685,6 +1688,17 @@ export default function ReportingPage() {
                           <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: rowBg }}>
                             <td className="py-2 px-4" style={{ color: '#050505' }}>{safeFormat(new Date(r.date), 'd MMM yyyy')}</td>
                             <td className="py-2 px-4" style={{ color: '#050505' }}>{r.campus}</td>
+                            <td className="py-2 px-4 font-medium" style={{ color: '#7c3aed' }}>
+                              {r.capacity > 0 && r.booked > 0
+                                ? <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                                    style={{
+                                      backgroundColor: r.booked / r.capacity >= 0.9 ? '#dcfce7' : r.booked / r.capacity >= 0.75 ? '#fef9c3' : '#fee2e2',
+                                      color: r.booked / r.capacity >= 0.9 ? '#166534' : r.booked / r.capacity >= 0.75 ? '#854d0e' : '#991b1b',
+                                    }}>
+                                    {Math.round(r.booked / r.capacity * 100)}%
+                                  </span>
+                                : <span style={{ color: '#9ca3af' }}>—</span>}
+                            </td>
                             <td className="py-2 px-4 font-medium" style={{ color: '#1d4ed8' }}>{r.booked > 0 ? r.booked : '—'}</td>
                             <td className="py-2 px-4 font-medium" style={{ color: '#050505' }}>{r.actual}</td>
                             <td className="py-2 px-4" style={{ color: r.booked > 0 && r.actual < r.booked ? '#d97706' : '#596570' }}>
@@ -1709,6 +1723,39 @@ export default function ReportingPage() {
                           </tr>
                         );
                       })}
+                      {/* Average row */}
+                      {occupancyRows.length > 0 && (() => {
+                        const withCap = occupancyRows.filter(r => r.capacity > 0 && r.booked > 0);
+                        const avgOccPct = withCap.length > 0
+                          ? Math.round(withCap.reduce((s, r) => s + r.booked / r.capacity * 100, 0) / withCap.length)
+                          : null;
+                        const avgBooked    = occupancyRows.length ? Math.round(occupancyRows.reduce((s,r)=>s+r.booked,0)/occupancyRows.length) : 0;
+                        const avgAttended  = occupancyRows.length ? Math.round(occupancyRows.reduce((s,r)=>s+r.actual,0)/occupancyRows.length) : 0;
+                        const avgAbsent    = avgBooked - avgAttended;
+                        const avgLastWeek  = occupancyRows.filter(r=>r.lastWeek>0).length
+                          ? Math.round(occupancyRows.filter(r=>r.lastWeek>0).reduce((s,r)=>s+r.lastWeek,0)/occupancyRows.filter(r=>r.lastWeek>0).length)
+                          : null;
+                        return (
+                          <tr className="border-t-2 font-semibold" style={{ borderColor: '#2d5c18', backgroundColor: '#F5FAF3' }}>
+                            <td className="py-2 px-4" style={{ color: '#2d5c18' }}>Average</td>
+                            <td className="py-2 px-4" style={{ color: '#596570' }}></td>
+                            <td className="py-2 px-4">
+                              {avgOccPct !== null
+                                ? <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                                    style={{ backgroundColor: avgOccPct >= 90 ? '#dcfce7' : avgOccPct >= 75 ? '#fef9c3' : '#fee2e2', color: avgOccPct >= 90 ? '#166534' : avgOccPct >= 75 ? '#854d0e' : '#991b1b' }}>
+                                    {avgOccPct}%
+                                  </span>
+                                : <span style={{ color: '#9ca3af' }}>—</span>}
+                            </td>
+                            <td className="py-2 px-4" style={{ color: '#1d4ed8' }}>{avgBooked || '—'}</td>
+                            <td className="py-2 px-4">{avgAttended || '—'}</td>
+                            <td className="py-2 px-4" style={{ color: '#d97706' }}>{avgAbsent > 0 ? avgAbsent : '—'}</td>
+                            <td className="py-2 px-4">{avgLastWeek ?? '—'}</td>
+                            <td className="py-2 px-4"></td>
+                            <td className="py-2 px-4"></td>
+                          </tr>
+                        );
+                      })()}
                     </tbody>
                   </table>
                 </div>
