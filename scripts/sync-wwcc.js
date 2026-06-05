@@ -98,7 +98,17 @@ async function supabaseUpsert(rows) {
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\n🪪  Syncing WWCC data from Monday board ${BOARD_ID}${DRY_RUN ? ' [DRY RUN]' : ''}\n`);
+  console.log(`\n🪪  Syncing WWCC data from Monday board ${BOARD_ID} (onboarding board — fills gaps only)${DRY_RUN ? ' [DRY RUN]' : ''}\n`);
+
+  // Load existing records first — staffing boards are authoritative so we never
+  // overwrite a record that already has a LATER or EQUAL expiry than what the
+  // onboarding board holds. Only insert new staff or update genuinely stale records.
+  const existingRes = await fetch(`${SUPABASE_URL}/rest/v1/staff_wwcc?select=full_name_norm,wwcc_expiry&limit=3000`, {
+    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+  });
+  const existingRows = existingRes.ok ? await existingRes.json() : [];
+  const existingMap = {};
+  for (const r of existingRows) existingMap[r.full_name_norm] = r.wwcc_expiry;
 
   const rows   = [];
   let total    = 0;
@@ -123,6 +133,11 @@ async function main() {
 
       if (!wwccNumber) continue; // no WWCC → nothing to store
       withWwcc++;
+
+      const nameNorm = normaliseName(fullName);
+      const existingExpiry = existingMap[nameNorm];
+      // Skip if a staffing board already has a LATER or EQUAL expiry for this person
+      if (existingExpiry && wwccExpiry && existingExpiry >= wwccExpiry) continue;
 
       rows.push({
         monday_item_id: item.id,
