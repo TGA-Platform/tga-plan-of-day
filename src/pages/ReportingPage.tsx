@@ -482,9 +482,15 @@ export default function ReportingPage() {
             continue;
           }
 
-          // Natural room name
+          // Natural room name — for non-ratio support staff use the actual Deputy unit name
+          // so kitchen/chef staff can be identified by keyword in the WWCC column
           const naturalRoom = centre.rooms.find(rm => rm.deputyUnitId === unitId);
-          const naturalRoomName = naturalRoom?.name ?? (staffType === 'float' ? 'Float Pool' : staffType === 'iss' ? 'ISS' : 'Support');
+          const deputyUnitName = r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '';
+          const naturalRoomName = naturalRoom?.name ?? (
+            staffType === 'float' ? 'Float Pool'
+            : staffType === 'iss' ? 'ISS'
+            : deputyUnitName || 'Support'
+          );
 
           // Build slot-by-slot position, then merge consecutive same-position slots
           const shiftInM  = sm151(shiftIn);
