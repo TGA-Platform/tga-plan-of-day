@@ -126,7 +126,7 @@ export default function ReportingPage() {
   const [generated, setGenerated]      = useState(false);
   const [roomFilter, setRoomFilter]    = useState<string>('all');
   // WWCC lookup: normalised name → { wwcc_number, wwcc_expiry }
-  const [wwccMap, setWwccMap] = useState<Record<string, { wwcc_number: string; wwcc_expiry: string | null }>>({});
+  const [wwccMap, setWwccMap] = useState<Record<string, { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }>>({});
   const printRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
@@ -171,7 +171,7 @@ export default function ReportingPage() {
               <td><strong>${e.inTime}</strong></td>
               <td>${e.outTime}</td>
               <td><span style="font-size:9px">${typeLabel}</span></td>
-              <td>${(() => { const k = e.name.toLowerCase().replace(/\s+/g,' ').trim(); const r2 = wwccMap[k]; return r2 ? r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : '') : '<em>—</em>'; })()}</td>
+              <td>${(() => { const k = e.name.toLowerCase().replace(/\s+/g,' ').trim(); const r2 = wwccMap[k]; if (!r2) return '<em>—</em>'; if (r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : ''); })()}</td>
               <td>${e.note ?? '—'}</td>
             </tr>`;
           }).join('');
@@ -647,10 +647,10 @@ export default function ReportingPage() {
     if (uniqueNames.length > 0) {
       fetch('/api/staff-wwcc')
         .then(r => r.ok ? r.json() : [])
-        .then((records: { full_name: string; full_name_norm: string; wwcc_number: string; wwcc_expiry: string | null }[]) => {
-          const map: Record<string, { wwcc_number: string; wwcc_expiry: string | null }> = {};
+        .then((records: { full_name: string; full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }[]) => {
+          const map: Record<string, { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }> = {};
           for (const rec of records) {
-            map[rec.full_name_norm] = { wwcc_number: rec.wwcc_number, wwcc_expiry: rec.wwcc_expiry };
+            map[rec.full_name_norm] = { wwcc_number: rec.wwcc_number, wwcc_expiry: rec.wwcc_expiry, under_18: rec.under_18 ?? false };
           }
           setWwccMap(map);
         })
@@ -928,6 +928,9 @@ export default function ReportingPage() {
                                     const key = e.name.toLowerCase().replace(/\s+/g, ' ').trim();
                                     const rec = wwccMap[key];
                                     if (!rec) return <span className="text-xs italic" style={{ color: '#9ca3af' }}>—</span>;
+                                    if (rec.under_18) return (
+                                      <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>Under 18</span>
+                                    );
                                     const expDate = rec.wwcc_expiry ? new Date(rec.wwcc_expiry) : null;
                                     const today   = new Date();
                                     const daysLeft = expDate ? Math.ceil((expDate.getTime() - today.getTime()) / 86400000) : null;

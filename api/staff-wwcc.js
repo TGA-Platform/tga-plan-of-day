@@ -26,7 +26,7 @@ export default async function handler(req, res) {
   // keeping the record with the latest (preferably non-expired) wwcc_expiry.
   // This handles cases where staff appear on both the onboarding board (possibly
   // with an old expiry) and a staffing board (with a renewed expiry).
-  const url = `${SUPABASE_URL}/rest/v1/staff_wwcc?select=full_name,full_name_norm,wwcc_number,wwcc_expiry,centre&order=wwcc_expiry.desc.nullslast&limit=3000`;
+  const url = `${SUPABASE_URL}/rest/v1/staff_wwcc?select=full_name,full_name_norm,wwcc_number,wwcc_expiry,under_18,centre&order=wwcc_expiry.desc.nullslast&limit=3000`;
 
   const r = await fetch(url, {
     headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
