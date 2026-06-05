@@ -22,19 +22,11 @@ export default async function handler(req, res) {
 
   const namesParam = req.query.names;
 
-  let url;
-  if (namesParam) {
-    // Look up specific names
-    const normed = namesParam.split(',')
-      .map(n => normaliseName(decodeURIComponent(n)))
-      .filter(Boolean);
-    // PostgREST: full_name_norm=in.(name1,name2,...)
-    const inList = normed.map(n => `"${n}"`).join(',');
-    url = `${SUPABASE_URL}/rest/v1/staff_wwcc?full_name_norm=in.(${encodeURIComponent(inList)})&select=full_name,full_name_norm,wwcc_number,wwcc_expiry,centre`;
-  } else {
-    // Return all
-    url = `${SUPABASE_URL}/rest/v1/staff_wwcc?select=full_name,full_name_norm,wwcc_number,wwcc_expiry,centre&limit=2000`;
-  }
+  // Always fetch all records and deduplicate by name client-side,
+  // keeping the record with the latest (preferably non-expired) wwcc_expiry.
+  // This handles cases where staff appear on both the onboarding board (possibly
+  // with an old expiry) and a staffing board (with a renewed expiry).
+  const url = `${SUPABASE_URL}/rest/v1/staff_wwcc?select=full_name,full_name_norm,wwcc_number,wwcc_expiry,centre&order=wwcc_expiry.desc.nullslast&limit=3000`;
 
   const r = await fetch(url, {
     headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
@@ -44,6 +36,26 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `Supabase error ${r.status}` });
   }
 
-  const rows = await r.json();
+  const all = await r.json();
+
+  // Deduplicate: since results are ordered by expiry DESC, first occurrence
+  // per normalised name is always the latest (best) record.
+  const seen = new Set();
+  const rows = [];
+  for (const row of all) {
+    if (!seen.has(row.full_name_norm)) {
+      seen.add(row.full_name_norm);
+      rows.push(row);
+    }
+  }
+
+  // If caller requested specific names, filter down
+  if (namesParam) {
+    const normed = new Set(
+      namesParam.split(',').map(n => normaliseName(decodeURIComponent(n))).filter(Boolean)
+    );
+    return res.status(200).json(rows.filter(r => normed.has(r.full_name_norm)));
+  }
+
   res.status(200).json(rows);
 }

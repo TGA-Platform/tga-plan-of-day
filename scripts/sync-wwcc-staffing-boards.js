@@ -52,6 +52,19 @@ function gql(query) {
   });
 }
 
+/**
+ * Staffing board item names often include role/status suffixes in brackets,
+ * e.g. "Paris-Renee Stewart (Room Leader)" or "Jane Smith (Mat Leave)".
+ * Strip these so the normalised name matches the plain name used everywhere else.
+ */
+function stripRoleSuffix(name) {
+  return name
+    .replace(/\s*\([^)]*\)\s*/g, ' ')  // remove anything in (brackets)
+    .replace(/\s*-\s*(Room Leader|Educational Leader|Director|Assistant Director|ECT|Educator|Replacement|Mat Leave|Maternity Leave|Leave|Relief|Casual|Part Time|Full Time|On Hold)[^$]*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function fetchBoardWwcc(boardId, centreName) {
   const results = [];
   let cursor = null;
@@ -77,10 +90,12 @@ async function fetchBoardWwcc(boardId, centreName) {
       // Strip trailing punctuation from WWCC number
       const cleanWwcc = wwccNumber.replace(/[,\s]+$/, '').trim();
       if (!cleanWwcc) continue;
+      // Use clean name (without role suffix) for matching
+      const cleanName = stripRoleSuffix(item.name);
       results.push({
         monday_item_id: `sb_${boardId}_${item.id}`, // prefix to distinguish from onboarding board
-        full_name:      item.name,
-        full_name_norm: item.name.toLowerCase().replace(/\s+/g, ' ').trim(),
+        full_name:      cleanName,
+        full_name_norm: cleanName.toLowerCase().replace(/\s+/g, ' ').trim(),
         wwcc_number:    cleanWwcc,
         wwcc_expiry:    wwccExpiry,
         centre:         centreName,
