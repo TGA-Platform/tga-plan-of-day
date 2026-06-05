@@ -686,7 +686,10 @@ export default function ReportingPage() {
            * 4. Same last-name + matching first initial — narrows when multiple share a surname
            */
           const lookup = (name: string): WwccRec | null => {
-            const norm = name.toLowerCase().replace(/\s+/g, ' ').trim();
+            // Strip parenthetical preferred names from Deputy display names
+            // e.g. "(Cherise) Xue Yang" → "Xue Yang", "Xue Yang (Cherise)" → "Xue Yang"
+            const cleaned = name.replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+            const norm = cleaned.toLowerCase().replace(/\s+/g, ' ').trim();
 
             // 1. Exact
             if (exactMap[norm]) return exactMap[norm];
