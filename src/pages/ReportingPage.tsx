@@ -111,6 +111,7 @@ interface StaffingAnalysisRow {
   children:            number;
   required:            number;       // total required staff (per-room sum)
   totalFloorStaff:     number;       // room staff count
+  roomSurplus:         number;       // net room surplus after internal reallocation (negative = rooms short)
   bufferRequired:      number;       // floor / 6
   floatCount:          number;       // float entries (not unique)
   adAvailable:         number;       // AD entries (0 if children >= 100)
@@ -913,9 +914,15 @@ export default function ReportingPage() {
             return { required: roomRequired, staffCount: roomStaff.length };
           });
           const saRequired = saRoomData.reduce((s, r) => s + r.required, 0);
-          const saTotalFloorStaff = saRoomData.reduce((s, r) => s + r.staffCount, 0);
-          // Float buffer = floor staff / 6 (how many floats you need)
-          const saBufferRequired  = saTotalFloorStaff > 0 ? saTotalFloorStaff / 6 : 0;
+          const saTotalFloorStaff    = saRoomData.reduce((s, r) => s + r.staffCount, 0);
+          // Room shortages/surpluses — after internal reallocation between rooms
+          const saTotalRatioShortage = saRoomData.reduce((s, r) => s + Math.max(0, r.required - r.staffCount), 0);
+          const saTotalRoomSurplus   = saRoomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
+          const saNetShortage        = Math.max(0, saTotalRatioShortage - saTotalRoomSurplus);
+          // Room net: positive = rooms have surplus staff, negative = rooms are short
+          const saRoomSurplus        = saTotalRoomSurplus - saTotalRatioShortage;
+          // Float buffer = floor staff / 6 (how many floats you need as buffer)
+          const saBufferRequired     = saTotalFloorStaff > 0 ? saTotalFloorStaff / 6 : 0;
           const saFloatUnitIds    = new Set(centre.floatUnitIds ?? []);
           const saNonRatioUnitIds = new Set(centre.nonRatioUnitIds ?? []);
           const saFloatCount      = (rosters as any[]).filter(r => saFloatUnitIds.has(r.OperationalUnit)).length;
@@ -925,10 +932,10 @@ export default function ReportingPage() {
             return un.includes('assistant director') || un.includes('asst director') || un.includes('ass. director');
           }).length;
           const saAdAvailable  = (saChildren > 0 && saChildren < 100) ? saAdCount : 0;
-          // Available = floats + AD (if <100 children); surplus = available - buffer
-          const saAvailable    = saFloatCount + saAdAvailable;
-          const saFloatSurplus = saAvailable - saBufferRequired;
-          const saTotalFloatersNeeded = saBufferRequired; // kept for display
+          // Floats needed = room shortage (after realloc) + buffer
+          // Floats cover room shortages first, then surplus = what's left vs buffer
+          const saTotalFloatersNeeded = saNetShortage + saBufferRequired;
+          const saFloatSurplus        = (saFloatCount + saAdAvailable) - saTotalFloatersNeeded;
           const saStatus: StaffingAnalysisRow['status'] = saChildren === 0 ? 'unknown'
             : saFloatSurplus < 0 ? 'red'
             : saFloatSurplus === 0 ? 'amber'
@@ -938,6 +945,7 @@ export default function ReportingPage() {
             children:            saChildren,
             required:            saRequired,
             totalFloorStaff:     saTotalFloorStaff,
+            roomSurplus:         saRoomSurplus,
             bufferRequired:      saBufferRequired,
             floatCount:          saFloatCount,
             adAvailable:         saAdAvailable,
@@ -2144,7 +2152,7 @@ export default function ReportingPage() {
                           <table className="w-full text-sm">
                             <thead>
                               <tr style={{ backgroundColor: '#F5FAF3' }}>
-                                {['Date','Children','Floor Staff','Required','Float Buffer','Floats','AD','Available','Surplus','Status'].map(h => (
+                                {['Date','Children','Floor Staff','Required','Room ±','Float Buffer','Floats','AD','Available','Surplus','Status'].map(h => (
                                   <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                                 ))}
                               </tr>
@@ -2170,6 +2178,10 @@ export default function ReportingPage() {
                                     <td className="py-2 px-3 text-xs" style={{ color: '#596570' }}>{r.children}</td>
                                     <td className="py-2 px-3 text-xs font-medium" style={{ color: '#050505' }}>{r.totalFloorStaff}</td>
                                     <td className="py-2 px-3 text-xs" style={{ color: '#596570' }}>{r.required}</td>
+                                    <td className="py-2 px-3 text-xs font-medium"
+                                      style={{ color: r.roomSurplus < 0 ? '#dc2626' : r.roomSurplus > 0 ? '#166534' : '#596570' }}>
+                                      {r.roomSurplus > 0 ? '+' + r.roomSurplus : r.roomSurplus}
+                                    </td>
                                     <td className="py-2 px-3 text-xs" style={{ color: '#7c3aed' }}>{r.bufferRequired.toFixed(1)}</td>
                                     <td className="py-2 px-3 text-xs font-medium" style={{ color: '#1d4ed8' }}>{r.floatCount}</td>
                                     <td className="py-2 px-3 text-xs" style={{ color: r.adAvailable > 0 ? '#059669' : '#9ca3af' }}>
