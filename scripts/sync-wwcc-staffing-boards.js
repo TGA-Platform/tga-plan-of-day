@@ -35,6 +35,8 @@ const STAFFING_BOARDS = {
   'Wilton':            '8719103624',
 };
 
+import { normaliseForMatching } from './name-utils.js';
+
 const FAKE_WWCC = /^(n\/a|na|none|nil|tba|tbd|-)$/i;
 
 function isUnder18(dobStr) {
@@ -125,9 +127,9 @@ async function fetchBoardWwcc(boardId, centreName) {
       const under18    = !cleanWwcc && isUnder18(dob);
       // Skip if no WWCC and not under 18
       if (!cleanWwcc && !under18) continue;
-      // Use clean name (without role suffix) for matching
-      const cleanName = stripRoleSuffix(item.name);
-      const norm = cleanName.toLowerCase().replace(/\s+/g, ' ').trim();
+      // Use normaliseForMatching for consistent cleaning on both sides
+      const cleanName = stripRoleSuffix(item.name); // still strip for full_name display
+      const norm = normaliseForMatching(item.name);  // aggressive normalise for matching key
 
       // If a preferred/nickname is in brackets (e.g. "Xue Yang (Cherise)"),
       // also store an alias record: "Cherise Yang" so Deputy display names match
@@ -135,7 +137,7 @@ async function fetchBoardWwcc(boardId, centreName) {
       if (preferredName) {
         const lastName  = cleanName.split(' ').filter(Boolean).pop() ?? '';
         const aliasName = `${preferredName} ${lastName}`.trim();
-        const aliasNorm = aliasName.toLowerCase();
+        const aliasNorm = normaliseForMatching(aliasName);
         if (aliasNorm !== norm) {
           results.push({
             monday_item_id: `alias_sb_${boardId}_${item.id}`,

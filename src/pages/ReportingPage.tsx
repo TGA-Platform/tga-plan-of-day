@@ -655,6 +655,31 @@ export default function ReportingPage() {
       fetch('/api/staff-wwcc')
         .then(r => r.ok ? r.json() : [])
         .then((records: { full_name: string; full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }[]) => {
+          /**
+           * Comprehensive name normalisation — same logic as scripts/name-utils.js.
+           * Apply to BOTH stored names and lookup names so they always compare alike.
+           * Handles: brackets, role abbreviations, hyphens, copy markers, verbose roles.
+           */
+          const normaliseName = (name: string) => name
+            .replace(/\s*[\(\[{][^\)\]{}]*[\)\]{}]\s*/g, ' ')  // strip (brackets)
+            .replace(/\s+-\s+.+$/i, '')                          // strip - role descriptor
+            .replace(/\s+\b(RL|EL|CD|AD|ECT|2IC|HOD|HOE|RN|DON)\b\s*$/i, '') // role abbrevs
+            .replace(/\s+(Room Leader|Educational Leader|Centre Director|Assistant Director|Early Childhood Teacher|Co-ordinator|Coordinator|Director)\s*$/i, '')
+            .replace(/\s*[-\u2013]\s*(copy|contracted role|replacement|mat leave|maternity leave|on hold|archived)\s*.*$/i, '')
+            .replace(/[-'`\u2018\u2019]/g, '')                   // strip hyphens & apostrophes
+            .replace(/\s+/g, ' ').trim().toLowerCase();
+
+          /** Levenshtein distance — last-resort fuzzy fallback for minor typos */
+          const lev = (a: string, b: string): number => {
+            const m = a.length, n = b.length;
+            const dp: number[][] = Array.from({length: m+1}, (_,i) => [i, ...Array(n).fill(0)]);
+            for (let j = 0; j <= n; j++) dp[0][j] = j;
+            for (let i = 1; i <= m; i++)
+              for (let j = 1; j <= n; j++)
+                dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);
+            return dp[m][n];
+          };
+
           // Strip hyphens/apostrophes/spaces for fuzzy comparison
           const bare = (s: string) => s.replace(/[-'\s]/g, '').toLowerCase();
 
@@ -663,14 +688,21 @@ export default function ReportingPage() {
           const strippedMap: Record<string, WwccRec> = {}; // bare(norm) → rec (first wins)
           const lastNameMap: Record<string, typeof records> = {}; // bare(lastName) → [recs]
 
+          // Also build normalised-name index for the primary lookup
+          const normedMap: Record<string, WwccRec> = {};
+
           for (const rec of records) {
             const entry: WwccRec = { wwcc_number: rec.wwcc_number, wwcc_expiry: rec.wwcc_expiry, under_18: rec.under_18 ?? false };
             exactMap[rec.full_name_norm] = entry;
 
-            const b = bare(rec.full_name_norm);
+            // Also index by our aggressive normalisation (catches stored RL/abbrev suffixes)
+            const normedKey = normaliseName(rec.full_name);
+            if (!normedMap[normedKey]) normedMap[normedKey] = entry;
+
+            const b = bare(normedKey);
             if (!strippedMap[b]) strippedMap[b] = entry;
 
-            const parts = rec.full_name_norm.replace(/[-']/g, ' ').trim().split(/\s+/);
+            const parts = normedKey.replace(/[-']/g, ' ').trim().split(/\s+/);
             const lastName = bare(parts[parts.length - 1]);
             if (lastName) {
               if (!lastNameMap[lastName]) lastNameMap[lastName] = [];
@@ -686,38 +718,35 @@ export default function ReportingPage() {
            * 4. Same last-name + matching first initial — narrows when multiple share a surname
            */
           const lookup = (name: string): WwccRec | null => {
-            // Normalise Deputy display names before matching:
-            // - Strip parenthetical preferred names: "(Cherise) Xue Yang" → "Xue Yang"
-            // - Strip role abbreviations at end: "Charlotte Simmons RL" → "Charlotte Simmons"
-            const cleaned = name
-              .replace(/\s*\([^)]*\)\s*/g, ' ')                          // remove (brackets)
-              .replace(/\s+\b(RL|EL|CD|AD|ECT|2IC|HOD|HOE)\b\s*$/i, '') // remove trailing role abbrevs
-              .replace(/\s+/g, ' ').trim();
-            const norm = cleaned.toLowerCase().replace(/\s+/g, ' ').trim();
+            // Apply same comprehensive normalisation as the sync scripts
+            const norm = normaliseName(name);
 
-            // 1. Exact
+            // 1. Exact stored norm
             if (exactMap[norm]) return exactMap[norm];
 
-            // 2. Bare (hyphens/apostrophes stripped)
+            // 2. Normalised match (catches stored abbrev suffixes like RL)
+            if (normedMap[norm]) return normedMap[norm];
+
+            // 3. Bare match (hyphens/apostrophes/spaces stripped)
             const b = bare(norm);
             if (strippedMap[b]) return strippedMap[b];
 
-            // Build last name from lookup name
+            // Build last name from normalised input
             const parts = norm.replace(/[-']/g, ' ').trim().split(/\s+/);
             const lastName = bare(parts[parts.length - 1]);
             const candidates = lastNameMap[lastName] ?? [];
 
-            // 3. Unique last name — any first name mismatch is fine
+            // 4. Unique last name — handles different first names (Caitlin vs Catey)
             if (candidates.length === 1) {
               const c = candidates[0];
               return { wwcc_number: c.wwcc_number, wwcc_expiry: c.wwcc_expiry, under_18: c.under_18 ?? false };
             }
 
-            // 4. Multiple with same last name — narrow by first initial
+            // 5. Same last name + first initial
             if (candidates.length > 1 && parts.length > 1) {
               const firstInitial = bare(parts[0])[0];
               const initialMatches = candidates.filter(c => {
-                const cParts = c.full_name_norm.replace(/[-']/g, ' ').trim().split(/\s+/);
+                const cParts = normaliseName(c.full_name).split(/\s+/);
                 return bare(cParts[0])[0] === firstInitial;
               });
               if (initialMatches.length === 1) {
@@ -725,6 +754,16 @@ export default function ReportingPage() {
                 return { wwcc_number: m.wwcc_number, wwcc_expiry: m.wwcc_expiry, under_18: m.under_18 ?? false };
               }
             }
+
+            // 6. Levenshtein ≤ 2 on normalised name — catches minor typos / spelling diffs
+            // Only run against records with WWCC data (avoid false positives)
+            const withData = records.filter(r => r.wwcc_number || r.under_18);
+            let bestDist = 3, bestRec: typeof records[0] | null = null;
+            for (const r of withData) {
+              const d = lev(norm, normaliseName(r.full_name));
+              if (d < bestDist) { bestDist = d; bestRec = r; }
+            }
+            if (bestRec) return { wwcc_number: bestRec.wwcc_number, wwcc_expiry: bestRec.wwcc_expiry, under_18: bestRec.under_18 ?? false };
 
             return null;
           };
