@@ -273,8 +273,52 @@ export default function ReportingPage() {
       : '';
 
     const reportTitle = viewingReport === 'educator' ? 'Regulation 151 - Daily Educator Record'
-      : viewingReport === 'ratio' ? 'Ratio Compliance Report'
-      : 'Trends Report';
+      : viewingReport === 'ratio'       ? 'Ratio Compliance Report'
+      : viewingReport === 'trends'      ? 'Grouping Trends Report'
+      : viewingReport === 'occupancy'   ? 'Attendance Trends Report'
+      : viewingReport === 'roster-opt'  ? 'Roster Optimisation Report'
+      : viewingReport === 'wwcc-expiry' ? 'WWCC Expiry Monitor'
+      : 'Report';
+
+    // ── Build occupancy HTML ──────────────────────────────────────────────────
+    const occupancyHtml = viewingReport === 'occupancy' && occupancyRows.length > 0
+      ? `<table>
+          <thead><tr><th>Date</th><th>Campus</th><th>Booked</th><th>Attended</th><th>Absent</th><th>Last Week</th><th>Change</th></tr></thead>
+          <tbody>${occupancyRows.map((r, i) => `
+            <tr style="background:${i % 2 === 0 ? 'white' : '#fafffe'}">
+              <td>${safeFormat(new Date(r.date), 'd MMM yyyy')}</td>
+              <td>${r.campus}</td>
+              <td style="color:#1d4ed8">${r.booked > 0 ? r.booked : '\u2014'}</td>
+              <td><strong>${r.actual}</strong></td>
+              <td style="color:${r.booked > 0 && r.booked - r.actual > 0 ? '#d97706' : '#596570'}">${r.booked > 0 ? r.booked - r.actual : '\u2014'}</td>
+              <td>${r.lastWeek > 0 ? r.lastWeek : '\u2014'}</td>
+              <td style="color:${r.change > 0 ? '#166534' : r.change < 0 ? '#991b1b' : '#596570'}">${r.change > 0 ? '+' + r.change : r.change < 0 ? String(r.change) : '\u2014'}</td>
+            </tr>`).join('')}</tbody>
+        </table>`
+      : '';
+
+    // ── Build WWCC expiry HTML ────────────────────────────────────────────────
+    const wwccHtml = viewingReport === 'wwcc-expiry' && wwccExpiryRows.length > 0
+      ? `<table>
+          <thead><tr><th>Name</th><th>Centre</th><th>Status</th><th>WWCC Number</th><th>Expiry Date</th><th>Days Remaining</th></tr></thead>
+          <tbody>${wwccExpiryRows.map((r, i) => {
+            const expDate = r.wwcc_expiry ? new Date(r.wwcc_expiry) : null;
+            const days = r.daysRemaining;
+            const col = days === null ? '#9ca3af' : days < 0 ? '#dc2626' : days < 30 ? '#d97706' : days < 90 ? '#92400e' : '#166534';
+            const dLabel = !expDate ? '\u2014' : days !== null && days < 0 ? 'EXPIRED' : days !== null ? days + 'd' : '\u2014';
+            const statusHtml = r.exemptReason === 'under_18' ? '<span style="color:#1d4ed8;font-size:9px;font-weight:700">Under 18</span>'
+              : r.exemptReason === 'kitchen' ? '<span style="color:#854d0e;font-size:9px;font-weight:700">Kitchen Staff</span>' : '\u2014';
+            return `<tr style="background:${i % 2 === 0 ? 'white' : '#fafffe'}">
+              <td><strong>${r.full_name}</strong></td>
+              <td>${r.centre || '\u2014'}</td>
+              <td>${statusHtml}</td>
+              <td style="font-family:monospace">${r.wwcc_number ?? '\u2014'}</td>
+              <td>${expDate ? expDate.toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) : '\u2014'}</td>
+              <td style="font-weight:700;color:${col}">${dLabel}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>`
+      : '';
 
     win.document.write(`<!DOCTYPE html>
 <html><head>
@@ -325,7 +369,7 @@ export default function ReportingPage() {
     </div>
   </div>
   ${viewingReport === 'educator' ? '<div class="reg-notice"><strong>Regulation 151 Record</strong> - Documents which educators were working directly with children, which room/group they were allocated to, and the times of allocation including scheduled meal breaks. WWCC numbers are held in the staff compliance register.</div>' : ''}
-  ${educatorHtml}${ratioHtml}
+  ${educatorHtml}${ratioHtml}${occupancyHtml}${wwccHtml}
   <div class="footer">The Grove Academy Plan of Day System - Confidential - For regulatory compliance purposes only</div>
 </body></html>`);
     win.document.close();
