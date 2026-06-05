@@ -46,10 +46,10 @@ interface EducatorEntry {
   employeeId:  number;
   name:        string;
   room:        string;   // room name for this block
-  inTime:      string;   // HH:MM — when they entered/started
-  outTime:     string;   // HH:MM — when they left/finished
-  lunchStart?: string;   // HH:MM — their own lunch break start (shown as dedicated columns)
-  lunchEnd?:   string;   // HH:MM — their own lunch break end
+  inTime:      string;   // HH:MM - when they entered/started
+  outTime:     string;   // HH:MM - when they left/finished
+  lunchStart?: string;   // HH:MM - their own lunch break start (shown as dedicated columns)
+  lunchEnd?:   string;   // HH:MM - their own lunch break end
   blockType:   'shift' | 'lunch_break' | 'float_move' | 'lunch_cover' | 'leave' | 'support' | 'grouping';
   staffType:   'room' | 'float' | 'iss' | 'support' | 'leave';
   note?:       string;
@@ -181,15 +181,15 @@ export default function ReportingPage() {
   const [rosterOptData, setRosterOptData]   = useState<RosterOptResult[]>([]);
   const [rosterRecs, setRosterRecs]         = useState<RosterRec[]>([]);
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean };
-  // WWCC lookup function — tries multiple strategies to handle name mismatches
+  // WWCC lookup function - tries multiple strategies to handle name mismatches
   const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
   const printRef = useRef<HTMLDivElement>(null);
 
   const REPORT_DEFS = [
-    { id: 'educator',    icon: '📋', label: 'Educator Record (Reg 151)', desc: 'Daily educator log — who was in which room and when. Required for NSW Reg 151 compliance.' },
+    { id: 'educator',    icon: '📋', label: 'Educator Record (Reg 151)', desc: 'Daily educator log - who was in which room and when. Required for NSW Reg 151 compliance.' },
     { id: 'ratio',       icon: '📐', label: 'Ratio Report',              desc: 'Staff-to-child ratio compliance snapshots across the selected period.' },
     { id: 'trends',      icon: '📈', label: 'Trends',                    desc: 'Family grouping patterns and session trends over time.' },
-    { id: 'occupancy',   icon: '🏫', label: 'Attendance Trends',         desc: 'Booked vs attended vs last week — see your absence rate per centre per day.' },
+    { id: 'occupancy',   icon: '🏫', label: 'Attendance Trends',         desc: 'Booked vs attended vs last week - see your absence rate per centre per day.' },
     { id: 'roster-opt',  icon: '🗓️', label: 'Roster Optimisation',       desc: 'Compare child attendance curves against the roster to find over/understaffed windows and get recommendations.' },
     { id: 'wwcc-expiry', icon: '🛡️', label: 'WWCC Expiries',             desc: 'Working With Children Check expiry dates for all active staff. Sorted by soonest expiring.' },
   ];
@@ -236,8 +236,8 @@ export default function ReportingPage() {
               <td><strong>${e.inTime}</strong></td>
               <td>${e.outTime}</td>
               <td><span style="font-size:9px">${typeLabel}</span></td>
-              <td>${(() => { const r2 = wwccLookup(e.name); const noData = !r2||(!r2.wwcc_number&&!r2.under_18); const rl = e.room.toLowerCase(); if (noData && ['chef','kitchen','cook'].some(kw => rl.includes(kw))) return '<span style="color:#854d0e;font-size:10px">Kitchen Staff</span>'; if (noData) return '<em>—</em>'; if (r2&&r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2&&r2.wwcc_number ? r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : '') : '<em>—</em>'; })()}</td>
-              <td>${e.note ?? '—'}</td>
+              <td>${(() => { const r2 = wwccLookup(e.name); const noData = !r2||(!r2.wwcc_number&&!r2.under_18); const rl = e.room.toLowerCase(); if (noData && ['chef','kitchen','cook'].some(kw => rl.includes(kw))) return '<span style="color:#854d0e;font-size:10px">Kitchen Staff</span>'; if (noData) return '<em>-</em>'; if (r2&&r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2&&r2.wwcc_number ? r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : '') : '<em>-</em>'; })()}</td>
+              <td>${e.note ?? '-'}</td>
             </tr>`;
           }).join('');
 
@@ -440,7 +440,7 @@ export default function ReportingPage() {
             .then(r => r.ok ? r.json() : []).catch(() => []),
           fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centre.id)}&date=${date}`)
             .then(r => r.ok ? r.json() : []).catch(() => []),
-          Promise.resolve([]), // rosterCacheDay removed — use rosters variable instead
+          Promise.resolve([]), // rosterCacheDay removed - use rosters variable instead
         ]);
         if (needsEducator) groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
 
@@ -474,7 +474,7 @@ export default function ReportingPage() {
 
         // ── Roster Optimisation ──────────────────────────────────────────
         if (needsRosterOpt) {
-          // Use rosters already fetched via /api/deputy-rosters — raw Deputy API format:
+          // Use rosters already fetched via /api/deputy-rosters - raw Deputy API format:
           // r.OperationalUnit (number), r.StartTime / r.EndTime (unix timestamps in seconds)
           const nonRatioIdsSet = new Set([...(centre.nonRatioUnitIds ?? []), ...(centre.leaveUnitIds ?? [])]);
           const campusRostersFiltered = (rosters as any[]).filter((r: any) =>
@@ -490,7 +490,7 @@ export default function ReportingPage() {
           for (const rslot of ROSTER_SLOTS_30) {
             const [rsh, rsm] = rslot.split(':').map(Number);
             const slotMinutes = rsh * 60 + rsm;
-            // sign_in/sign_out are HH:MM strings — use hhmm() helper.
+            // sign_in/sign_out are HH:MM strings - use hhmm() helper.
             // Build the full child array (with age) so we can apply real NSW ratios.
             const childrenAtSlot = (att as any[]).filter(r => {
               const siM = hhmm(r.sign_in);
@@ -517,7 +517,7 @@ export default function ReportingPage() {
             };
             // Ratio staff (room + floats) on shift at this slot
             const staffOnShift = campusRostersFiltered.filter(isOnShift).length;
-            // Non-ratio staff (directors, chefs, admin) on shift — shown separately for visibility
+            // Non-ratio staff (directors, chefs, admin) on shift - shown separately for visibility
             const leaveIdsSet = new Set(centre.leaveUnitIds ?? []);
             const offFloorOnShift = (rosters as any[])
               .filter((r: any) =>
@@ -545,7 +545,7 @@ export default function ReportingPage() {
           }
         }
 
-        // ── Educator record — built from Ratio Check state ─────────────────────────
+        // ── Educator record - built from Ratio Check state ─────────────────────────
         // Priority chain mirrors RatioCheckPanel exactly:
         //   1. Per-slot ratioStaffMoves (explicit drag)
         //   2. Float schedule off-floor (programming / cleaning / lunch)
@@ -618,9 +618,9 @@ export default function ReportingPage() {
                 if (sm151(slot) < bS || sm151(slot) >= bE) continue;
                 const ct = String(block.coverType ?? '').toLowerCase();
                 const floatName: string = fsRow.employee_name ?? '';
-                if (ct === 'programming') return { room: 'Programming', blockType: 'shift', note: floatName ? `Programming — covered by ${floatName}` : 'Programming — covered by float' };
-                if (ct === 'cleaning')    return { room: 'Cleaning',    blockType: 'shift', note: floatName ? `Cleaning — covered by ${floatName}` : 'Cleaning — covered by float' };
-                return { room: 'Lunch Break', blockType: 'lunch_break', note: floatName ? `Meal break — covered by ${floatName}` : 'Meal break' };
+                if (ct === 'programming') return { room: 'Programming', blockType: 'shift', note: floatName ? `Programming - covered by ${floatName}` : 'Programming - covered by float' };
+                if (ct === 'cleaning')    return { room: 'Cleaning',    blockType: 'shift', note: floatName ? `Cleaning - covered by ${floatName}` : 'Cleaning - covered by float' };
+                return { room: 'Lunch Break', blockType: 'lunch_break', note: floatName ? `Meal break - covered by ${floatName}` : 'Meal break' };
               }
             }
             return { room: 'Lunch Break', blockType: 'lunch_break' };
@@ -661,7 +661,7 @@ export default function ReportingPage() {
             const r = centre.rooms.find(r => r.id === dayRoom);
             if (r) return { room: r.name, blockType: 'shift' };
           }
-          return { room: '', blockType: 'shift' }; // natural room — set by caller
+          return { room: '', blockType: 'shift' }; // natural room - set by caller
         }
 
         const floatSet2 = new Set(centre.floatUnitIds ?? []);
@@ -696,7 +696,7 @@ export default function ReportingPage() {
             continue;
           }
 
-          // Natural room name — for non-ratio support staff use the actual Deputy unit name
+          // Natural room name - for non-ratio support staff use the actual Deputy unit name
           // so kitchen/chef staff can be identified by keyword in the WWCC column
           const naturalRoom = centre.rooms.find(rm => rm.deputyUnitId === unitId);
           const deputyUnitName = r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '';
@@ -726,7 +726,7 @@ export default function ReportingPage() {
                 const fgRoomIds = fg.roomIds.length === 0 ? centre.rooms.map(r => r.id) : fg.roomIds;
                 if (fgRoomIds.includes(naturalRoom.id)) {
                   const heldIn = fg.heldInRoom ? (centre.rooms.find(r => r.id === fg.heldInRoom)?.name ?? fg.label) : fg.label;
-                  fgPos = { room: heldIn, blockType: 'grouping' as EducatorEntry['blockType'], note: `${fg.label} — held in ${heldIn}` };
+                  fgPos = { room: heldIn, blockType: 'grouping' as EducatorEntry['blockType'], note: `${fg.label} - held in ${heldIn}` };
                   break;
                 }
               }
@@ -880,18 +880,18 @@ export default function ReportingPage() {
         const underSlots = slots.filter(s => s.totalDays > 0 && (s.sumStaff - s.sumRequired) / s.totalDays < -0.5);
         if (overSlots.length > 0) {
           const avgOver = overSlots.reduce((s, x) => s + (x.sumStaff - x.sumRequired) / Math.max(x.totalDays, 1), 0) / overSlots.length;
-          recsList.push({ campus: campusKey, type: 'overstaffed', text: `Overstaffed ${overSlots[0].time}–${overSlots[overSlots.length-1].time} (avg +${avgOver.toFixed(1)} staff). Consider shifting some starts later in the day.` });
+          recsList.push({ campus: campusKey, type: 'overstaffed', text: `Overstaffed ${overSlots[0].time}-${overSlots[overSlots.length-1].time} (avg +${avgOver.toFixed(1)} staff). Consider shifting some starts later in the day.` });
         }
         if (underSlots.length > 0) {
           const avgUnder = underSlots.reduce((s, x) => s + (x.sumStaff - x.sumRequired) / Math.max(x.totalDays, 1), 0) / underSlots.length;
-          recsList.push({ campus: campusKey, type: 'understaffed', text: `Ratio risk ${underSlots[0].time}–${underSlots[underSlots.length-1].time} (avg ${Math.abs(avgUnder).toFixed(1)} staff short). Review afternoon coverage.` });
+          recsList.push({ campus: campusKey, type: 'understaffed', text: `Ratio risk ${underSlots[0].time}-${underSlots[underSlots.length-1].time} (avg ${Math.abs(avgUnder).toFixed(1)} staff short). Review afternoon coverage.` });
         }
       }
       setRosterOptData(rosterResults);
       setRosterRecs(recsList);
     }
 
-    // ── WWCC Expiry — only staff active in Deputy for the selected period ─────────
+    // ── WWCC Expiry - only staff active in Deputy for the selected period ─────────
     if (needsWwccExpiry) {
       let wwccExpRows: WwccExpiryRow[] = [];
       try {
@@ -923,11 +923,11 @@ export default function ReportingPage() {
         const activeResp = await fetch(
           `/api/active-staff?from=${activeFrom}&to=${activeTo}&unitIds=${allUnitIds.join(',')}`
         );
-        // activeStaff: [{ name, unitName }] — unitName lets us detect kitchen staff
+        // activeStaff: [{ name, unitName }] - unitName lets us detect kitchen staff
         const activeStaff: { name: string; unitName: string }[] = activeResp.ok ? await activeResp.json() : [];
 
         if (activeStaff.length === 0) {
-          console.warn('WWCC expiry: no active staff found from Deputy roster — showing all for selected centres');
+          console.warn('WWCC expiry: no active staff found from Deputy roster - showing all for selected centres');
         }
 
         const KITCHEN_KEYWORDS = ['chef','kitchen','cook'];
@@ -999,7 +999,7 @@ export default function ReportingPage() {
         .then(r => r.ok ? r.json() : [])
         .then((records: { full_name: string; full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }[]) => {
           /**
-           * Comprehensive name normalisation — same logic as scripts/name-utils.js.
+           * Comprehensive name normalisation - same logic as scripts/name-utils.js.
            * Apply to BOTH stored names and lookup names so they always compare alike.
            * Handles: brackets, role abbreviations, hyphens, copy markers, verbose roles.
            */
@@ -1012,7 +1012,7 @@ export default function ReportingPage() {
             .replace(/[-'`\u2018\u2019]/g, '')                   // strip hyphens & apostrophes
             .replace(/\s+/g, ' ').trim().toLowerCase();
 
-          /** Levenshtein distance — last-resort fuzzy fallback for minor typos */
+          /** Levenshtein distance - last-resort fuzzy fallback for minor typos */
           const lev = (a: string, b: string): number => {
             const m = a.length, n = b.length;
             const dp: number[][] = Array.from({length: m+1}, (_,i) => [i, ...Array(n).fill(0)]);
@@ -1056,9 +1056,9 @@ export default function ReportingPage() {
           /**
            * Multi-strategy lookup:
            * 1. Exact normalised match
-           * 2. Bare match (strip hyphens/apostrophes/spaces) — catches Al-Maarrawie vs Almaarrawie
-           * 3. Unique last-name match — catches any first-name mismatch when surname is unique
-           * 4. Same last-name + matching first initial — narrows when multiple share a surname
+           * 2. Bare match (strip hyphens/apostrophes/spaces) - catches Al-Maarrawie vs Almaarrawie
+           * 3. Unique last-name match - catches any first-name mismatch when surname is unique
+           * 4. Same last-name + matching first initial - narrows when multiple share a surname
            */
           const lookup = (name: string): WwccRec | null => {
             // Apply same comprehensive normalisation as the sync scripts
@@ -1079,7 +1079,7 @@ export default function ReportingPage() {
             const lastName = bare(parts[parts.length - 1]);
             const candidates = lastNameMap[lastName] ?? [];
 
-            // 4. Unique last name — handles different first names (Caitlin vs Catey)
+            // 4. Unique last name - handles different first names (Caitlin vs Catey)
             if (candidates.length === 1) {
               const c = candidates[0];
               return { wwcc_number: c.wwcc_number, wwcc_expiry: c.wwcc_expiry, under_18: c.under_18 ?? false };
@@ -1098,7 +1098,7 @@ export default function ReportingPage() {
               }
             }
 
-            // 6. Levenshtein ≤ 2 on normalised name — catches minor typos / spelling diffs
+            // 6. Levenshtein ≤ 2 on normalised name - catches minor typos / spelling diffs
             // Only run against records with WWCC data (avoid false positives)
             const withData = records.filter(r => r.wwcc_number || r.under_18);
             let bestDist = 3, bestRec: typeof records[0] | null = null;
@@ -1428,7 +1428,7 @@ export default function ReportingPage() {
                                     if (isKitchen) return (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>Kitchen Staff</span>
                                     );
-                                    if (noUsefulData) return <span className="text-xs italic" style={{ color: '#9ca3af' }}>—</span>;
+                                    if (noUsefulData) return <span className="text-xs italic" style={{ color: '#9ca3af' }}>-</span>;
                                     if (rec!.under_18) return (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>Under 18</span>
                                     );
@@ -1632,7 +1632,7 @@ export default function ReportingPage() {
             {viewingReport === 'occupancy' && (
               <div className="space-y-4">
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
-                  <strong>Attendance Trends</strong> — Real daily attendance vs the same day last week. Green = up, Red = down significantly.
+                  <strong>Attendance Trends</strong> - Real daily attendance vs the same day last week. Green = up, Red = down significantly.
                 </div>
 
                 {occupancyRows.length > 0 && (() => {
@@ -1697,16 +1697,16 @@ export default function ReportingPage() {
                                     }}>
                                     {Math.round(r.booked / r.capacity * 100)}%
                                   </span>
-                                : <span style={{ color: '#9ca3af' }}>—</span>}
+                                : <span style={{ color: '#9ca3af' }}>-</span>}
                             </td>
-                            <td className="py-2 px-4 font-medium" style={{ color: '#1d4ed8' }}>{r.booked > 0 ? r.booked : '—'}</td>
+                            <td className="py-2 px-4 font-medium" style={{ color: '#1d4ed8' }}>{r.booked > 0 ? r.booked : '-'}</td>
                             <td className="py-2 px-4 font-medium" style={{ color: '#050505' }}>{r.actual}</td>
                             <td className="py-2 px-4" style={{ color: r.booked > 0 && r.actual < r.booked ? '#d97706' : '#596570' }}>
-                              {r.booked > 0 ? r.booked - r.actual : '—'}
+                              {r.booked > 0 ? r.booked - r.actual : '-'}
                             </td>
-                            <td className="py-2 px-4" style={{ color: '#596570' }}>{r.lastWeek > 0 ? r.lastWeek : '—'}</td>
+                            <td className="py-2 px-4" style={{ color: '#596570' }}>{r.lastWeek > 0 ? r.lastWeek : '-'}</td>
                             <td className="py-2 px-4 font-medium" style={{ color: r.change > 0 ? '#166534' : r.change < 0 ? '#991b1b' : '#596570' }}>
-                              {r.change > 0 ? `+${r.change}` : r.change < 0 ? String(r.change) : '—'}
+                              {r.change > 0 ? `+${r.change}` : r.change < 0 ? String(r.change) : '-'}
                             </td>
                             <td className="py-2 px-4">
                               <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
@@ -1745,12 +1745,12 @@ export default function ReportingPage() {
                                     style={{ backgroundColor: avgOccPct >= 90 ? '#dcfce7' : avgOccPct >= 75 ? '#fef9c3' : '#fee2e2', color: avgOccPct >= 90 ? '#166534' : avgOccPct >= 75 ? '#854d0e' : '#991b1b' }}>
                                     {avgOccPct}%
                                   </span>
-                                : <span style={{ color: '#9ca3af' }}>—</span>}
+                                : <span style={{ color: '#9ca3af' }}>-</span>}
                             </td>
-                            <td className="py-2 px-4" style={{ color: '#1d4ed8' }}>{avgBooked || '—'}</td>
-                            <td className="py-2 px-4">{avgAttended || '—'}</td>
-                            <td className="py-2 px-4" style={{ color: '#d97706' }}>{avgAbsent > 0 ? avgAbsent : '—'}</td>
-                            <td className="py-2 px-4">{avgLastWeek ?? '—'}</td>
+                            <td className="py-2 px-4" style={{ color: '#1d4ed8' }}>{avgBooked || '-'}</td>
+                            <td className="py-2 px-4">{avgAttended || '-'}</td>
+                            <td className="py-2 px-4" style={{ color: '#d97706' }}>{avgAbsent > 0 ? avgAbsent : '-'}</td>
+                            <td className="py-2 px-4">{avgLastWeek ?? '-'}</td>
                             <td className="py-2 px-4"></td>
                             <td className="py-2 px-4"></td>
                           </tr>
@@ -1766,7 +1766,7 @@ export default function ReportingPage() {
             {viewingReport === 'roster-opt' && (
               <div className="space-y-6">
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
-                  <strong>Roster Optimisation</strong> — Average staffing vs. required per 30-min slot. Uses simplified 1:5 ratio (conservative mixed-age). Data from Deputy roster cache + sign-in attendance.
+                  <strong>Roster Optimisation</strong> - Average staffing vs. required per 30-min slot. Required staff calculated using real NSW age-based ratios (1:4 under 2, 1:5 aged 2-3, 1:10 aged 3+) from actual child ages in Owna. Surplus = Floor Staff (ratio) minus Required. Off Floor staff (directors, chefs, admin) shown separately.
                 </div>
 
                 {rosterRecs.length > 0 && (
@@ -1789,23 +1789,23 @@ export default function ReportingPage() {
                   <div key={cn} className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
                     <div className="px-5 py-3" style={{ backgroundColor: '#2d5c18' }}>
                       <div className="font-bold text-sm text-white">{cn}</div>
-                      <div className="text-xs" style={{ color: '#A0D083' }}>Averages across {slots[0]?.totalDays ?? 0} day(s) · 07:00–18:00 in 30-min slots</div>
+                      <div className="text-xs" style={{ color: '#A0D083' }}>Averages across {slots[0]?.totalDays ?? 0} day(s) · 07:00-18:00 in 30-min slots</div>
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
                           <tr style={{ backgroundColor: '#F5FAF3' }}>
-                            {['Time','Avg Children','Avg Staff (Floor)','Off Floor','Required','Surplus','Status'].map(h => (
+                            {['Time','Avg Children','Avg Staff (Floor)','Required','Surplus','Status','Off Floor'].map(h => (
                               <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody>
                           {slots.map((s, si) => {
-                            const avgCh   = s.totalDays > 0 ? (s.sumChildren  / s.totalDays).toFixed(1) : '—';
-                            const avgSt   = s.totalDays > 0 ? (s.sumStaff     / s.totalDays).toFixed(1) : '—';
-                            const avgOff  = s.totalDays > 0 ? (s.sumOffFloor  / s.totalDays).toFixed(1) : '—';
-                            const avgReq  = s.totalDays > 0 ? (s.sumRequired  / s.totalDays).toFixed(1) : '—';
+                            const avgCh   = s.totalDays > 0 ? (s.sumChildren  / s.totalDays).toFixed(1) : '-';
+                            const avgSt   = s.totalDays > 0 ? (s.sumStaff     / s.totalDays).toFixed(1) : '-';
+                            const avgOff  = s.totalDays > 0 ? (s.sumOffFloor  / s.totalDays).toFixed(1) : '-';
+                            const avgReq  = s.totalDays > 0 ? (s.sumRequired  / s.totalDays).toFixed(1) : '-';
                             const surplus = s.totalDays > 0 ? (s.sumStaff - s.sumRequired) / s.totalDays : 0;
                             const rowBg2 = surplus < -0.5 ? '#fef2f2' : surplus < 0 ? '#fffbeb' : si % 2 === 0 ? 'white' : '#fafffe';
                             const badge = surplus < -0.5
@@ -1820,7 +1820,6 @@ export default function ReportingPage() {
                                 <td className="py-1.5 px-3 font-mono text-xs font-bold" style={{ color: '#2d5c18' }}>{s.time}</td>
                                 <td className="py-1.5 px-3 text-xs" style={{ color: '#596570' }}>{avgCh}</td>
                                 <td className="py-1.5 px-3 text-xs font-medium" style={{ color: '#2d5c18' }}>{avgSt}</td>
-                                <td className="py-1.5 px-3 text-xs" style={{ color: '#7c3aed' }}>{avgOff}</td>
                                 <td className="py-1.5 px-3 text-xs" style={{ color: '#596570' }}>{avgReq}</td>
                                 <td className="py-1.5 px-3 text-xs font-semibold"
                                   style={{ color: surplus < 0 ? '#dc2626' : surplus > 1 ? '#d97706' : '#166534' }}>
@@ -1832,6 +1831,7 @@ export default function ReportingPage() {
                                     {badge.label}
                                   </span>
                                 </td>
+                                <td className="py-1.5 px-3 text-xs" style={{ color: '#7c3aed' }}>{avgOff}</td>
                               </tr>
                             );
                           })}
@@ -1847,7 +1847,7 @@ export default function ReportingPage() {
             {viewingReport === 'wwcc-expiry' && (
               <div className="space-y-4">
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
-                  <strong>WWCC Expiry Monitor</strong> — Working With Children Check expiry dates. Sorted soonest first. Under-18 staff are excluded (exempt from WWCC).
+                  <strong>WWCC Expiry Monitor</strong> - Working With Children Check expiry dates. Sorted soonest first. Under-18 staff are excluded (exempt from WWCC).
                 </div>
 
                 {(() => {
@@ -1926,21 +1926,21 @@ export default function ReportingPage() {
                             : r.daysRemaining < 60 ? '#854d0e'
                             : r.daysRemaining < 90 ? '#92400e'
                             : '#166534';
-                          const dLabel = r.daysRemaining === null ? '—'
+                          const dLabel = r.daysRemaining === null ? '-'
                             : r.daysRemaining < 0 ? `Expired ${Math.abs(r.daysRemaining)}d ago`
                             : `${r.daysRemaining}d`;
                           return (
                             <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
                               <td className="py-2 px-4 font-medium" style={{ color: '#050505' }}>{r.full_name}</td>
-                              <td className="py-2 px-4" style={{ color: '#596570' }}>{r.centre || '—'}</td>
+                              <td className="py-2 px-4" style={{ color: '#596570' }}>{r.centre || '-'}</td>
                               <td className="py-2 px-4">
                                 {r.exemptReason === 'under_18' && <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>Under 18</span>}
                                 {r.exemptReason === 'kitchen'  && <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>Kitchen Staff</span>}
-                                {!r.exemptReason && <span className="text-xs" style={{ color: '#9ca3af' }}>—</span>}
+                                {!r.exemptReason && <span className="text-xs" style={{ color: '#9ca3af' }}>-</span>}
                               </td>
-                              <td className="py-2 px-4 font-mono text-xs" style={{ color: '#1e3a5f' }}>{r.wwcc_number ?? '—'}</td>
+                              <td className="py-2 px-4 font-mono text-xs" style={{ color: '#1e3a5f' }}>{r.wwcc_number ?? '-'}</td>
                               <td className="py-2 px-4 text-xs" style={{ color: '#596570' }}>
-                                {r.wwcc_expiry ? new Date(r.wwcc_expiry).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                                {r.wwcc_expiry ? new Date(r.wwcc_expiry).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}
                               </td>
                               <td className="py-2 px-4">
                                 <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
