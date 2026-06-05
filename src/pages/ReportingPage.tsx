@@ -515,8 +515,19 @@ export default function ReportingPage() {
               return true;
             }).map((r: any) => ({ ageMonths: parseAgeMonths(r.age ?? null), child_name: r.child_name ?? '', room: r.room ?? '', sign_in: r.sign_in, sign_out: r.sign_out, predicted_sign_out: r.predicted_sign_out, age: r.age }));
             const childrenPresent = childrenAtSlot.length;
-            // Real NSW ratios via cascade algorithm (0-2y → 1:4, 2-3y → 1:5, 3-6y → 1:10)
-            const { required: reqStaff } = calcRequiredStaff(childrenAtSlot as any);
+            // Required staff calculated PER ROOM independently — each room must meet its
+            // own ratio. Cannot use carryover between rooms (that would undercount).
+            const childrenByRoom: Record<string, typeof childrenAtSlot> = {};
+            for (const child of childrenAtSlot) {
+              const rk = (child as any).room || 'unassigned';
+              (childrenByRoom[rk] = childrenByRoom[rk] || []).push(child);
+            }
+            let reqStaff = 0;
+            for (const roomKids of Object.values(childrenByRoom)) {
+              // Cascade within the room handles mixed-age rooms correctly
+              const { required } = calcRequiredStaff(roomKids as any);
+              reqStaff += required;
+            }
             // Check if a roster entry covers this slot (unique employees counted via Set)
             const shiftCheck = (r: any) => {
               if (!r.StartTime || r.StartTime <= 0 || !r.EndTime || r.EndTime <= 0) return false;
