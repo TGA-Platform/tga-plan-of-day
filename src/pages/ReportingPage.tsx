@@ -465,7 +465,7 @@ export default function ReportingPage() {
                 return d.getHours() * 60 + d.getMinutes();
               };
               const startM = toM(r.startTime), endM = toM(r.endTime);
-              if (startM === null || endM === null) return true;
+              if (startM === null || endM === null) return false; // skip entries with no valid shift times
               return startM <= slotMinutes && endM > slotMinutes;
             }).length;
             rosterAccum[campus][rslot].sumChildren += childrenPresent;
