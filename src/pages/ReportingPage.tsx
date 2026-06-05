@@ -87,7 +87,8 @@ interface RosterSlotData {
   time:        string;
   totalDays:   number;
   sumChildren: number;
-  sumStaff:    number;
+  sumStaff:    number;    // ratio staff (room + floats) on shift
+  sumOffFloor: number;    // non-ratio staff (directors, chefs, admin) on shift
   sumRequired: number;
 }
 
@@ -399,7 +400,7 @@ export default function ReportingPage() {
     const snaps: RatioSnap[] = [];
     const groupingTrendRows: { date: string; campus: string; sessions: any[] }[] = [];
     const occRows: OccupancyRow[] = [];
-    const rosterAccum: Record<string, Record<string, { sumChildren: number; sumStaff: number; sumRequired: number; days: number }>> = {};
+    const rosterAccum: Record<string, Record<string, { sumChildren: number; sumStaff: number; sumOffFloor: number; sumRequired: number; days: number }>> = {};
     const ROSTER_SLOTS_30: string[] = [];
     for (let rmi = 7 * 60; rmi < 18 * 60; rmi += 30) {
       ROSTER_SLOTS_30.push(`${String(Math.floor(rmi/60)).padStart(2,'0')}:${String(rmi%60).padStart(2,'0')}`);
@@ -480,7 +481,7 @@ export default function ReportingPage() {
           if (!rosterAccum[campus]) {
             rosterAccum[campus] = {};
             for (const rslot of ROSTER_SLOTS_30) {
-              rosterAccum[campus][rslot] = { sumChildren: 0, sumStaff: 0, sumRequired: 0, days: 0 };
+              rosterAccum[campus][rslot] = { sumChildren: 0, sumStaff: 0, sumOffFloor: 0, sumRequired: 0, days: 0 };
             }
           }
           for (const rslot of ROSTER_SLOTS_30) {
@@ -501,19 +502,31 @@ export default function ReportingPage() {
             // Real NSW ratios via cascade algorithm (0-2y → 1:4, 2-3y → 1:5, 3-6y → 1:10)
             const { required: reqStaff } = calcRequiredStaff(childrenAtSlot as any);
             // Raw Deputy fields: r.StartTime and r.EndTime are unix timestamps in seconds
-            const staffOnShift = campusRostersFiltered.filter((r: any) => {
-              const toM = (ts: number | null | undefined) => {
-                if (!ts || ts <= 0) return null;
-                const d = new Date(new Date(ts * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
-                return d.getHours() * 60 + d.getMinutes();
-              };
-              const startM = toM(r.StartTime), endM = toM(r.EndTime);
+            const shiftToM = (ts: number | null | undefined) => {
+              if (!ts || ts <= 0) return null;
+              const d = new Date(new Date(ts * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+              return d.getHours() * 60 + d.getMinutes();
+            };
+            const isOnShift = (r: any) => {
+              const startM = shiftToM(r.StartTime), endM = shiftToM(r.EndTime);
               if (startM === null || endM === null) return false;
               return startM <= slotMinutes && endM > slotMinutes;
-            }).length;
-            rosterAccum[campus][rslot].sumChildren += childrenPresent;
-            rosterAccum[campus][rslot].sumStaff    += staffOnShift;
-            rosterAccum[campus][rslot].sumRequired += reqStaff;
+            };
+            // Ratio staff (room + floats) on shift at this slot
+            const staffOnShift = campusRostersFiltered.filter(isOnShift).length;
+            // Non-ratio staff (directors, chefs, admin) on shift — shown separately for visibility
+            const leaveIdsSet = new Set(centre.leaveUnitIds ?? []);
+            const offFloorOnShift = (rosters as any[])
+              .filter((r: any) =>
+                r.Employee && r.Employee !== 0 &&
+                nonRatioIdsSet.has(r.OperationalUnit) &&
+                !leaveIdsSet.has(r.OperationalUnit) &&
+                isOnShift(r)
+              ).length;
+            rosterAccum[campus][rslot].sumChildren  += childrenPresent;
+            rosterAccum[campus][rslot].sumStaff     += staffOnShift;
+            rosterAccum[campus][rslot].sumOffFloor  += offFloorOnShift;
+            rosterAccum[campus][rslot].sumRequired  += reqStaff;
             rosterAccum[campus][rslot].days++;
           }
         }
@@ -856,6 +869,7 @@ export default function ReportingPage() {
           totalDays:   slotMap[time].days,
           sumChildren: slotMap[time].sumChildren,
           sumStaff:    slotMap[time].sumStaff,
+          sumOffFloor: slotMap[time].sumOffFloor,
           sumRequired: slotMap[time].sumRequired,
         }));
         rosterResults.push({ campus: campusKey, slots });
@@ -1734,16 +1748,17 @@ export default function ReportingPage() {
                       <table className="w-full text-sm">
                         <thead>
                           <tr style={{ backgroundColor: '#F5FAF3' }}>
-                            {['Time','Avg Children','Avg Staff','Required','Surplus','Status'].map(h => (
+                            {['Time','Avg Children','Avg Staff (Floor)','Off Floor','Required','Surplus','Status'].map(h => (
                               <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody>
                           {slots.map((s, si) => {
-                            const avgCh  = s.totalDays > 0 ? (s.sumChildren / s.totalDays).toFixed(1) : '—';
-                            const avgSt  = s.totalDays > 0 ? (s.sumStaff    / s.totalDays).toFixed(1) : '—';
-                            const avgReq = s.totalDays > 0 ? (s.sumRequired / s.totalDays).toFixed(1) : '—';
+                            const avgCh   = s.totalDays > 0 ? (s.sumChildren  / s.totalDays).toFixed(1) : '—';
+                            const avgSt   = s.totalDays > 0 ? (s.sumStaff     / s.totalDays).toFixed(1) : '—';
+                            const avgOff  = s.totalDays > 0 ? (s.sumOffFloor  / s.totalDays).toFixed(1) : '—';
+                            const avgReq  = s.totalDays > 0 ? (s.sumRequired  / s.totalDays).toFixed(1) : '—';
                             const surplus = s.totalDays > 0 ? (s.sumStaff - s.sumRequired) / s.totalDays : 0;
                             const rowBg2 = surplus < -0.5 ? '#fef2f2' : surplus < 0 ? '#fffbeb' : si % 2 === 0 ? 'white' : '#fafffe';
                             const badge = surplus < -0.5
@@ -1757,7 +1772,8 @@ export default function ReportingPage() {
                               <tr key={si} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: rowBg2 }}>
                                 <td className="py-1.5 px-3 font-mono text-xs font-bold" style={{ color: '#2d5c18' }}>{s.time}</td>
                                 <td className="py-1.5 px-3 text-xs" style={{ color: '#596570' }}>{avgCh}</td>
-                                <td className="py-1.5 px-3 text-xs" style={{ color: '#596570' }}>{avgSt}</td>
+                                <td className="py-1.5 px-3 text-xs font-medium" style={{ color: '#2d5c18' }}>{avgSt}</td>
+                                <td className="py-1.5 px-3 text-xs" style={{ color: '#7c3aed' }}>{avgOff}</td>
                                 <td className="py-1.5 px-3 text-xs" style={{ color: '#596570' }}>{avgReq}</td>
                                 <td className="py-1.5 px-3 text-xs font-semibold"
                                   style={{ color: surplus < 0 ? '#dc2626' : surplus > 1 ? '#d97706' : '#166534' }}>
