@@ -22,21 +22,19 @@ export default async function handler(req, res) {
 
   const namesParam = req.query.names;
 
-  // Always fetch all records and deduplicate by name client-side,
-  // keeping the record with the latest (preferably non-expired) wwcc_expiry.
-  // This handles cases where staff appear on both the onboarding board (possibly
-  // with an old expiry) and a staffing board (with a renewed expiry).
-  const url = `${SUPABASE_URL}/rest/v1/staff_wwcc?select=full_name,full_name_norm,wwcc_number,wwcc_expiry,under_18,centre&order=wwcc_expiry.desc.nullslast&limit=3000`;
+  // Fetch ALL records in two pages to work around Supabase's 1000-row default limit.
+  // Order: under_18 DESC first (so exempt-staff records are never cut off),
+  // then by wwcc_expiry DESC (latest valid WWCC wins dedup within same name).
+  const base = `${SUPABASE_URL}/rest/v1/staff_wwcc?select=full_name,full_name_norm,wwcc_number,wwcc_expiry,under_18,centre&order=under_18.desc.nullslast,wwcc_expiry.desc.nullslast`;
 
-  const r = await fetch(url, {
-    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
-  });
+  const [r1, r2] = await Promise.all([
+    fetch(`${base}&limit=1000&offset=0`,    { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }),
+    fetch(`${base}&limit=1000&offset=1000`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }),
+  ]);
 
-  if (!r.ok) {
-    return res.status(500).json({ error: `Supabase error ${r.status}` });
-  }
+  if (!r1.ok) return res.status(500).json({ error: `Supabase error ${r1.status}` });
 
-  const all = await r.json();
+  const all = [...(await r1.json()), ...(r2.ok ? await r2.json() : [])];
 
   // Deduplicate: since results are ordered by expiry DESC, first occurrence
   // per normalised name is always the latest (best) record.

@@ -171,7 +171,7 @@ export default function ReportingPage() {
               <td><strong>${e.inTime}</strong></td>
               <td>${e.outTime}</td>
               <td><span style="font-size:9px">${typeLabel}</span></td>
-              <td>${(() => { const k = e.name.toLowerCase().replace(/\s+/g,' ').trim(); const r2 = wwccMap[k]; const rl = e.room.toLowerCase(); if (!r2 && ['chef','kitchen','cook'].some(kw => rl.includes(kw))) return '<span style="color:#854d0e;font-size:10px">Kitchen Staff</span>'; if (!r2) return '<em>—</em>'; if (r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : ''); })()}</td>
+              <td>${(() => { const k = e.name.toLowerCase().replace(/\s+/g,' ').trim(); const r2 = wwccMap[k]; const noData = !r2||(!r2.wwcc_number&&!r2.under_18); const rl = e.room.toLowerCase(); if (noData && ['chef','kitchen','cook'].some(kw => rl.includes(kw))) return '<span style="color:#854d0e;font-size:10px">Kitchen Staff</span>'; if (noData) return '<em>—</em>'; if (r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : ''); })()}</td>
               <td>${e.note ?? '—'}</td>
             </tr>`;
           }).join('');
@@ -933,13 +933,15 @@ export default function ReportingPage() {
                                   {(() => {
                                     const key = e.name.toLowerCase().replace(/\s+/g, ' ').trim();
                                     const rec = wwccMap[key];
+                                    // Treat a record with no WWCC number and not under_18 the same as no record
+                                    const noUsefulData = !rec || (!rec.wwcc_number && !rec.under_18);
                                     const roomLower = e.room.toLowerCase();
-                                    const isKitchen = !rec && ['chef','kitchen','cook'].some(k => roomLower.includes(k));
+                                    const isKitchen = noUsefulData && ['chef','kitchen','cook'].some(k => roomLower.includes(k));
                                     if (isKitchen) return (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>Kitchen Staff</span>
                                     );
-                                    if (!rec) return <span className="text-xs italic" style={{ color: '#9ca3af' }}>—</span>;
-                                    if (rec.under_18) return (
+                                    if (noUsefulData) return <span className="text-xs italic" style={{ color: '#9ca3af' }}>—</span>;
+                                    if (rec!.under_18) return (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>Under 18</span>
                                     );
                                     const expDate = rec.wwcc_expiry ? new Date(rec.wwcc_expiry) : null;
