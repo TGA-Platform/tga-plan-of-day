@@ -938,9 +938,13 @@ export default function ReportingPage() {
           }).length;
           const saAdAvailable  = (saChildren > 0 && saChildren < 100) ? saAdCount : 0;
           // Floats needed = room shortage (after realloc) + buffer
-          // Floats cover room shortages first, then surplus = what's left vs buffer
           const saTotalFloatersNeeded = saNetShortage + saBufferRequired;
-          const saFloatSurplus        = (saFloatCount + saAdAvailable) - saTotalFloatersNeeded;
+          // Room net surplus (after covering all shortages) acts as effective floats.
+          // e.g. if 4-5 room has 1 extra staff and all rooms are otherwise compliant,
+          // that person can be redeployed as a float.
+          const saRoomSurplusAsFloat  = Math.max(0, saRoomSurplus);
+          const saEffectiveAvailable  = saFloatCount + saAdAvailable + saRoomSurplusAsFloat;
+          const saFloatSurplus        = saEffectiveAvailable - saTotalFloatersNeeded;
           const saStatus: StaffingAnalysisRow['status'] = saChildren === 0 ? 'unknown'
             : saFloatSurplus < 0 ? 'red'
             : saFloatSurplus === 0 ? 'amber'
@@ -2192,7 +2196,10 @@ export default function ReportingPage() {
                                     <td className="py-2 px-3 text-xs" style={{ color: r.adAvailable > 0 ? '#059669' : '#9ca3af' }}>
                                       {r.adAvailable > 0 ? r.adAvailable : '-'}
                                     </td>
-                                    <td className="py-2 px-3 text-xs font-medium" style={{ color: '#059669' }}>{r.floatCount + r.adAvailable}</td>
+                                    <td className="py-2 px-3 text-xs font-medium" style={{ color: '#059669' }}>
+                                      {r.floatCount + r.adAvailable + Math.max(0, r.roomSurplus)}
+                                      {r.roomSurplus > 0 && <span className="ml-1 text-xs" style={{ color: '#7c3aed' }}>({r.floatCount + r.adAvailable}+{r.roomSurplus}rm)</span>}
+                                    </td>
                                     <td className="py-2 px-3 text-xs font-bold" style={{ color: surplusColor }}>
                                       {r.floatSurplus >= 0 ? `+${r.floatSurplus.toFixed(1)}` : r.floatSurplus.toFixed(1)}
                                     </td>
