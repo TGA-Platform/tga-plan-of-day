@@ -913,22 +913,22 @@ export default function ReportingPage() {
             return { required: roomRequired, staffCount: roomStaff.length };
           });
           const saRequired = saRoomData.reduce((s, r) => s + r.required, 0);
-          const saTotalRatioShortage = saRoomData.reduce((s, r) => s + Math.max(0, r.required - r.staffCount), 0);
-          const saTotalSurplus       = saRoomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
-          const saNetShortage        = Math.max(0, saTotalRatioShortage - saTotalSurplus);
-          const saTotalFloorStaff    = saRoomData.reduce((s, r) => s + r.staffCount, 0);
-          const saBufferRequired     = saTotalFloorStaff > 0 ? saTotalFloorStaff / 6 : 0;
-          const saTotalFloatersNeeded = Math.max(0, saNetShortage + saBufferRequired);
-          const saFloatUnitIds       = new Set(centre.floatUnitIds ?? []);
-          const saNonRatioUnitIds    = new Set(centre.nonRatioUnitIds ?? []);
-          const saFloatCount         = (rosters as any[]).filter(r => saFloatUnitIds.has(r.OperationalUnit)).length;
-          const saAdCount            = (rosters as any[]).filter(r => {
+          const saTotalFloorStaff = saRoomData.reduce((s, r) => s + r.staffCount, 0);
+          // Float buffer = floor staff / 6 (how many floats you need)
+          const saBufferRequired  = saTotalFloorStaff > 0 ? saTotalFloorStaff / 6 : 0;
+          const saFloatUnitIds    = new Set(centre.floatUnitIds ?? []);
+          const saNonRatioUnitIds = new Set(centre.nonRatioUnitIds ?? []);
+          const saFloatCount      = (rosters as any[]).filter(r => saFloatUnitIds.has(r.OperationalUnit)).length;
+          const saAdCount         = (rosters as any[]).filter(r => {
             if (!saNonRatioUnitIds.has(r.OperationalUnit)) return false;
             const un = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '').toLowerCase();
             return un.includes('assistant director') || un.includes('asst director') || un.includes('ass. director');
           }).length;
           const saAdAvailable  = (saChildren > 0 && saChildren < 100) ? saAdCount : 0;
-          const saFloatSurplus = saFloatCount + saAdAvailable - saTotalFloatersNeeded;
+          // Available = floats + AD (if <100 children); surplus = available - buffer
+          const saAvailable    = saFloatCount + saAdAvailable;
+          const saFloatSurplus = saAvailable - saBufferRequired;
+          const saTotalFloatersNeeded = saBufferRequired; // kept for display
           const saStatus: StaffingAnalysisRow['status'] = saChildren === 0 ? 'unknown'
             : saFloatSurplus < 0 ? 'red'
             : saFloatSurplus === 0 ? 'amber'
@@ -2144,7 +2144,7 @@ export default function ReportingPage() {
                           <table className="w-full text-sm">
                             <thead>
                               <tr style={{ backgroundColor: '#F5FAF3' }}>
-                                {['Date','Children','Floor Staff','Required','Buffer (1:6)','Floats','AD','Floats Needed','Surplus','Status'].map(h => (
+                                {['Date','Children','Floor Staff','Required','Float Buffer','Floats','AD','Available','Surplus','Status'].map(h => (
                                   <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                                 ))}
                               </tr>
@@ -2175,7 +2175,7 @@ export default function ReportingPage() {
                                     <td className="py-2 px-3 text-xs" style={{ color: r.adAvailable > 0 ? '#059669' : '#9ca3af' }}>
                                       {r.adAvailable > 0 ? r.adAvailable : '-'}
                                     </td>
-                                    <td className="py-2 px-3 text-xs" style={{ color: '#d97706' }}>{r.totalFloatersNeeded.toFixed(1)}</td>
+                                    <td className="py-2 px-3 text-xs font-medium" style={{ color: '#059669' }}>{r.floatCount + r.adAvailable}</td>
                                     <td className="py-2 px-3 text-xs font-bold" style={{ color: surplusColor }}>
                                       {r.floatSurplus >= 0 ? `+${r.floatSurplus.toFixed(1)}` : r.floatSurplus.toFixed(1)}
                                     </td>
