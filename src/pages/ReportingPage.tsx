@@ -161,8 +161,9 @@ export default function ReportingPage() {
   });
   const [toDate, setToDate] = useState(todayStr());
 
-  // Report type
-  const [activeReport, setActiveReport] = useState<'educator'|'ratio'|'trends'|'wwcc-expiry'|'occupancy'|'roster-opt'>('educator');
+  // Report selection
+  const [selectedReports, setSelectedReports] = useState<Set<string>>(new Set(['educator']));
+  const [viewingReport, setViewingReport] = useState<string>('educator');
 
   // Results
   const [loading, setLoading]          = useState(false);
@@ -181,6 +182,15 @@ export default function ReportingPage() {
   const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
   const printRef = useRef<HTMLDivElement>(null);
 
+  const REPORT_DEFS = [
+    { id: 'educator',    icon: '📋', label: 'Educator Record (Reg 151)', desc: 'Daily educator log — who was in which room and when. Required for NSW Reg 151 compliance.' },
+    { id: 'ratio',       icon: '📐', label: 'Ratio Report',              desc: 'Staff-to-child ratio compliance snapshots across the selected period.' },
+    { id: 'trends',      icon: '📈', label: 'Trends',                    desc: 'Family grouping patterns and session trends over time.' },
+    { id: 'occupancy',   icon: '🏫', label: 'Attendance Trends',         desc: 'Booked vs attended vs last week — see your absence rate per centre per day.' },
+    { id: 'roster-opt',  icon: '🗓️', label: 'Roster Optimisation',       desc: 'Compare child attendance curves against the roster to find over/understaffed windows and get recommendations.' },
+    { id: 'wwcc-expiry', icon: '🛡️', label: 'WWCC Expiries',             desc: 'Working With Children Check expiry dates for all active staff. Sorted by soonest expiring.' },
+  ];
+
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=1100,height=800');
     if (!win) { window.print(); return; }
@@ -192,7 +202,7 @@ export default function ReportingPage() {
       : selectedCentres[0]?.name ?? '';
 
     // ── Build educator table rows ─────────────────────────────────────────
-    const educatorHtml = activeReport === 'educator'
+    const educatorHtml = viewingReport === 'educator'
       ? educatorRows.map(({ date, campus, entries }) => {
           const filtered = roomFilter === 'all' ? entries
             : entries.filter(e => e.room === roomFilter ||
@@ -245,7 +255,7 @@ export default function ReportingPage() {
       : '';
 
     // ── Build ratio table rows ────────────────────────────────────────────
-    const ratioHtml = activeReport === 'ratio'
+    const ratioHtml = viewingReport === 'ratio'
       ? `<table>
           <thead><tr><th>Date</th><th>Campus</th><th>Children</th><th>Required</th><th>Compliant</th></tr></thead>
           <tbody>
@@ -261,8 +271,8 @@ export default function ReportingPage() {
         </table>`
       : '';
 
-    const reportTitle = activeReport === 'educator' ? 'Regulation 151 - Daily Educator Record'
-      : activeReport === 'ratio' ? 'Ratio Compliance Report'
+    const reportTitle = viewingReport === 'educator' ? 'Regulation 151 - Daily Educator Record'
+      : viewingReport === 'ratio' ? 'Ratio Compliance Report'
       : 'Trends Report';
 
     win.document.write(`<!DOCTYPE html>
@@ -313,7 +323,7 @@ export default function ReportingPage() {
       <button class="no-print" onclick="window.print()" style="margin-top:6px;padding:4px 12px;background:#2d5c18;color:white;border:none;border-radius:4px;cursor:pointer;font-size:10px">⎙ Print / Save PDF</button>
     </div>
   </div>
-  ${activeReport === 'educator' ? '<div class="reg-notice"><strong>Regulation 151 Record</strong> - Documents which educators were working directly with children, which room/group they were allocated to, and the times of allocation including scheduled meal breaks. WWCC numbers are held in the staff compliance register.</div>' : ''}
+  ${viewingReport === 'educator' ? '<div class="reg-notice"><strong>Regulation 151 Record</strong> - Documents which educators were working directly with children, which room/group they were allocated to, and the times of allocation including scheduled meal breaks. WWCC numbers are held in the staff compliance register.</div>' : ''}
   ${educatorHtml}${ratioHtml}
   <div class="footer">The Grove Academy Plan of Day System - Confidential - For regulatory compliance purposes only</div>
 </body></html>`);
@@ -333,12 +343,12 @@ export default function ReportingPage() {
     setLoading(true);
     setGenerated(false);
 
-    // Only fetch data relevant to the currently selected report tab
-    const needsEducator  = ['educator','ratio','trends'].includes(activeReport);
-    const needsOccupancy = activeReport === 'occupancy';
-    const needsRosterOpt = activeReport === 'roster-opt';
-    const needsWwccExpiry = activeReport === 'wwcc-expiry';
-    const needsDateLoop  = needsEducator || needsOccupancy || needsRosterOpt;
+    // Only fetch data relevant to the selected reports
+    const needsEducator   = selectedReports.has('educator') || selectedReports.has('ratio') || selectedReports.has('trends');
+    const needsOccupancy  = selectedReports.has('occupancy');
+    const needsRosterOpt  = selectedReports.has('roster-opt');
+    const needsWwccExpiry = selectedReports.has('wwcc-expiry');
+    const needsDateLoop   = needsEducator || needsOccupancy || needsRosterOpt;
 
     const rows: typeof educatorRows = [];
     const snaps: RatioSnap[] = [];
@@ -866,6 +876,7 @@ export default function ReportingPage() {
     }
 
     setGenerated(true);
+    setViewingReport([...selectedReports][0] ?? 'educator');
 
     // Fetch WWCC data for all unique educators in this report
     const uniqueNames = [...new Set(rows.flatMap(r => r.entries.map(e => e.name)))];
@@ -992,7 +1003,7 @@ export default function ReportingPage() {
     }
 
     setLoading(false);
-  }, [selectedCentres, fromDate, toDate, activeReport]); // eslint-disable-line
+  }, [selectedCentres, fromDate, toDate, selectedReports]); // eslint-disable-line
 
   // Group ratio snaps by campus for trends
   const centreSnaps: Record<string, RatioSnap[]> = {};
@@ -1106,31 +1117,60 @@ export default function ReportingPage() {
           ))}
         </div>
 
-        <button onClick={generate} disabled={loading}
+        {/* Report Selection */}
+        <div className="mb-6 mt-4">
+          <div className="text-sm font-semibold mb-3" style={{ color: '#2d5c18' }}>Select Reports to Generate</div>
+          <div className="grid grid-cols-2 gap-3">
+            {REPORT_DEFS.map(r => {
+              const isSelected = selectedReports.has(r.id);
+              return (
+                <button key={r.id}
+                  onClick={() => setSelectedReports(prev => {
+                    const next = new Set(prev);
+                    if (next.has(r.id)) next.delete(r.id); else next.add(r.id);
+                    return next;
+                  })}
+                  className="text-left p-3 rounded-xl border-2 transition-all"
+                  style={{
+                    borderColor: isSelected ? '#2d5c18' : '#E2F1DA',
+                    backgroundColor: isSelected ? '#E2F1DA' : 'white',
+                  }}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span>{r.icon}</span>
+                    <span className="text-sm font-semibold" style={{ color: '#2d5c18' }}>{r.label}</span>
+                    {isSelected && <span className="ml-auto text-xs">✓</span>}
+                  </div>
+                  <div className="text-xs" style={{ color: '#596570' }}>{r.desc}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <button onClick={generate} disabled={loading || selectedReports.size === 0}
           className={btn + ' mt-4 text-white disabled:opacity-50'}
           style={{ backgroundColor: '#5a9228' }}>
-          {loading ? '⟳ Generating...' : ('📊 Generate ' + ({educator:'Educator Record',ratio:'Ratio Report',trends:'Trends',occupancy:'Attendance Trends','roster-opt':'Roster Optimisation','wwcc-expiry':'WWCC Expiries'}[activeReport] || 'Report'))}
+          {loading
+            ? '⟳ Generating...'
+            : selectedReports.size === 0
+            ? 'Select a report above'
+            : `📊 Generate ${selectedReports.size === 1
+                ? REPORT_DEFS.find(r => selectedReports.has(r.id))?.label ?? 'Report'
+                : selectedReports.size + ' Reports'}`}
         </button>
       </div>
 
-      {/* Report tabs */}
+      {/* Report results */}
       {generated && (
         <>
           <div className="flex gap-2 mb-5 flex-wrap">
-            {([
-              ['educator',    '📋 Educator Record (Reg 151)'],
-              ['ratio',       '📐 Ratio Report'],
-              ['trends',      '📈 Trends'],
-              ['occupancy',   '🏫 Occupancy Trends'],
-              ['roster-opt',  '🗓️ Roster Optimisation'],
-              ['wwcc-expiry', '🛡️ WWCC Expiries'],
-            ] as const).map(([tabId, tabLabel]) => (
-              <button key={tabId} onClick={() => setActiveReport(tabId)}
+            {REPORT_DEFS.filter(r => selectedReports.has(r.id)).map(r => (
+              <button key={r.id} onClick={() => setViewingReport(r.id)}
                 className={btn}
-                style={activeReport === tabId
+                style={viewingReport === r.id
                   ? { backgroundColor: '#2d5c18', color: 'white' }
                   : { backgroundColor: 'white', color: '#2d5c18', border: '1px solid #D0E8B8' }}>
-                {tabLabel}
+                {r.icon} {r.label}
               </button>
             ))}
           </div>
@@ -1138,7 +1178,7 @@ export default function ReportingPage() {
           <div ref={printRef}>
 
             {/* ── EDUCATOR RECORD ── */}
-            {activeReport === 'educator' && (
+            {viewingReport === 'educator' && (
               <div className="space-y-6">
                 {/* Reg 151 banner */}
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
@@ -1311,7 +1351,7 @@ export default function ReportingPage() {
             )}
 
             {/* ── RATIO REPORT ── */}
-            {activeReport === 'ratio' && (
+            {viewingReport === 'ratio' && (
               <div className="space-y-4">
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
                   Summary of ratio compliance based on attendance snapshots. Each row represents one snapshot period.
@@ -1353,7 +1393,7 @@ export default function ReportingPage() {
             )}
 
             {/* ── TRENDS ── */}
-            {activeReport === 'trends' && (
+            {viewingReport === 'trends' && (
               <div className="space-y-6">
                 {Object.entries(centreSnaps).map(([campus, snaps]) => {
                   const compliantDays = snaps.filter(s => s.compliant).length;
@@ -1475,7 +1515,7 @@ export default function ReportingPage() {
             )}
 
             {/* ── OCCUPANCY TRENDS ── */}
-            {activeReport === 'occupancy' && (
+            {viewingReport === 'occupancy' && (
               <div className="space-y-4">
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
                   <strong>Attendance Trends</strong> — Real daily attendance vs the same day last week. Green = up, Red = down significantly.
@@ -1565,7 +1605,7 @@ export default function ReportingPage() {
             )}
 
             {/* ── ROSTER OPTIMISATION ── */}
-            {activeReport === 'roster-opt' && (
+            {viewingReport === 'roster-opt' && (
               <div className="space-y-6">
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
                   <strong>Roster Optimisation</strong> — Average staffing vs. required per 30-min slot. Uses simplified 1:5 ratio (conservative mixed-age). Data from Deputy roster cache + sign-in attendance.
@@ -1644,7 +1684,7 @@ export default function ReportingPage() {
             )}
 
             {/* ── WWCC EXPIRIES ── */}
-            {activeReport === 'wwcc-expiry' && (
+            {viewingReport === 'wwcc-expiry' && (
               <div className="space-y-4">
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
                   <strong>WWCC Expiry Monitor</strong> — Working With Children Check expiry dates. Sorted soonest first. Under-18 staff are excluded (exempt from WWCC).
