@@ -77,6 +77,7 @@ interface OccupancyRow {
   campus:         string;
   expected:       number;
   actual:         number;
+  booked:         number;   // from daily_occupancy (Owna bookings)
   lastWeek:       number;
   change:         number;   // actual - lastWeek (positive = more children than last week)
 }
@@ -394,13 +395,21 @@ export default function ReportingPage() {
           const [yy, mo, dday] = date.split('-').map(Number);
           const priorDate = new Date(Date.UTC(yy, mo - 1, dday - 7)).toISOString().slice(0, 10);
           const priorAtt  = await fetchAttendance(campus, priorDate);
-          const expected  = (priorAtt as any[]).length;
+          const lastWeek  = (priorAtt as any[]).length;
+          // Booked count from daily_occupancy (synced from Owna Occupancy tab in SharePoint)
+          const bookRes = await fetch(
+            `${SUPABASE_URL}/rest/v1/daily_occupancy?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=booked`,
+            { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
+          ).catch(() => null);
+          const bookRows: any[] = bookRes?.ok ? await bookRes.json() : [];
+          const booked = bookRows[0]?.booked ?? 0;
           occRows.push({
             date, campus,
-            expected: actual,      // "this week" actual
-            actual,                 // same field kept for compat
-            lastWeek: expected,     // prior week actual (real data)
-            change: actual - expected,
+            expected: actual,
+            actual,
+            booked,
+            lastWeek,
+            change: actual - lastWeek,
           });
         }
 
@@ -1473,6 +1482,7 @@ export default function ReportingPage() {
                 </div>
 
                 {occupancyRows.length > 0 && (() => {
+                  const totalBooked = occupancyRows.reduce((s, r) => s + (r.booked || 0), 0);
                   const totalThis = occupancyRows.reduce((s, r) => s + r.actual, 0);
                   const totalLast  = occupancyRows.reduce((s, r) => s + r.lastWeek, 0);
                   const netChange  = totalThis - totalLast;
@@ -1480,9 +1490,15 @@ export default function ReportingPage() {
                   const daysDown = occupancyRows.filter(r => r.change < 0).length;
                   return (
                     <div className="flex gap-3 flex-wrap">
+                      {totalBooked > 0 && (
+                        <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#eff6ff', color: '#1d4ed8' }}>
+                          <div className="text-2xl font-bold">{totalBooked}</div>
+                          <div className="text-xs">Total Booked (Owna)</div>
+                        </div>
+                      )}
                       <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
                         <div className="text-2xl font-bold">{totalThis}</div>
-                        <div className="text-xs">Total Children This Period</div>
+                        <div className="text-xs">Total Attended</div>
                       </div>
                       <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: netChange >= 0 ? '#E2F1DA' : '#fef2f2', color: netChange >= 0 ? '#2d5c18' : '#991b1b' }}>
                         <div className="text-2xl font-bold">{netChange >= 0 ? '+' : ''}{netChange}</div>
@@ -1500,14 +1516,14 @@ export default function ReportingPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr style={{ backgroundColor: '#F5FAF3' }}>
-                        {['Date','Campus','Attended','Last Week (Same Day)','Change','Trend'].map(h => (
+                        {['Date','Campus','Booked','Attended','Absent','Last Week','Change','Trend'].map(h => (
                           <th key={h} className="py-2 px-4 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {occupancyRows.length === 0 ? (
-                        <tr><td colSpan={6} className="py-6 text-center text-sm italic" style={{ color: '#596570' }}>No attendance data for selected period.</td></tr>
+                        <tr><td colSpan={8} className="py-6 text-center text-sm italic" style={{ color: '#596570' }}>No attendance data for selected period.</td></tr>
                       ) : occupancyRows.map((r, i) => {
                         const rowBg = r.lastWeek > 0 && r.change < -5
                           ? '#fef2f2'
@@ -1518,7 +1534,11 @@ export default function ReportingPage() {
                           <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: rowBg }}>
                             <td className="py-2 px-4" style={{ color: '#050505' }}>{safeFormat(new Date(r.date), 'd MMM yyyy')}</td>
                             <td className="py-2 px-4" style={{ color: '#050505' }}>{r.campus}</td>
+                            <td className="py-2 px-4 font-medium" style={{ color: '#1d4ed8' }}>{r.booked > 0 ? r.booked : '—'}</td>
                             <td className="py-2 px-4 font-medium" style={{ color: '#050505' }}>{r.actual}</td>
+                            <td className="py-2 px-4" style={{ color: r.booked > 0 && r.actual < r.booked ? '#d97706' : '#596570' }}>
+                              {r.booked > 0 ? r.booked - r.actual : '—'}
+                            </td>
                             <td className="py-2 px-4" style={{ color: '#596570' }}>{r.lastWeek > 0 ? r.lastWeek : '—'}</td>
                             <td className="py-2 px-4 font-medium" style={{ color: r.change > 0 ? '#166534' : r.change < 0 ? '#991b1b' : '#596570' }}>
                               {r.change > 0 ? `+${r.change}` : r.change < 0 ? String(r.change) : '—'}
