@@ -63,6 +63,43 @@ interface RatioSnap {
   compliant:  boolean;
 }
 
+interface WwccExpiryRow {
+  full_name:     string;
+  centre:        string;
+  wwcc_number:   string | null;
+  wwcc_expiry:   string | null;
+  under_18:      boolean;
+  daysRemaining: number | null;
+}
+
+interface OccupancyRow {
+  date:           string;
+  campus:         string;
+  expected:       number;
+  actual:         number;
+  absent:         number;
+  attendanceRate: number;
+}
+
+interface RosterSlotData {
+  time:        string;
+  totalDays:   number;
+  sumChildren: number;
+  sumStaff:    number;
+  sumRequired: number;
+}
+
+interface RosterOptResult {
+  campus: string;
+  slots:  RosterSlotData[];
+}
+
+interface RosterRec {
+  campus: string;
+  text:   string;
+  type:   'overstaffed' | 'understaffed';
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function fmtTime(t: string | number | null): string {
   if (!t) return '-';
@@ -76,7 +113,7 @@ function fmtTime(t: string | number | null): string {
 
 async function fetchAttendance(campus: string, date: string) {
   const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=room,age,sign_in,sign_out&limit=500`,
+    `${SUPABASE_URL}/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=room,age,sign_in,sign_out,predicted_sign_in,predicted_sign_out&limit=500`,
     { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
   );
   return r.ok ? r.json() : [];
@@ -116,7 +153,7 @@ export default function ReportingPage() {
   const [toDate, setToDate] = useState(todayStr());
 
   // Report type
-  const [activeReport, setActiveReport] = useState<'educator'|'ratio'|'trends'>('educator');
+  const [activeReport, setActiveReport] = useState<'educator'|'ratio'|'trends'|'wwcc-expiry'|'occupancy'|'roster-opt'>('educator');
 
   // Results
   const [loading, setLoading]          = useState(false);
@@ -125,6 +162,11 @@ export default function ReportingPage() {
   const [groupingTrends, setGroupingTrends] = useState<{ date: string; campus: string; sessions: any[] }[]>([]);
   const [generated, setGenerated]      = useState(false);
   const [roomFilter, setRoomFilter]    = useState<string>('all');
+  const [wwccExpiryFilter, setWwccExpiryFilter] = useState<'all'|'90'|'60'|'30'|'expired'>('all');
+  const [wwccExpiryRows, setWwccExpiryRows] = useState<WwccExpiryRow[]>([]);
+  const [occupancyRows, setOccupancyRows]   = useState<OccupancyRow[]>([]);
+  const [rosterOptData, setRosterOptData]   = useState<RosterOptResult[]>([]);
+  const [rosterRecs, setRosterRecs]         = useState<RosterRec[]>([]);
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean };
   // WWCC lookup function — tries multiple strategies to handle name mismatches
   const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
@@ -284,6 +326,12 @@ export default function ReportingPage() {
     const rows: typeof educatorRows = [];
     const snaps: RatioSnap[] = [];
     const groupingTrendRows: { date: string; campus: string; sessions: any[] }[] = [];
+    const occRows: OccupancyRow[] = [];
+    const rosterAccum: Record<string, Record<string, { sumChildren: number; sumStaff: number; sumRequired: number; days: number }>> = {};
+    const ROSTER_SLOTS_30: string[] = [];
+    for (let rmi = 7 * 60; rmi < 18 * 60; rmi += 30) {
+      ROSTER_SLOTS_30.push(`${String(Math.floor(rmi/60)).padStart(2,'0')}:${String(rmi%60).padStart(2,'0')}`);
+    }
 
     // Generate dates in range - use UTC noon to avoid timezone-induced off-by-one
     const dates: string[] = [];
@@ -307,7 +355,7 @@ export default function ReportingPage() {
 
       for (const date of dates) {
         // Fetch in parallel
-        const [att, rosters, allocations, floatScheds, groupingSessionRows, ratioCheckRows] = await Promise.all([
+        const [att, rosters, allocations, floatScheds, groupingSessionRows, ratioCheckRows, rosterCacheDay] = await Promise.all([
           fetchAttendance(campus, date),
           fetchRostersForDate(allUnitIds, date),
           fetch(`/api/staff-allocations?centre=${encodeURIComponent(centre.id)}&date=${date}`)
@@ -318,8 +366,74 @@ export default function ReportingPage() {
             .then(r => r.ok ? r.json() : []).catch(() => []),
           fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centre.id)}&date=${date}`)
             .then(r => r.ok ? r.json() : []).catch(() => []),
+          fetch(`${SUPABASE_URL}/rest/v1/deputy_roster_cache?date=eq.${date}&select=rosters`,
+            { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
+          ).then(r => r.ok ? r.json() : []).catch(() => []),
         ]);
         groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
+
+        // ── Occupancy ────────────────────────────────────────────────────
+        {
+          const expected = (att as any[]).filter(r => r.predicted_sign_in).length;
+          const actual   = (att as any[]).filter(r => r.sign_in).length;
+          occRows.push({
+            date, campus,
+            expected, actual,
+            absent: Math.max(0, expected - actual),
+            attendanceRate: expected > 0 ? Math.round(actual / expected * 100) : 0,
+          });
+        }
+
+        // ── Roster Optimisation ──────────────────────────────────────────
+        {
+          const dayRostersCache: any[] = (rosterCacheDay as any[])[0]?.rosters ?? [];
+          const nonRatioIdsSet = new Set([...(centre.nonRatioUnitIds ?? []), ...(centre.leaveUnitIds ?? [])]);
+          const centreUnitIdsSet = new Set([
+            ...centre.rooms.map(rm => rm.deputyUnitId),
+            ...(centre.floatUnitIds ?? []),
+            ...(centre.issUnitIds ?? []),
+          ]);
+          const campusRostersFiltered = dayRostersCache.filter(r =>
+            centreUnitIdsSet.has(r.OperationalUnit) && !nonRatioIdsSet.has(r.OperationalUnit)
+          );
+          if (!rosterAccum[campus]) {
+            rosterAccum[campus] = {};
+            for (const rslot of ROSTER_SLOTS_30) {
+              rosterAccum[campus][rslot] = { sumChildren: 0, sumStaff: 0, sumRequired: 0, days: 0 };
+            }
+          }
+          for (const rslot of ROSTER_SLOTS_30) {
+            const [rsh, rsm] = rslot.split(':').map(Number);
+            const slotMinutes = rsh * 60 + rsm;
+            const childrenPresent = (att as any[]).filter(r => {
+              if (!r.sign_in) return false;
+              const siD = new Date(r.sign_in);
+              const siM = siD.getHours() * 60 + siD.getMinutes();
+              if (siM > slotMinutes) return false;
+              if (r.sign_out) {
+                const soD = new Date(r.sign_out);
+                if (soD.getHours() * 60 + soD.getMinutes() <= slotMinutes) return false;
+              }
+              if (r.predicted_sign_out) {
+                const psoD = new Date(r.predicted_sign_out);
+                if (psoD.getHours() * 60 + psoD.getMinutes() <= slotMinutes) return false;
+              }
+              return true;
+            }).length;
+            const staffOnShift = campusRostersFiltered.filter(r => {
+              const startLocal = new Date(new Date(r.StartTime * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+              const endLocal   = new Date(new Date(r.EndTime   * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+              const startM = startLocal.getHours() * 60 + startLocal.getMinutes();
+              const endM   = endLocal.getHours()   * 60 + endLocal.getMinutes();
+              return startM <= slotMinutes && endM > slotMinutes;
+            }).length;
+            const reqStaff = Math.ceil(childrenPresent / 5);
+            rosterAccum[campus][rslot].sumChildren += childrenPresent;
+            rosterAccum[campus][rslot].sumStaff    += staffOnShift;
+            rosterAccum[campus][rslot].sumRequired += reqStaff;
+            rosterAccum[campus][rslot].days++;
+          }
+        }
 
         // Build combined staffMoves + FG configs from all ratio-check sessions
         const ratioStaffMoves: Record<string, string> = {};
@@ -647,6 +761,77 @@ export default function ReportingPage() {
     setEducatorRows(rows);
     setRatioSnaps(snaps);
     setGroupingTrends(groupingTrendRows);
+    setOccupancyRows(occRows);
+
+    // ── Process roster-opt results ─────────────────────────────────────────────────
+    {
+      const rosterResults: RosterOptResult[] = [];
+      const recsList: RosterRec[] = [];
+      for (const [campusKey, slotMap] of Object.entries(rosterAccum)) {
+        const slots: RosterSlotData[] = ROSTER_SLOTS_30.map(time => ({
+          time,
+          totalDays:   slotMap[time].days,
+          sumChildren: slotMap[time].sumChildren,
+          sumStaff:    slotMap[time].sumStaff,
+          sumRequired: slotMap[time].sumRequired,
+        }));
+        rosterResults.push({ campus: campusKey, slots });
+        const overSlots  = slots.filter(s => s.totalDays > 0 && (s.sumStaff - s.sumRequired) / s.totalDays > 1);
+        const underSlots = slots.filter(s => s.totalDays > 0 && (s.sumStaff - s.sumRequired) / s.totalDays < -0.5);
+        if (overSlots.length > 0) {
+          const avgOver = overSlots.reduce((s, x) => s + (x.sumStaff - x.sumRequired) / Math.max(x.totalDays, 1), 0) / overSlots.length;
+          recsList.push({ campus: campusKey, type: 'overstaffed', text: `Overstaffed ${overSlots[0].time}–${overSlots[overSlots.length-1].time} (avg +${avgOver.toFixed(1)} staff). Consider shifting some starts later in the day.` });
+        }
+        if (underSlots.length > 0) {
+          const avgUnder = underSlots.reduce((s, x) => s + (x.sumStaff - x.sumRequired) / Math.max(x.totalDays, 1), 0) / underSlots.length;
+          recsList.push({ campus: campusKey, type: 'understaffed', text: `Ratio risk ${underSlots[0].time}–${underSlots[underSlots.length-1].time} (avg ${Math.abs(avgUnder).toFixed(1)} staff short). Review afternoon coverage.` });
+        }
+      }
+      setRosterOptData(rosterResults);
+      setRosterRecs(recsList);
+    }
+
+    // ── WWCC Expiry ─────────────────────────────────────────────────────────────
+    {
+      let wwccExpRows: WwccExpiryRow[] = [];
+      try {
+        const wwccAllResp = await fetch('/api/staff-wwcc');
+        const wwccAll: any[] = wwccAllResp.ok ? await wwccAllResp.json() : [];
+        const todayNow = Date.now();
+        const allExpRows: WwccExpiryRow[] = wwccAll
+          .filter((r: any) => !r.under_18) // under-18s don't need WWCC
+          .map((r: any) => {
+            const expDate = r.wwcc_expiry ? new Date(r.wwcc_expiry) : null;
+            return {
+              full_name:     r.full_name ?? '',
+              centre:        r.centre ?? '',
+              wwcc_number:   r.wwcc_number,
+              wwcc_expiry:   r.wwcc_expiry,
+              under_18:      r.under_18 ?? false,
+              daysRemaining: expDate ? Math.ceil((expDate.getTime() - todayNow) / 86400000) : null,
+            };
+          });
+        if (selectedCentres.length < allowed.length) {
+          const centreNameSet = selectedCentres.map(c => c.name.toLowerCase());
+          wwccExpRows = allExpRows.filter(r =>
+            centreNameSet.some(n =>
+              (r.centre ?? '').toLowerCase().includes(n) ||
+              n.includes((r.centre ?? '').toLowerCase())
+            )
+          );
+        } else {
+          wwccExpRows = allExpRows;
+        }
+        wwccExpRows.sort((a, b) => {
+          if (a.daysRemaining === null && b.daysRemaining === null) return 0;
+          if (a.daysRemaining === null) return 1;
+          if (b.daysRemaining === null) return -1;
+          return a.daysRemaining - b.daysRemaining;
+        });
+      } catch { /* ignore */ }
+      setWwccExpiryRows(wwccExpRows);
+    }
+
     setGenerated(true);
 
     // Fetch WWCC data for all unique educators in this report
@@ -898,14 +1083,21 @@ export default function ReportingPage() {
       {/* Report tabs */}
       {generated && (
         <>
-          <div className="flex gap-2 mb-5">
-            {(['educator','ratio','trends'] as const).map(tab => (
-              <button key={tab} onClick={() => setActiveReport(tab)}
+          <div className="flex gap-2 mb-5 flex-wrap">
+            {([
+              ['educator',    '📋 Educator Record (Reg 151)'],
+              ['ratio',       '📐 Ratio Report'],
+              ['trends',      '📈 Trends'],
+              ['occupancy',   '🏫 Occupancy Trends'],
+              ['roster-opt',  '🗓️ Roster Optimisation'],
+              ['wwcc-expiry', '🛡️ WWCC Expiries'],
+            ] as const).map(([tabId, tabLabel]) => (
+              <button key={tabId} onClick={() => setActiveReport(tabId)}
                 className={btn}
-                style={activeReport === tab
+                style={activeReport === tabId
                   ? { backgroundColor: '#2d5c18', color: 'white' }
                   : { backgroundColor: 'white', color: '#2d5c18', border: '1px solid #D0E8B8' }}>
-                {tab === 'educator' ? '📋 Educator Record (Reg 151)' : tab === 'ratio' ? '📐 Ratio Report' : '📈 Trends'}
+                {tabLabel}
               </button>
             ))}
           </div>
@@ -1246,6 +1438,270 @@ export default function ReportingPage() {
                   </div>
                 );
               })()}
+              </div>
+            )}
+
+            {/* ── OCCUPANCY TRENDS ── */}
+            {activeReport === 'occupancy' && (
+              <div className="space-y-4">
+                <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
+                  <strong>Occupancy Trends</strong> — Expected vs. actual attendance per day. Amber = below 80%, Red = below 60%.
+                </div>
+
+                {occupancyRows.length > 0 && (() => {
+                  const validRows = occupancyRows.filter(r => r.expected > 0);
+                  const avgRate = validRows.length ? Math.round(validRows.reduce((s, r) => s + r.attendanceRate, 0) / validRows.length) : 0;
+                  const totalAbsent = occupancyRows.reduce((s, r) => s + r.absent, 0);
+                  return (
+                    <div className="flex gap-3 flex-wrap">
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
+                        <div className="text-2xl font-bold">{avgRate}%</div>
+                        <div className="text-xs">Avg Attendance Rate</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>
+                        <div className="text-2xl font-bold">{totalAbsent}</div>
+                        <div className="text-xs">Total Absent Slots</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fef2f2', color: '#991b1b' }}>
+                        <div className="text-2xl font-bold">{occupancyRows.filter(r => r.expected > 0 && r.attendanceRate < 80).length}</div>
+                        <div className="text-xs">Days below 80%</div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <div className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr style={{ backgroundColor: '#F5FAF3' }}>
+                        {['Date','Campus','Expected','Actual','Absent','Attendance Rate'].map(h => (
+                          <th key={h} className="py-2 px-4 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {occupancyRows.length === 0 ? (
+                        <tr><td colSpan={6} className="py-6 text-center text-sm italic" style={{ color: '#596570' }}>No occupancy data for selected period.</td></tr>
+                      ) : occupancyRows.map((r, i) => {
+                        const rowBg = r.expected > 0 && r.attendanceRate < 60
+                          ? '#fef2f2'
+                          : r.expected > 0 && r.attendanceRate < 80
+                          ? '#fffbeb'
+                          : i % 2 === 0 ? 'white' : '#fafffe';
+                        return (
+                          <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: rowBg }}>
+                            <td className="py-2 px-4" style={{ color: '#050505' }}>{safeFormat(new Date(r.date), 'd MMM yyyy')}</td>
+                            <td className="py-2 px-4" style={{ color: '#050505' }}>{r.campus}</td>
+                            <td className="py-2 px-4" style={{ color: '#596570' }}>{r.expected}</td>
+                            <td className="py-2 px-4" style={{ color: '#596570' }}>{r.actual}</td>
+                            <td className="py-2 px-4" style={{ color: r.absent > 0 ? '#d97706' : '#596570' }}>{r.absent}</td>
+                            <td className="py-2 px-4">
+                              <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                                style={r.expected === 0
+                                  ? { backgroundColor: '#f3f4f6', color: '#6b7280' }
+                                  : r.attendanceRate < 60
+                                  ? { backgroundColor: '#fee2e2', color: '#991b1b' }
+                                  : r.attendanceRate < 80
+                                  ? { backgroundColor: '#fef9c3', color: '#854d0e' }
+                                  : { backgroundColor: '#dcfce7', color: '#166534' }}>
+                                {r.expected === 0 ? '—' : `${r.attendanceRate}%`}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* ── ROSTER OPTIMISATION ── */}
+            {activeReport === 'roster-opt' && (
+              <div className="space-y-6">
+                <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
+                  <strong>Roster Optimisation</strong> — Average staffing vs. required per 30-min slot. Uses simplified 1:5 ratio (conservative mixed-age). Data from Deputy roster cache + sign-in attendance.
+                </div>
+
+                {rosterRecs.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-sm font-semibold mb-1" style={{ color: '#050505' }}>💡 Recommendations</div>
+                    {rosterRecs.map((rec, i) => (
+                      <div key={i} className="rounded-xl p-3 text-sm"
+                        style={rec.type === 'understaffed'
+                          ? { backgroundColor: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }
+                          : { backgroundColor: '#fef9c3', color: '#854d0e', border: '1px solid #fde68a' }}>
+                        <strong>{rec.campus}:</strong> {rec.text}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {rosterOptData.length === 0 ? (
+                  <div className="text-sm italic" style={{ color: '#596570' }}>No roster data for selected period.</div>
+                ) : rosterOptData.map(({ campus: cn, slots }) => (
+                  <div key={cn} className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                    <div className="px-5 py-3" style={{ backgroundColor: '#2d5c18' }}>
+                      <div className="font-bold text-sm text-white">{cn}</div>
+                      <div className="text-xs" style={{ color: '#A0D083' }}>Averages across {slots[0]?.totalDays ?? 0} day(s) · 07:00–18:00 in 30-min slots</div>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr style={{ backgroundColor: '#F5FAF3' }}>
+                            {['Time','Avg Children','Avg Staff','Required','Surplus','Status'].map(h => (
+                              <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {slots.map((s, si) => {
+                            const avgCh  = s.totalDays > 0 ? (s.sumChildren / s.totalDays).toFixed(1) : '—';
+                            const avgSt  = s.totalDays > 0 ? (s.sumStaff    / s.totalDays).toFixed(1) : '—';
+                            const avgReq = s.totalDays > 0 ? (s.sumRequired / s.totalDays).toFixed(1) : '—';
+                            const surplus = s.totalDays > 0 ? (s.sumStaff - s.sumRequired) / s.totalDays : 0;
+                            const rowBg2 = surplus < -0.5 ? '#fef2f2' : surplus < 0 ? '#fffbeb' : si % 2 === 0 ? 'white' : '#fafffe';
+                            const badge = surplus < -0.5
+                              ? { bg: '#fee2e2', color: '#991b1b', label: '⚠️ Short' }
+                              : surplus < 0
+                              ? { bg: '#fef9c3', color: '#854d0e', label: '⚡ Tight' }
+                              : surplus > 1
+                              ? { bg: '#fef9c3', color: '#92400e', label: '↑ Over' }
+                              : { bg: '#dcfce7', color: '#166534', label: '✅ OK' };
+                            return (
+                              <tr key={si} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: rowBg2 }}>
+                                <td className="py-1.5 px-3 font-mono text-xs font-bold" style={{ color: '#2d5c18' }}>{s.time}</td>
+                                <td className="py-1.5 px-3 text-xs" style={{ color: '#596570' }}>{avgCh}</td>
+                                <td className="py-1.5 px-3 text-xs" style={{ color: '#596570' }}>{avgSt}</td>
+                                <td className="py-1.5 px-3 text-xs" style={{ color: '#596570' }}>{avgReq}</td>
+                                <td className="py-1.5 px-3 text-xs font-semibold"
+                                  style={{ color: surplus < 0 ? '#dc2626' : surplus > 1 ? '#d97706' : '#166534' }}>
+                                  {s.totalDays > 0 ? (surplus >= 0 ? '+' : '') + surplus.toFixed(1) : '—'}
+                                </td>
+                                <td className="py-1.5 px-3">
+                                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                                    style={{ backgroundColor: badge.bg, color: badge.color }}>
+                                    {badge.label}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── WWCC EXPIRIES ── */}
+            {activeReport === 'wwcc-expiry' && (
+              <div className="space-y-4">
+                <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
+                  <strong>WWCC Expiry Monitor</strong> — Working With Children Check expiry dates. Sorted soonest first. Under-18 staff are excluded (exempt from WWCC).
+                </div>
+
+                {(() => {
+                  const expired = wwccExpiryRows.filter(r => r.daysRemaining !== null && r.daysRemaining < 0);
+                  const exp30   = wwccExpiryRows.filter(r => r.daysRemaining !== null && r.daysRemaining >= 0 && r.daysRemaining < 30);
+                  const exp90   = wwccExpiryRows.filter(r => r.daysRemaining !== null && r.daysRemaining >= 0 && r.daysRemaining < 90);
+                  return (
+                    <div className="flex gap-3 flex-wrap">
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>
+                        <div className="text-2xl font-bold">{expired.length}</div>
+                        <div className="text-xs">Expired</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fed7aa', color: '#9a3412' }}>
+                        <div className="text-2xl font-bold">{exp30.length}</div>
+                        <div className="text-xs">Expiring &lt;30 days</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>
+                        <div className="text-2xl font-bold">{exp90.length}</div>
+                        <div className="text-xs">Expiring &lt;90 days</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#F5FAF3', color: '#2d5c18' }}>
+                        <div className="text-2xl font-bold">{wwccExpiryRows.length}</div>
+                        <div className="text-xs">Total Staff</div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <div className="flex gap-2 flex-wrap">
+                  {(['all', 'expired', '30', '60', '90'] as const).map(f => {
+                    const fLabel: Record<string, string> = { all: 'All', expired: 'Expired', '30': 'Expiring <30d', '60': 'Expiring <60d', '90': 'Expiring <90d' };
+                    return (
+                      <button key={f} onClick={() => setWwccExpiryFilter(f)}
+                        className="px-3 py-1.5 rounded-xl text-xs font-semibold"
+                        style={wwccExpiryFilter === f
+                          ? { backgroundColor: '#2d5c18', color: 'white' }
+                          : { backgroundColor: 'white', color: '#5a9228', border: '1px solid #D0E8B8' }}>
+                        {fLabel[f]}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr style={{ backgroundColor: '#F5FAF3' }}>
+                        {['Name','Centre','WWCC Number','Expiry Date','Days Remaining'].map(h => (
+                          <th key={h} className="py-2 px-4 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const filtered = wwccExpiryRows.filter(r => {
+                          if (wwccExpiryFilter === 'all')     return true;
+                          if (wwccExpiryFilter === 'expired') return r.daysRemaining !== null && r.daysRemaining < 0;
+                          if (wwccExpiryFilter === '30')      return r.daysRemaining !== null && r.daysRemaining >= 0 && r.daysRemaining < 30;
+                          if (wwccExpiryFilter === '60')      return r.daysRemaining !== null && r.daysRemaining >= 0 && r.daysRemaining < 60;
+                          if (wwccExpiryFilter === '90')      return r.daysRemaining !== null && r.daysRemaining >= 0 && r.daysRemaining < 90;
+                          return true;
+                        });
+                        if (filtered.length === 0) return (
+                          <tr><td colSpan={5} className="py-6 text-center text-sm italic" style={{ color: '#596570' }}>No records match this filter.</td></tr>
+                        );
+                        return filtered.map((r, i) => {
+                          const badgeBg    = r.daysRemaining === null ? '#f3f4f6'
+                            : r.daysRemaining < 0  ? '#fee2e2'
+                            : r.daysRemaining < 30 ? '#fed7aa'
+                            : r.daysRemaining < 60 ? '#fef9c3'
+                            : r.daysRemaining < 90 ? '#fef9c3'
+                            : '#dcfce7';
+                          const badgeColor = r.daysRemaining === null ? '#6b7280'
+                            : r.daysRemaining < 0  ? '#991b1b'
+                            : r.daysRemaining < 30 ? '#9a3412'
+                            : r.daysRemaining < 60 ? '#854d0e'
+                            : r.daysRemaining < 90 ? '#92400e'
+                            : '#166534';
+                          const dLabel = r.daysRemaining === null ? '—'
+                            : r.daysRemaining < 0 ? `Expired ${Math.abs(r.daysRemaining)}d ago`
+                            : `${r.daysRemaining}d`;
+                          return (
+                            <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
+                              <td className="py-2 px-4 font-medium" style={{ color: '#050505' }}>{r.full_name}</td>
+                              <td className="py-2 px-4" style={{ color: '#596570' }}>{r.centre || '—'}</td>
+                              <td className="py-2 px-4 font-mono text-xs" style={{ color: '#1e3a5f' }}>{r.wwcc_number ?? '—'}</td>
+                              <td className="py-2 px-4 text-xs" style={{ color: '#596570' }}>
+                                {r.wwcc_expiry ? new Date(r.wwcc_expiry).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                              </td>
+                              <td className="py-2 px-4">
+                                <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                                  style={{ backgroundColor: badgeBg, color: badgeColor }}>
+                                  {dLabel}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
