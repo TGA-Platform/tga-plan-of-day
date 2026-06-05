@@ -686,9 +686,13 @@ export default function ReportingPage() {
            * 4. Same last-name + matching first initial — narrows when multiple share a surname
            */
           const lookup = (name: string): WwccRec | null => {
-            // Strip parenthetical preferred names from Deputy display names
-            // e.g. "(Cherise) Xue Yang" → "Xue Yang", "Xue Yang (Cherise)" → "Xue Yang"
-            const cleaned = name.replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+            // Normalise Deputy display names before matching:
+            // - Strip parenthetical preferred names: "(Cherise) Xue Yang" → "Xue Yang"
+            // - Strip role abbreviations at end: "Charlotte Simmons RL" → "Charlotte Simmons"
+            const cleaned = name
+              .replace(/\s*\([^)]*\)\s*/g, ' ')                          // remove (brackets)
+              .replace(/\s+\b(RL|EL|CD|AD|ECT|2IC|HOD|HOE)\b\s*$/i, '') // remove trailing role abbrevs
+              .replace(/\s+/g, ' ').trim();
             const norm = cleaned.toLowerCase().replace(/\s+/g, ' ').trim();
 
             // 1. Exact

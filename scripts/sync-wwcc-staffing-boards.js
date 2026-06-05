@@ -74,6 +74,8 @@ function stripRoleSuffix(name) {
   return name
     .replace(/\s*\([^)]*\)\s*/g, ' ')  // remove anything in (brackets)
     .replace(/\s*-\s*(Room Leader|Educational Leader|Director|Assistant Director|ECT|Educator|Replacement|Mat Leave|Maternity Leave|Leave|Relief|Casual|Part Time|Full Time|On Hold)[^$]*/i, '')
+    // Strip standalone role abbreviations at end of name: RL, EL, CD, AD, ECT, 2IC
+    .replace(/\s+\b(RL|EL|CD|AD|ECT|2IC|HOD|HOE)\b\s*$/i, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
