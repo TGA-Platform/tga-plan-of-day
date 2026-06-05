@@ -1792,20 +1792,28 @@ export default function ReportingPage() {
                       <div className="text-xs" style={{ color: '#A0D083' }}>Averages across {slots[0]?.totalDays ?? 0} day(s) · 07:00-18:00 in 30-min slots</div>
                     </div>
                     <div className="overflow-x-auto">
+                      {(() => {
+                        const singleDay = fromDate === toDate;
+                        const colHeaders = singleDay
+                          ? ['Time','Children','Staff (Floor)','Required','Surplus','Status','Off Floor']
+                          : ['Time','Avg Children','Avg Staff (Floor)','Required','Surplus','Status','Avg Off Floor'];
+                        return (
                       <table className="w-full text-sm">
                         <thead>
                           <tr style={{ backgroundColor: '#F5FAF3' }}>
-                            {['Time','Avg Children','Avg Staff (Floor)','Required','Surplus','Status','Off Floor'].map(h => (
+                            {colHeaders.map(h => (
                               <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody>
                           {slots.map((s, si) => {
-                            const avgCh   = s.totalDays > 0 ? (s.sumChildren  / s.totalDays).toFixed(1) : '-';
-                            const avgSt   = s.totalDays > 0 ? (s.sumStaff     / s.totalDays).toFixed(1) : '-';
-                            const avgOff  = s.totalDays > 0 ? (s.sumOffFloor  / s.totalDays).toFixed(1) : '-';
-                            const avgReq  = s.totalDays > 0 ? (s.sumRequired  / s.totalDays).toFixed(1) : '-';
+                            const singleDay = fromDate === toDate;
+                            const fmt1 = (n: number) => singleDay ? String(Math.round(n)) : n.toFixed(1);
+                            const avgCh   = s.totalDays > 0 ? fmt1(s.sumChildren  / s.totalDays) : '—';
+                            const avgSt   = s.totalDays > 0 ? fmt1(s.sumStaff     / s.totalDays) : '—';
+                            const avgOff  = s.totalDays > 0 ? fmt1(s.sumOffFloor  / s.totalDays) : '—';
+                            const avgReq  = s.totalDays > 0 ? fmt1(s.sumRequired  / s.totalDays) : '—';
                             const surplus = s.totalDays > 0 ? (s.sumStaff - s.sumRequired) / s.totalDays : 0;
                             const rowBg2 = surplus < -0.5 ? '#fef2f2' : surplus < 0 ? '#fffbeb' : si % 2 === 0 ? 'white' : '#fafffe';
                             const badge = surplus < -0.5
@@ -1837,6 +1845,8 @@ export default function ReportingPage() {
                           })}
                         </tbody>
                       </table>
+                        );
+                      })()} {/* end singleDay IIFE */}
                     </div>
                   </div>
                 ))}
