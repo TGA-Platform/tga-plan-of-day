@@ -956,18 +956,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   /** Add or remove a slot from a FG */
   function toggleSlotInFG(fgId: string, slot: string) {
-    setSessionData(prev => {
-      const fg = prev.familyGroupings.find(f => f.id === fgId);
-      if (!fg) return prev;
+    syncFGToAllSessions(fgs => {
+      const fg = fgs.find(f => f.id === fgId);
+      if (!fg) return fgs;
       const newSlots = fg.slots.includes(slot)
         ? fg.slots.filter(s => s !== slot)
         : [...fg.slots, slot];
-      const next = {
-        ...prev,
-        familyGroupings: prev.familyGroupings.map(f => f.id === fgId ? { ...f, slots: newSlots } : f),
-      };
-      scheduleAutoSave(next);
-      return next;
+      return fgs.map(f => f.id === fgId ? { ...f, slots: newSlots } : f);
     });
   }
 
@@ -981,11 +976,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       slots: [slot],
       color: FG_COLOURS[idx],
     };
-    setSessionData(prev => {
-      const next = { ...prev, familyGroupings: [...prev.familyGroupings, newFG] };
-      scheduleAutoSave(next);
-      return next;
-    });
+    syncFGToAllSessions(fgs => [...fgs.filter(f => f.id !== newFG.id), newFG]);
     setFgPopoverSlot(null);
     setFgPanelOpen(true);
     setEditingFgId(newFG.id);
