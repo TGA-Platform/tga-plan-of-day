@@ -1285,15 +1285,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           ))}
         </div>
 
-        {/* Activity columns toggle */}
-        <button
-          className="no-print"
-          onClick={() => setShowActivityCols(p => !p)}
-          style={{ padding: '6px 10px', borderRadius: '8px', fontWeight: 600, fontSize: '11px', border: '1px solid #d1d5db', background: showActivityCols ? '#f3f4f6' : 'white', cursor: 'pointer', color: '#6b7280', whiteSpace: 'nowrap' }}
-          title="Toggle Cleaning column"
-        >
-          {showActivityCols ? '🧹 Hide Clean' : '🧹 + Cleaning'}
-        </button>
+
 
         {/* Save status */}
         <span style={{ fontSize: '12px', color: saveStatus === 'saved' ? '#16a34a' : saveStatus === 'error' ? '#dc2626' : saveStatus === 'saving' ? '#d97706' : '#9ca3af' }}>
@@ -1780,7 +1772,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               <th style={{ ...thStyle, minWidth: '110px', width: '110px', backgroundColor: '#92400e' }}>Additional / Off Floor</th>
               <th style={{ ...thStyle, minWidth: '90px', width: '90px', backgroundColor: '#1e40af' }}>📚 Programming</th>
               <th style={{ ...thStyle, minWidth: '90px', width: '90px', backgroundColor: '#0f766e' }}>🍽 Lunch</th>
-              {showActivityCols && <th style={{ ...thStyle, minWidth: '90px', width: '90px', backgroundColor: '#7e22ce' }}>🧹 Clean</th>}
+              <th style={{ ...thStyle, minWidth: '90px', width: '90px', backgroundColor: '#7e22ce' }}>🧹 Clean</th>
 
             </tr>
             <tr>
@@ -1800,7 +1792,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               <th style={{ ...thStyle, backgroundColor: '#92400e', fontSize: '9px' }}></th>
               <th style={{ ...thStyle, backgroundColor: '#1e40af', fontSize: '9px' }}></th>
               <th style={{ ...thStyle, backgroundColor: '#0f766e', fontSize: '9px' }}></th>
-              {showActivityCols && <th style={{ ...thStyle, backgroundColor: '#7e22ce', fontSize: '9px' }}></th>}
+              <th style={{ ...thStyle, backgroundColor: '#7e22ce', fontSize: '9px' }}></th>
 
             </tr>
           </thead>
@@ -2556,7 +2548,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     </td>
                     );
                   })()}
-                  {showActivityCols && (() => {
+                  {(() => {
                     const manualClean = getManualActivityStaff(slot, '__cleaning__');
 
                     const bg = dragOver === `clean:${slot}` ? '#e9d5ff' : '#faf5ff';
