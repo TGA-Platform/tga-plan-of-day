@@ -35,6 +35,7 @@ export interface RosteredStaff {
   endTime: string;
   unitId: number;
   unitName: string;
+  isInternalCasual?: boolean;
 }
 
 export interface AbsentStaff {

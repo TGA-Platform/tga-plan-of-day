@@ -250,12 +250,12 @@ export const CENTRES: Centre[] = [
   {
     id: 'glendale', name: 'Glendale',
     rooms: [
-      room('gl_0_1',  '0-1 Explorers',   '0-1 yrs', 4,  466, '0-1'),
-      room('gl_1_2',  '1-2 Adventurers', '1-2 yrs', 4,  467, '1-2'),
-      room('gl_2_3',  '2-3 Voyagers',    '2-3 yrs', 5,  468, '2-3'),
-      room('gl_3_4a', '3-4 Pioneers',    '3-4 yrs', 10, 469, '3-4'),
-      room('gl_3_4b', '3-4 Creators',    '3-4 yrs', 10, 470, '3-4'),
-      room('gl_4_5',  '4-5 Achievers',   '4-5 yrs', 10, 471, '4-5'),
+      { id: 'gl_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 466, ownaRoomName: 'Explorers' },
+      { id: 'gl_1_2',  name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 467, ownaRoomName: 'Adventurers' },
+      { id: 'gl_2_3',  name: '2-3 Voyagers',    ageGroup: '2-3 yrs', ratio: 5,  deputyUnitId: 468, ownaRoomName: 'Voyagers' },
+      { id: 'gl_3_4a', name: '3-4 Pioneers',    ageGroup: '3-4 yrs', ratio: 10, deputyUnitId: 469, ownaRoomName: 'Pioneers' },
+      { id: 'gl_3_4b', name: '3-4 Creators',    ageGroup: '3-4 yrs', ratio: 10, deputyUnitId: 470, ownaRoomName: 'Creators' },
+      { id: 'gl_4_5',  name: '4-5 Achievers',   ageGroup: '4-5 yrs', ratio: 10, deputyUnitId: 471, ownaRoomName: 'Achievers' },
     ],
     floatUnitIds:    [473],
     issUnitIds:      [465],

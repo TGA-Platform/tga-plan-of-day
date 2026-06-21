@@ -8,7 +8,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const user = getUser();
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ backgroundColor: '#F5FAF3' }}>
+    <div className="min-h-screen flex flex-col" style={{ backgroundColor: '#F5FAF3', width: '100%' }}>
       {/* Header */}
       <header
         className="no-print px-5 py-3 flex items-center justify-between border-b"
@@ -66,7 +66,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
+      <main style={{ flex: 1, width: '100%', maxWidth: '1600px', margin: '0 auto', padding: '24px 16px', boxSizing: 'border-box' }}>
         {children}
       </main>
 

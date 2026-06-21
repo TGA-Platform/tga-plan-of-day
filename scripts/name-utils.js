@@ -36,6 +36,8 @@
  */
 export function normaliseForMatching(name) {
   return name
+    // 0. Strip leading NIL:/N\/A:/TBA: placeholder prefixes from Monday.com board names
+    .replace(/^(NIL|N\/A|TBA|TBD):\s*/i, '')
     // 1. Strip anything in brackets — role titles, preferred names, copy markers
     .replace(/\s*[\(\[{][^\)\]{}]*[\)\]{}]\s*/g, ' ')
     // 2. Strip "- <role descriptor>" patterns (e.g. "- Room Leader", "- Maternity Leave")

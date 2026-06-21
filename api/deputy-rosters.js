@@ -2,10 +2,15 @@ const SUPABASE_URL  = 'https://tgxpvzlibquqnldgmwho.supabase.co';
 const SERVICE_KEY   = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
 const DEPUTY_TOKEN  = 'cf73b1628a5e3498d713879bcf07a974';
 
-// Cache is considered fresh for 4 hours.
-// The Tuesday prefetch job writes the full next week upfront so directors
-// always get fast responses when browsing ahead.
-const CACHE_TTL_MS = 4 * 60 * 60 * 1000;
+// Cache TTL: 5 minutes for today (roster changes like sick leave must reflect quickly),
+// 30 minutes for future dates — short enough that if a roster is published/updated
+// it will be live within half an hour without waiting until the next 6am prefetch.
+const CACHE_TTL_TODAY_MS  = 5 * 60 * 1000;        // 5 minutes
+const CACHE_TTL_FUTURE_MS = 30 * 60 * 1000;        // 30 minutes
+
+function getTodayUtc() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -13,14 +18,14 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { date, unitIds } = req.body;
+  const { date, unitIds, force } = req.body;
   if (!date) return res.status(400).json({ error: 'date is required' });
 
   const unitSet = new Set(Array.isArray(unitIds) ? unitIds : []);
 
-  // ── 1. Try Supabase cache ────────────────────────────────────────────────
+  // ── 1. Try Supabase cache (skipped when force=true) ─────────────────────
   let allRosters = null;
-  try {
+  if (!force) try {
     const cacheRes = await fetch(
       `${SUPABASE_URL}/rest/v1/deputy_roster_cache?date=eq.${date}&select=rosters,fetched_at`,
       { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }
@@ -29,7 +34,9 @@ export default async function handler(req, res) {
       const rows = await cacheRes.json();
       if (Array.isArray(rows) && rows.length > 0) {
         const age = Date.now() - new Date(rows[0].fetched_at).getTime();
-        if (age < CACHE_TTL_MS) {
+        const isToday = date === getTodayUtc();
+        const ttl = isToday ? CACHE_TTL_TODAY_MS : CACHE_TTL_FUTURE_MS;
+        if (age < ttl) {
           allRosters = rows[0].rosters; // cache hit ✓
         }
       }

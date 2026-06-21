@@ -256,10 +256,11 @@ export function generateLunchSchedule(
   // ── Pass 3: Float / ISS own lunch breaks ────────────────────────────────
   //
   // Floaters cover room staff all morning/afternoon — they need a break too.
-  // Support staff (AD/Ed Leader) are NOT included here — their breaks are
-  // managed separately outside the lunch scheduler.
+  // ISS staff are excluded: they self-manage their own lunch breaks and should
+  // not consume float availability or appear in the lunch panel.
+  // Support staff (AD/Ed Leader) are also excluded.
 
-  for (const coverer of covererPool.filter(c => c.type !== 'support')) {
+  for (const coverer of covererPool.filter(c => c.type === 'float')) {
     // Earliest the break can start: when they finish covering room staff,
     // but not before their shift or the window opens.
     const earliest = Math.max(

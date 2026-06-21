@@ -37,7 +37,7 @@ const STAFFING_BOARDS = {
 
 import { normaliseForMatching } from './name-utils.js';
 
-const FAKE_WWCC = /^(n\/a|na|none|nil|tba|tbd|-)$/i;
+const FAKE_WWCC = /^(n\/a|na|none|nil|tba|tbd|-|wwc0+|0+)$/i; // also catches wwc000000, 000000 placeholders
 
 function isUnder18(dobStr) {
   if (!dobStr) return false;
@@ -74,10 +74,13 @@ const ROLE_KEYWORDS = /^(room leader|educational leader|director|assistant direc
  */
 function stripRoleSuffix(name) {
   return name
-    .replace(/\s*\([^)]*\)\s*/g, ' ')  // remove anything in (brackets)
-    .replace(/\s*-\s*(Room Leader|Educational Leader|Director|Assistant Director|ECT|Educator|Replacement|Mat Leave|Maternity Leave|Leave|Relief|Casual|Part Time|Full Time|On Hold)[^$]*/i, '')
+    // Strip leading NIL: or N/A: prefixes (placeholder entries)
+    .replace(/^(NIL|N\/A|TBA|TBD):\s*/i, '')
+    .replace(/\s*[\(\[][^\)\]]*[\)\]][\s]*/g, ' ')  // remove anything in (brackets) or [brackets]
     // Strip standalone role abbreviations at end of name: RL, EL, CD, AD, ECT, 2IC
     .replace(/\s+\b(RL|EL|CD|AD|ECT|2IC|HOD|HOE)\b\s*$/i, '')
+    // Strip ALL trailing " - <anything>" suffixes (schedules, nicknames, notes, roles)
+    .replace(/\s+-\s+.+$/i, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -100,7 +103,41 @@ function extractPreferredName(rawName) {
   return content;
 }
 
+// Internal casuals group title pattern — group IDs vary per board, match by title instead
+const INTERNAL_CASUAL_TITLE_RE = /internal\s*casual/i;
+
 async function fetchBoardWwcc(boardId, centreName) {
+  // First: fetch all items in the internal casuals group so we know who they are
+  const casualIds = new Set();
+  try {
+    // Find the internal casuals group by title (group IDs vary per board)
+    const groupMeta = await gql(`{ boards(ids:[${boardId}]) { groups { id title } } }`);
+    const allGroups = groupMeta.data?.boards?.[0]?.groups ?? [];
+    const icGroup = allGroups.find(g => INTERNAL_CASUAL_TITLE_RE.test(g.title));
+    if (icGroup) {
+      let icCursor = null;
+      while (true) {
+        const icCursorArg = icCursor ? `, cursor:"${icCursor}"` : '';
+        const gr = await gql(`{
+          boards(ids:[${boardId}]) {
+            groups(ids:["${icGroup.id}"]) {
+              items_page(limit:200${icCursorArg}) {
+                cursor
+                items { id }
+              }
+            }
+          }
+        }`);
+        const page = gr.data?.boards?.[0]?.groups?.[0]?.items_page;
+        const groupItems = page?.items ?? [];
+        groupItems.forEach(i => casualIds.add(i.id));
+        icCursor = page?.cursor;
+        if (!icCursor) break;
+      }
+    }
+    if (casualIds.size > 0) process.stdout.write(` [${casualIds.size} ICs]`);
+  } catch (e) { /* safe to ignore */ }
+
   const results = [];
   let cursor = null;
   while (true) {
@@ -125,11 +162,13 @@ async function fetchBoardWwcc(boardId, centreName) {
       // Treat placeholder values as no WWCC
       const cleanWwcc  = FAKE_WWCC.test(rawWwcc) ? '' : rawWwcc.replace(/[,\s]+$/, '').trim();
       const under18    = !cleanWwcc && isUnder18(dob);
-      // Skip if no WWCC and not under 18
-      if (!cleanWwcc && !under18) continue;
+      const isInternalCasual = casualIds.has(item.id);
+      // Skip if no WWCC, not under 18, and not an internal casual
+      // Internal casuals are always stored so we can identify them on the floor
+      if (!cleanWwcc && !under18 && !isInternalCasual) continue;
       // Use normaliseForMatching for consistent cleaning on both sides
       const cleanName = stripRoleSuffix(item.name); // still strip for full_name display
-      const norm = normaliseForMatching(item.name);  // aggressive normalise for matching key
+      const norm = normaliseForMatching(cleanName);  // normalise from stripped name so schedule/nickname suffixes don't leak into the key
 
       // If a preferred/nickname is in brackets (e.g. "Xue Yang (Cherise)"),
       // also store an alias record: "Cherise Yang" so Deputy display names match
@@ -140,31 +179,33 @@ async function fetchBoardWwcc(boardId, centreName) {
         const aliasNorm = normaliseForMatching(aliasName);
         if (aliasNorm !== norm) {
           results.push({
-            monday_item_id: `alias_sb_${boardId}_${item.id}`,
-            full_name:      aliasName,
-            full_name_norm: aliasNorm,
-            first_name:     null,
-            last_name:      null,
-            wwcc_number:    cleanWwcc || null,
-            wwcc_expiry:    cleanWwcc ? wwccExpiry : null,
-            under_18:       under18,
-            centre:         centreName,
-            updated_at:     new Date().toISOString(),
+            monday_item_id:     `alias_sb_${boardId}_${item.id}`,
+            full_name:          aliasName,
+            full_name_norm:     aliasNorm,
+            first_name:         null,
+            last_name:          null,
+            wwcc_number:        cleanWwcc || null,
+            wwcc_expiry:        cleanWwcc ? wwccExpiry : null,
+            under_18:           under18,
+            is_internal_casual: isInternalCasual,
+            centre:             centreName,
+            updated_at:         new Date().toISOString(),
           });
         }
       }
 
       results.push({
-        monday_item_id: `sb_${boardId}_${item.id}`,
-        full_name:      cleanName,
-        full_name_norm: norm,
-        first_name:     null,
-        last_name:      null,
-        wwcc_number:    cleanWwcc || null,
-        wwcc_expiry:    cleanWwcc ? wwccExpiry : null,
-        under_18:       under18,
-        centre:         centreName,
-        updated_at:     new Date().toISOString(),
+        monday_item_id:     `sb_${boardId}_${item.id}`,
+        full_name:          cleanName,
+        full_name_norm:     norm,
+        first_name:         null,
+        last_name:          null,
+        wwcc_number:        cleanWwcc || null,
+        wwcc_expiry:        cleanWwcc ? wwccExpiry : null,
+        under_18:           under18,
+        is_internal_casual: isInternalCasual,
+        centre:             centreName,
+        updated_at:         new Date().toISOString(),
       });
     }
     cursor = page.cursor;
@@ -243,6 +284,11 @@ async function main() {
         toUpsert.push(rec);
         centreNew++;
         newCount++;
+      } else if (rec.is_internal_casual && !ex.is_internal_casual) {
+        // Existing record needs IC flag set — person is an IC at this centre
+        toUpsert.push({ ...rec, monday_item_id: ex.monday_item_id });
+        centreUpdated++;
+        updatedCount++;
       } else if (rec.under_18 && !ex.under_18) {
         // Staffing board knows this person is under 18; update existing record
         toUpsert.push({ ...rec, monday_item_id: ex.monday_item_id, wwcc_number: null, wwcc_expiry: null });

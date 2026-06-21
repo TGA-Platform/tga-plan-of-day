@@ -25,7 +25,7 @@ export default async function handler(req, res) {
   // Fetch ALL records in two pages to work around Supabase's 1000-row default limit.
   // Order: under_18 DESC first (so exempt-staff records are never cut off),
   // then by wwcc_expiry DESC (latest valid WWCC wins dedup within same name).
-  const base = `${SUPABASE_URL}/rest/v1/staff_wwcc?select=full_name,full_name_norm,wwcc_number,wwcc_expiry,under_18,centre&order=under_18.desc.nullslast,wwcc_expiry.desc.nullslast`;
+  const base = `${SUPABASE_URL}/rest/v1/staff_wwcc?select=monday_item_id,full_name,full_name_norm,wwcc_number,wwcc_expiry,under_18,is_internal_casual,centre&order=under_18.desc.nullslast,wwcc_expiry.desc.nullslast`;
 
   const [r1, r2] = await Promise.all([
     fetch(`${base}&limit=1000&offset=0`,    { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }),
@@ -36,16 +36,36 @@ export default async function handler(req, res) {
 
   const all = [...(await r1.json()), ...(r2.ok ? await r2.json() : [])];
 
-  // Deduplicate: since results are ordered by expiry DESC, first occurrence
-  // per normalised name is always the latest (best) record.
-  const seen = new Set();
-  const rows = [];
+  // Deduplicate by full_name_norm.
+  // Preference order: staffing board records (monday_item_id starts with 'sb_')
+  // beat onboarding board records (plain numeric IDs), and real WWCC beats
+  // placeholder/null. Within same source, expiry DESC (latest wins).
+  // Strategy: collect all rows per norm, then pick the best one.
+  const byNorm = new Map();
   for (const row of all) {
-    if (!seen.has(row.full_name_norm)) {
-      seen.add(row.full_name_norm);
-      rows.push(row);
+    const norm = row.full_name_norm;
+    if (!norm) continue;
+    const existing = byNorm.get(norm);
+    if (!existing) { byNorm.set(norm, row); continue; }
+    // Prefer staffing board over onboarding board
+    const newIsSb  = (row.monday_item_id || '').startsWith('sb_') || (row.monday_item_id || '').startsWith('alias_sb_');
+    const prevIsSb = (existing.monday_item_id || '').startsWith('sb_') || (existing.monday_item_id || '').startsWith('alias_sb_');
+    if (newIsSb && !prevIsSb) { byNorm.set(norm, row); continue; }
+    if (!newIsSb && prevIsSb) continue;
+    // Same source tier — prefer real WWCC over placeholder
+    const newHasWwcc  = row.wwcc_number && !/^(wwc0+|0+)$/i.test(row.wwcc_number);
+    const prevHasWwcc = existing.wwcc_number && !/^(wwc0+|0+)$/i.test(existing.wwcc_number);
+    if (newHasWwcc && !prevHasWwcc) { byNorm.set(norm, row); continue; }
+    // Both real — keep later expiry (already ordered DESC so first seen wins)
+  }
+  // Second pass: if ANY row for this norm has is_internal_casual=true, propagate it to the winner
+  for (const [norm, winner] of byNorm.entries()) {
+    if (!winner.is_internal_casual) {
+      const hasIcAnywhere = all.some(r => r.full_name_norm === norm && r.is_internal_casual);
+      if (hasIcAnywhere) winner.is_internal_casual = true;
     }
   }
+  const rows = [...byNorm.values()];
 
   // If caller requested specific names, filter down
   if (namesParam) {

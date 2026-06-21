@@ -1,7 +1,7 @@
-﻿import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { CENTRES } from '../config';
 
-// 24h → 12h display: '14:30' → '2:30pm', '07:00' → '7am'
+// 24h ? 12h display: '14:30' ? '2:30pm', '07:00' ? '7am'
 function to12h(hhmm: string): string {
   if (!hhmm) return '';
   const [h, m] = hhmm.split(':').map(Number);
@@ -10,8 +10,9 @@ function to12h(hhmm: string): string {
   return m === 0 ? `${h12}${ampm}` : `${h12}:${String(m).padStart(2, '0')}${ampm}`;
 }
 import type { Room, AttendanceChild, RosteredStaff } from '../types';
+import { enqueueSave } from '../utils/syncQueue';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// --- Types --------------------------------------------------------------------
 
 interface FamilyGroupingConfig {
   id: string;
@@ -22,13 +23,36 @@ interface FamilyGroupingConfig {
   heldInRoom?: string;  // which room the grouping is physically held in
 }
 
+interface RoomVisitor {
+  id: string;           // unique per entry
+  name: string;         // display name (free text or from dropdown)
+  enteredAt: string;    // HH:MM
+  exitedAt?: string;    // HH:MM — set when they leave
+}
+
 interface RatioCheckSession {
   cells: Record<string, { children: number }>; // "HH:MM:roomId"
   staffAvailableOverride: Record<string, number>; // "HH:MM"
   comments: Record<string, string>; // "HH:MM"
   familyGroupings: FamilyGroupingConfig[];
   staffMoves: Record<string, string>; // "${empId}:${slot}" ? roomId | "none" | "__float__"
-  staffTimeOverrides: Record<string, { start: string; end: string }>; // "${empId}" ? custom times
+  staffTimeOverrides: Record<string, {
+    start: string;
+    end: string;
+    lunchStart?: string;  // HH:MM actual/planned lunch start
+    lunchEnd?: string;    // HH:MM actual/planned lunch end
+    source?: 'manual' | 'deputy'; // how was this set?
+    isOvertime?: boolean; // staff staying back
+    comment?: string;     // free-text note
+  }>; // "${empId}" ? custom times
+  roomVisitors: Record<string, RoomVisitor[]>; // "slot:roomId" ? visitor entries
+}
+
+export interface LunchAlert {
+  employeeId: number;
+  employeeName: string;
+  scheduledLunch: string;
+  minutesOverdue: number;
 }
 
 interface Props {
@@ -37,6 +61,7 @@ interface Props {
   rooms: Room[];
   children: AttendanceChild[];
   rosters: RosteredStaff[];
+  onLunchAlerts?: (alerts: LunchAlert[]) => void;
 }
 
 // --- Constants ----------------------------------------------------------------
@@ -70,7 +95,8 @@ const EMPTY_SESSION: RatioCheckSession = {
   comments: {},
   familyGroupings: [],
   staffMoves: {},
-  staffTimeOverrides: {},
+  staffTimeOverrides: {} as Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy'; isOvertime?: boolean; comment?: string }>,
+  roomVisitors: {},
 };
 
 // --- Ratio calculation --------------------------------------------------------
@@ -185,22 +211,60 @@ function hexToRgba(hex: string, alpha: number): string {
 
 // --- Component ----------------------------------------------------------------
 
-export default function RatioCheckPanel({ centreId, date, rooms, children, rosters }: Props) {
+export default function RatioCheckPanel({ centreId, date, rooms, children, rosters,
+  onLunchAlerts,
+}: Props) {
   const [activeSession, setActiveSession] = useState<'morning' | 'midday' | 'afternoon'>('morning');
   const [morningData,   setMorningData]   = useState<RatioCheckSession>(EMPTY_SESSION);
   const [middayData,    setMiddayData]    = useState<RatioCheckSession>(EMPTY_SESSION);
   const [afternoonData, setAfternoonData] = useState<RatioCheckSession>(EMPTY_SESSION);
   const [floatScheds,         setFloatScheds]         = useState<any[]>([]);
-  const [dayAllocations,      setDayAllocations]      = useState<Record<number,string>>({}); // from staff-allocations (Plan view drags)
+  const [dayAllocations,      setDayAllocations]      = useState<Record<number,string>>({});
+
+  // -- Lunch break overdue alerts --------------------------------------------
+  useEffect(() => {
+    if (!onLunchAlerts) return;
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const todayStrLocal = now.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+    if (date !== todayStrLocal) { onLunchAlerts([]); return; }
+    // Merge overrides across all three session panels to catch any set lunch time
+    const allOverrides = { ...morningData.staffTimeOverrides, ...middayData.staffTimeOverrides, ...afternoonData.staffTimeOverrides };
+    const alerts: LunchAlert[] = [];
+    for (const r of rosters) {
+      const override = allOverrides[String(r.employeeId)];
+      // If Deputy/manual already shows lunch started — no alert
+      if (override?.lunchStart) continue;
+      const start = rosterTimeToMins(r.startTime);
+      const end   = rosterTimeToMins(r.endTime);
+      if (start === null || end === null || end === 0) continue;
+      if ((end - start) < 300) continue; // shifts < 5h don't need lunch
+      // Expected lunch = midpoint of shift rounded to nearest 30 min
+      const midMins = Math.round((start + end) / 2 / 30) * 30;
+      const overdueBy = nowMins - midMins;
+      if (overdueBy >= 15) {
+        const hh = String(Math.floor(midMins / 60)).padStart(2, '0');
+        const mm = String(midMins % 60).padStart(2, '0');
+        alerts.push({ employeeId: r.employeeId, employeeName: r.employeeName, scheduledLunch: hh + ':' + mm, minutesOverdue: overdueBy });
+      }
+    }
+    onLunchAlerts(alerts);
+  }, [morningData.staffTimeOverrides, middayData.staffTimeOverrides, afternoonData.staffTimeOverrides, rosters, date, onLunchAlerts]);
   const [liveChildren,        setLiveChildren]        = useState<AttendanceChild[]>([]); // real-time attendance for this date
   const [historicalChildren, setHistoricalChildren] = useState<AttendanceChild[]>([]);
   const [histDate,           setHistDate]           = useState<string>('');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [attendanceRefreshing, setAttendanceRefreshing] = useState(false);
+  const [lastAttendanceRefresh, setLastAttendanceRefresh] = useState<Date | null>(null);
   const [editingCell, setEditingCell] = useState<string | null>(null);
   // Single global time editor modal — one at a time, avoids duplicate popovers
   const [timeEditorModal, setTimeEditorModal] = useState<{ empId: number; name: string; rosterStart: string; rosterEnd: string } | null>(null);
   const [timeEditorStart, setTimeEditorStart] = useState('');
   const [timeEditorEnd, setTimeEditorEnd] = useState('');
+  const [timeEditorLunchStart, setTimeEditorLunchStart] = useState('');
+  const [timeEditorLunchEnd, setTimeEditorLunchEnd] = useState('');
+  const [timeEditorOvertime, setTimeEditorOvertime] = useState(false);
+  const [timeEditorComment, setTimeEditorComment] = useState('');
   const [fgPanelOpen, setFgPanelOpen] = useState(false);
   const [editingFgId, setEditingFgId] = useState<string | null>(null);
   const [fgPopoverSlot, setFgPopoverSlot] = useState<string | null>(null);
@@ -209,7 +273,141 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [dragOver, setDragOver] = useState<string | null>(null); // "roomId:slot" | "available:slot"
   const [touchSelected, setTouchSelected] = useState<{ empId: number; slot: string; source: string } | null>(null);
 
-  // Time overrides are shared across all sessions — merge all three (any session's value wins)
+  // Staff Finish Times panel state
+  const [showFinishPanel, setShowFinishPanel] = useState(false);
+  const [markedFinished, setMarkedFinished] = useState<Set<number>>(new Set());
+
+  // Visitor log modal state
+  const [visitorModal, setVisitorModal] = useState<{ slot: string; roomId: string; roomName: string } | null>(null);
+  const [visitorName, setVisitorName] = useState('');
+  const [visitorTime, setVisitorTime] = useState('');
+  const [visitorExitTime, setVisitorExitTime] = useState('');
+  const [visitorExitModalState, setVisitorExitModalState] = useState<{ slot: string; roomId: string; roomName: string; visitorId: string; visitorName: string; exitTime: string } | null>(null);
+  const [showActivityCols, setShowActivityCols] = useState(false); // Prog/Lunch/Clean hidden by default to save space
+
+  // --- Deputy actual timesheets — poll every 5 minutes -----------------------
+  const allUnitIds = useMemo(() => {
+    const centre = CENTRES.find(c => c.id === centreId);
+    if (!centre) return [];
+    return [
+      ...centre.rooms.map(r => r.deputyUnitId),
+      ...(centre.floatUnitIds ?? []),
+      ...(centre.issUnitIds ?? []),
+      ...(centre.nonRatioUnitIds ?? []),
+    ].filter(Boolean);
+  }, [centreId]);
+
+  useEffect(() => {
+    if (!date || allUnitIds.length === 0) return;
+
+    // Poll on today's date every 5 min (live clock-ins); for past dates, fetch once (approved timesheets)
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
+    const isToday = date === today;
+    // Don't fetch future dates — no timesheets yet
+    if (date > today) return;
+
+    async function fetchActuals() {
+      try {
+        const r = await fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`);
+        if (!r.ok) return;
+        const actuals: Array<{
+          employeeId: number; actualStart: string | null; actualEnd: string | null;
+          isInProgress: boolean; isRealTime: boolean;
+          breaks: Array<{ breakStart: string | null; breakEnd: string | null; type: string; status: string }>;
+        }> = await r.json();
+
+        // Merge actuals into time overrides — manual overrides take precedence
+        for (const ts of actuals) {
+          // Accept both real-time clock-ins (kiosk/app) AND manager-approved timesheets
+          // The backend already filters to entries with actual StartTimeLocalized set,
+          // so everything returned here has genuine actual times.
+          if (!ts.actualStart) continue; // no actual times available — skip
+          const key = String(ts.employeeId);
+
+          setMorningData(prev => {
+            const existing = prev.staffTimeOverrides[key];
+            // Don't overwrite manual overrides
+            if (existing?.source === 'manual') return prev;
+
+            const mealBreak = ts.breaks.find(b => b.type === 'meal');
+            const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
+              ? mealBreak.breakStart ?? undefined : undefined;
+            const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
+
+            const newOverride = {
+              start: ts.actualStart ?? existing?.start ?? '',
+              end:   (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (existing?.end ?? ''),
+              lunchStart: lunchStart ?? existing?.lunchStart,
+              lunchEnd:   lunchEnd   ?? existing?.lunchEnd,
+              source: 'deputy' as const,
+            };
+            // Only update if something changed
+            if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
+            const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
+            save('morning', next);
+            return next;
+          });
+          setMiddayData(prev => {
+            const existing = prev.staffTimeOverrides[key];
+            if (existing?.source === 'manual') return prev;
+            const mealBreak = ts.breaks.find(b => b.type === 'meal');
+            const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
+              ? mealBreak.breakStart ?? undefined : undefined;
+            const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
+            const newOverride = {
+              start: ts.actualStart ?? existing?.start ?? '',
+              end:   (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (existing?.end ?? ''),
+              lunchStart: lunchStart ?? existing?.lunchStart,
+              lunchEnd:   lunchEnd   ?? existing?.lunchEnd,
+              source: 'deputy' as const,
+            };
+            if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
+            const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
+            save('midday', next);
+            return next;
+          });
+          setAfternoonData(prev => {
+            const existing = prev.staffTimeOverrides[key];
+            if (existing?.source === 'manual') return prev;
+            const mealBreak = ts.breaks.find(b => b.type === 'meal');
+            const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
+              ? mealBreak.breakStart ?? undefined : undefined;
+            const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
+            const newOverride = {
+              start: ts.actualStart ?? existing?.start ?? '',
+              end:   (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (existing?.end ?? ''),
+              lunchStart: lunchStart ?? existing?.lunchStart,
+              lunchEnd:   lunchEnd   ?? existing?.lunchEnd,
+              source: 'deputy' as const,
+            };
+            if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
+            const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
+            save('afternoon', next);
+            return next;
+          });
+        }
+      } catch { /* network error — fail silently */ }
+    }
+
+    fetchActuals(); // immediate first fetch
+    if (!isToday) return; // past dates: single fetch only (approved timesheets don't change)
+    const interval = setInterval(fetchActuals, 5 * 60 * 1000); // today: poll every 5 min for live clock-ins
+    return () => clearInterval(interval);
+  }, [date, allUnitIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  // --- End Deputy polling ---------------------------------------------------
+
+  // Family groupings are shared across all sessions — merge by id so FGs created in any session are visible everywhere
+  const sharedFamilyGroupings = useMemo(() => {
+    const allById = new Map<string, FamilyGroupingConfig>();
+    for (const d of [morningData, middayData, afternoonData]) {
+      for (const fg of (d.familyGroupings ?? [])) {
+        allById.set(fg.id, { ...(allById.get(fg.id) ?? {}), ...fg } as FamilyGroupingConfig);
+      }
+    }
+    return [...allById.values()];
+  }, [morningData.familyGroupings, middayData.familyGroupings, afternoonData.familyGroupings]);
+
+    // Time overrides are shared across all sessions — merge all three (any session's value wins)
   const sharedTimeOverrides = useMemo(() => ({
     ...morningData.staffTimeOverrides,
     ...middayData.staffTimeOverrides,
@@ -223,12 +421,26 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // -- Load saved data --------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
+    // Cancel any pending auto-save from the previous date before loading new data.
+    // Also reset the user-edited guard so the fresh load can't overwrite new data.
+    if (autoSaveTimer.current) { clearTimeout(autoSaveTimer.current); autoSaveTimer.current = null; }
+    pendingSave.current = null;
+    hasUserEdited.current = false;
     async function load() {
       try {
         const r = await fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centreId)}&date=${date}`);
         if (!r.ok || cancelled) return;
         const rows: { session: string; data: RatioCheckSession & { familyGroupingSlots?: string[]; familyGroupingRooms?: string[] } }[] = await r.json();
         if (cancelled) return;
+        // Reset sessions that have no saved data for this date so stale data
+        // from a previous date doesn't linger. Done here (after fetch) not before,
+        // so we never trigger an auto-save of empty data.
+        const hasMorning   = rows.some(r => r.session === 'morning');
+        const hasMidday    = rows.some(r => r.session === 'midday');
+        const hasAfternoon = rows.some(r => r.session === 'afternoon');
+        if (!hasMorning)   setMorningData(EMPTY_SESSION);
+        if (!hasMidday)    setMiddayData(EMPTY_SESSION);
+        if (!hasAfternoon) setAfternoonData(EMPTY_SESSION);
         for (const row of rows) {
           // Migration: convert old single-FG format to new multi-FG format
           const legacyFG: FamilyGroupingConfig[] = (row.data as { familyGroupingSlots?: string[]; familyGroupingRooms?: string[] }).familyGroupingSlots?.length ?? 0 > 0 ? [{
@@ -245,6 +457,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             familyGroupings: row.data.familyGroupings ?? legacyFG,
             staffMoves: row.data.staffMoves ?? {},
             staffTimeOverrides: row.data.staffTimeOverrides ?? {},
+            roomVisitors: (row.data as any).roomVisitors ?? {},
           };
           if (row.session === 'morning')   setMorningData(d);
           if (row.session === 'midday')    setMiddayData(d);
@@ -269,6 +482,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               predicted_sign_out: r.predicted_sign_out ?? null,
               age: r.age ?? null, ageMonths: 0,
             })));
+            if (!cancelled) setLastAttendanceRefresh(new Date());
           }
         }
       } catch { /* offline */ }
@@ -306,26 +520,50 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return () => { cancelled = true; };
   }, [centreId, date]);
 
+  // -- Periodic live attendance refresh (every 2 minutes) --------------------
+  // Keeps child counts current as children sign in throughout the day.
+  // This is especially important when Family Grouping is set up in advance �
+  // FG cells auto-populate from liveChildren, so they need fresh data.
+  const refreshLiveAttendance = useCallback(async () => {
+    if (!centreId || !date) return;
+    setAttendanceRefreshing(true);
+    try {
+      const centre = CENTRES.find(ce => ce.id === centreId);
+      const campusName = (centre as any)?.ownaName ?? centre?.name ?? centreId;
+      const lr = await fetch(`/api/attendance?campus=${encodeURIComponent(campusName)}&date=${date}`);
+      if (lr.ok) {
+        const rows = await lr.json();
+        if (Array.isArray(rows)) {
+          setLiveChildren(rows.map((r: any) => ({
+            child_name: r.child_name ?? '', room: r.room ?? '',
+            sign_in: r.sign_in ?? null, sign_out: r.sign_out ?? null,
+            predicted_sign_out: r.predicted_sign_out ?? null,
+            age: r.age ?? null, ageMonths: 0,
+          })));
+          setLastAttendanceRefresh(new Date());
+        }
+      }
+    } catch { /* offline */ }
+    setAttendanceRefreshing(false);
+  }, [centreId, date]);
+
+  useEffect(() => {
+    const interval = setInterval(refreshLiveAttendance, 2 * 60 * 1000); // every 2 minutes
+    return () => clearInterval(interval);
+  }, [refreshLiveAttendance]);
+
   // -- Auto-save --------------------------------------------------------------
   const save = useCallback(async (session: 'morning' | 'midday' | 'afternoon', data: RatioCheckSession) => {
     if (!centreId || !date) return; // guard: don't attempt save without required props
     setSaveStatus('saving');
-    try {
-      const payload = JSON.stringify({ centre_id: centreId, date, session, data });
-      const r = await fetch('/api/ratio-check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload,
-      });
-      if (!r.ok) {
-        const errText = await r.text().catch(() => `HTTP ${r.status}`);
-        console.error('[RatioCheck] save failed:', errText);
-        setSaveStatus('error');
-      } else {
-        setSaveStatus('saved');
-      }
-    } catch (err) {
-      console.error('[RatioCheck] save exception:', err);
+    const result = await enqueueSave('/api/ratio-check', { centre_id: centreId, date, session, data });
+    if (result === 'saved') {
+      setSaveStatus('saved');
+    } else if (result === 'queued') {
+      // Saved locally, will sync when Supabase comes back
+      setSaveStatus('saved'); // show saved — it IS saved locally and will sync
+      console.warn('[RatioCheck] Supabase unavailable — queued for retry');
+    } else {
       setSaveStatus('error');
     }
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -334,26 +572,37 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   // -- Computed children counts (auto-populated) ------------------------------
   // Computed children counts for Ratio Check:
-  // Priority: 1. Live attendance for this date (real-time)
+  // Priority: 1. Live attendance for this date (real-time) — if live data is loaded,
+  //              use it as-is (even if 0 = no children signed in yet).
+  //              Only fall back to prop/hist if NO live data has loaded at all.
   //           2. Prop children (parent-provided, may be historical in plan mode)
   //           3. Historical same-day-last-week fallback
+  const hasLiveData = liveChildren.length > 0;
   const autoChildCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const slot of slots) {
       for (const room of rooms) {
-        const live = countChildrenAtSlot(liveChildren, room, slot);
-        const prop = countChildrenAtSlot(children, room, slot);
-        const hist = countChildrenAtSlot(historicalChildren, room, slot);
-        counts[cellKey(slot, room.id)] = live > 0 ? live : (prop > 0 ? prop : hist);
+        if (hasLiveData) {
+          // Live data loaded — trust it exactly (0 means 0 children signed in yet)
+          counts[cellKey(slot, room.id)] = countChildrenAtSlot(liveChildren, room, slot);
+        } else {
+          // No live data yet — fall back to prop then historical
+          const prop = countChildrenAtSlot(children, room, slot);
+          const hist = countChildrenAtSlot(historicalChildren, room, slot);
+          counts[cellKey(slot, room.id)] = prop > 0 ? prop : hist;
+        }
       }
     }
     return counts;
-  }, [liveChildren, children, historicalChildren, rooms, slots]);
+  }, [liveChildren, hasLiveData, children, historicalChildren, rooms, slots]);
 
   // -- Computed: staff present at each slot -----------------------------------
   const staffAtSlotMap = useMemo(() => {
     const map: Record<string, RosteredStaff[]> = {};
-    for (const slot of slots) {
+    // Use allSlots (not just current session) so offFloorStaffBySlot can find
+    // staff objects for any session's lunch/programming blocks
+    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    for (const slot of allSlots) {
       const slotMins = slotToMins(slot);
       map[slot] = rosters.filter(r => {
         // Use time override if set, otherwise fall back to raw roster times
@@ -490,7 +739,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   /** Find which FG (if any) a room belongs to at a given slot */
   function getFGForRoomAtSlot(slot: string, roomId: string): FamilyGroupingConfig | null {
-    return sessionData.familyGroupings.find(fg =>
+    return sharedFamilyGroupings.find(fg =>
       fg.slots.includes(slot) &&
       (fg.roomIds.length === 0 || fg.roomIds.includes(roomId))
     ) ?? null;
@@ -498,7 +747,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   /** Get FGs active at a slot */
   function getFGsAtSlot(slot: string): FamilyGroupingConfig[] {
-    return sessionData.familyGroupings.filter(fg => fg.slots.includes(slot));
+    return sharedFamilyGroupings.filter(fg => fg.slots.includes(slot));
   }
 
   /** Combined required for a specific FG at a slot */
@@ -541,13 +790,19 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   /** Count staff physically on the floor - in a room - at this slot.
    *  Excludes anyone in Additional Duties, unassigned floats, or off-floor.
+   *  Includes active visitors (e.g. AD passing through).
    *  Manual override (staffAvailableOverride) still takes priority if set. */
   function getStaffOnFloor(slot: string): number {
     const empIds = new Set<number>();
     for (const room of rooms) {
       getStaffForRoom(slot, room).forEach(s => empIds.add(s.employeeId));
     }
-    return empIds.size;
+    // Add active visitors across all rooms at this slot
+    let visitorCount = 0;
+    for (const room of rooms) {
+      visitorCount += countActiveVisitors(slot, room.id);
+    }
+    return empIds.size + visitorCount;
   }
 
   function getStaffAvailable(slot: string): number {
@@ -572,7 +827,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const available = staffAtSlotMap[slot] ?? [];
     const offFloor = offFloorBySlot[slot] ?? new Set<number>();
     const floatCovers = (floatCoveringRoomBySlot[slot] ?? {})[room.id] ?? [];
-    // Exclude anyone manually placed in an activity column
+    // Exclude anyone manually placed in an activity column or float pool
     const inActivity = new Set<number>(
       available.filter(s => {
         const mv = sessionData.staffMoves[`${s.employeeId}:${slot}`];
@@ -626,6 +881,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       const moveKey = `${r.employeeId}:${slot}`;
       const move = sessionData.staffMoves[moveKey];
       if (move !== undefined) return !roomIds.has(move) && !activityMoves.has(move);
+      // Native float unit staff belong in float pool, not additional duties
+      const centreConfig2 = CENTRES.find(c => c.id === centreId);
+      const floatUnitIds2 = new Set(centreConfig2?.floatUnitIds ?? []);
+      if (floatUnitIds2.has(r.unitId)) return false;
       return !roomUnitIds.has(r.unitId);
     });
   }
@@ -665,40 +924,33 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   // -- Family Grouping helpers ------------------------------------------------
 
+  /** Write FG changes to ALL three sessions so groupings persist across morning/midday/afternoon */
+  function syncFGToAllSessions(updater: (fgs: FamilyGroupingConfig[]) => FamilyGroupingConfig[]) {
+    hasUserEdited.current = true;
+    setMorningData(prev =>   { const next = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; save('morning',   next); return next; });
+    setMiddayData(prev =>    { const next = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; save('midday',    next); return next; });
+    setAfternoonData(prev => { const next = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; save('afternoon', next); return next; });
+  }
+
   function addFamilyGrouping() {
-    const idx = sessionData.familyGroupings.length % FG_COLOURS.length;
+    const idx = sharedFamilyGroupings.length % FG_COLOURS.length;
     const newFG: FamilyGroupingConfig = {
       id: Math.random().toString(36).slice(2, 9),
-      label: `FG ${sessionData.familyGroupings.length + 1}`,
+      label: `FG ${sharedFamilyGroupings.length + 1}`,
       roomIds: [],
       slots: [],
       color: FG_COLOURS[idx],
     };
-    setSessionData(prev => {
-      const next = { ...prev, familyGroupings: [...prev.familyGroupings, newFG] };
-      scheduleAutoSave(next);
-      return next;
-    });
+    syncFGToAllSessions(fgs => [...fgs.filter(f => f.id !== newFG.id), newFG]);
     setEditingFgId(newFG.id);
   }
 
   function updateFG(id: string, patch: Partial<FamilyGroupingConfig>) {
-    setSessionData(prev => {
-      const next = {
-        ...prev,
-        familyGroupings: prev.familyGroupings.map(fg => fg.id === id ? { ...fg, ...patch } : fg),
-      };
-      scheduleAutoSave(next);
-      return next;
-    });
+    syncFGToAllSessions(fgs => fgs.map(fg => fg.id === id ? { ...fg, ...patch } : fg));
   }
 
   function deleteFG(id: string) {
-    setSessionData(prev => {
-      const next = { ...prev, familyGroupings: prev.familyGroupings.filter(fg => fg.id !== id) };
-      scheduleAutoSave(next);
-      return next;
-    });
+    syncFGToAllSessions(fgs => fgs.filter(fg => fg.id !== id));
     if (editingFgId === id) setEditingFgId(null);
   }
 
@@ -721,10 +973,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   /** Add a new FG with just this slot in it */
   function addFamilyGroupingWithSlot(slot: string) {
-    const idx = sessionData.familyGroupings.length % FG_COLOURS.length;
+    const idx = sharedFamilyGroupings.length % FG_COLOURS.length;
     const newFG: FamilyGroupingConfig = {
       id: Math.random().toString(36).slice(2, 9),
-      label: `FG ${sessionData.familyGroupings.length + 1}`,
+      label: `FG ${sharedFamilyGroupings.length + 1}`,
       roomIds: [],
       slots: [slot],
       color: FG_COLOURS[idx],
@@ -752,8 +1004,22 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   function moveStaff(empId: number, slot: string, targetRoomId: string) {
     setSessionData(prev => {
-      const key = `${empId}:${slot}`;
-      const next = { ...prev, staffMoves: { ...prev.staffMoves, [key]: targetRoomId } };
+      const newMoves = { ...prev.staffMoves, [`${empId}:${slot}`]: targetRoomId };
+
+      // Propagate to subsequent slots in this session where staff is present and no override exists
+      const slotIdx = slots.indexOf(slot);
+      if (slotIdx !== -1) {
+        for (let i = slotIdx + 1; i < slots.length; i++) {
+          const futureSlot = slots[i];
+          const futureKey = `${empId}:${futureSlot}`;
+          const staffPresent = (staffAtSlotMap[futureSlot] ?? []).some(s => s.employeeId === empId);
+          if (staffPresent && newMoves[futureKey] === undefined) {
+            newMoves[futureKey] = targetRoomId;
+          }
+        }
+      }
+
+      const next = { ...prev, staffMoves: newMoves };
       scheduleAutoSave(next);
       return next;
     });
@@ -786,7 +1052,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   }
 
   /** Get effective times for a staff member: shared override if set, else natural roster times */
-  function getStaffTime(s: RosteredStaff): { start: string; end: string } {
+  function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
     if (override) return override;
     return {
@@ -795,12 +1061,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     };
   }
 
-  /** Write time override to ALL three sessions so it persists across morning/midday/afternoon */
-  function updateStaffTimeOverride(empId: number, start: string, end: string) {
+  /** Write time override to ALL three sessions so it persists across morning/midday/afternoon.
+   *  source='manual' prevents Deputy polling from overwriting it. */
+  function updateStaffTimeOverride(empId: number, start: string, end: string, lunchStart?: string, lunchEnd?: string, isOvertime?: boolean, comment?: string) {
     const key = String(empId);
     const applyOverride = (prev: RatioCheckSession): RatioCheckSession => ({
       ...prev,
-      staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: { start, end } },
+      staffTimeOverrides: {
+        ...prev.staffTimeOverrides,
+        [key]: { start, end, lunchStart, lunchEnd, source: 'manual' as const, isOvertime, comment },
+      },
     });
     setMorningData(prev => { const next = applyOverride(prev); save('morning', next); return next; });
     setMiddayData(prev =>  { const next = applyOverride(prev);  save('midday',  next); return next; });
@@ -820,14 +1090,120 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     setAfternoonData(prev =>{ const next = removeOverride(prev); save('afternoon',next); return next; });
   }
 
+  // -- Visitor log helpers --------------------------------------------------
+
+  function getVisitorKey(slot: string, roomId: string) { return `${slot}:${roomId}`; }
+
+  function getVisitorsForSlotRoom(slot: string, roomId: string): RoomVisitor[] {
+    return sessionData.roomVisitors?.[getVisitorKey(slot, roomId)] ?? [];
+  }
+
+  /** Count visitors currently present at a slot in a room (entered = slotMins, not yet exited or exit > slotMins) */
+  function countActiveVisitors(slot: string, roomId: string): number {
+    const slotMins = slotToMins(slot);
+    return getVisitorsForSlotRoom(slot, roomId).filter(v => {
+      const entered = slotToMins(v.enteredAt);
+      if (entered > slotMins) return false;
+      if (v.exitedAt) {
+        const exited = slotToMins(v.exitedAt);
+        return exited > slotMins;
+      }
+      return true; // still present
+    }).length;
+  }
+
+  function addVisitor(slot: string, roomId: string, name: string, enteredAt: string, exitedAt?: string) {
+    const key = getVisitorKey(slot, roomId);
+    const newVisitor: RoomVisitor = {
+      id: Math.random().toString(36).slice(2, 9),
+      name: name.trim(),
+      enteredAt,
+      exitedAt,
+    };
+    setSessionData(prev => {
+      const existing = prev.roomVisitors?.[key] ?? [];
+      const next: RatioCheckSession = {
+        ...prev,
+        roomVisitors: { ...(prev.roomVisitors ?? {}), [key]: [...existing, newVisitor] },
+      };
+      scheduleAutoSave(next);
+      return next;
+    });
+  }
+
+  function setVisitorExit(slot: string, roomId: string, visitorId: string, exitedAt: string) {
+    const key = getVisitorKey(slot, roomId);
+    setSessionData(prev => {
+      const existing = prev.roomVisitors?.[key] ?? [];
+      const next: RatioCheckSession = {
+        ...prev,
+        roomVisitors: {
+          ...(prev.roomVisitors ?? {}),
+          [key]: existing.map(v => v.id === visitorId ? { ...v, exitedAt } : v),
+        },
+      };
+      scheduleAutoSave(next);
+      return next;
+    });
+  }
+
+  function removeVisitor(slot: string, roomId: string, visitorId: string) {
+    const key = getVisitorKey(slot, roomId);
+    setSessionData(prev => {
+      const existing = prev.roomVisitors?.[key] ?? [];
+      const next: RatioCheckSession = {
+        ...prev,
+        roomVisitors: {
+          ...(prev.roomVisitors ?? {}),
+          [key]: existing.filter(v => v.id !== visitorId),
+        },
+      };
+      scheduleAutoSave(next);
+      return next;
+    });
+  }
+
+  /** Open visitor modal pre-filled with actual current wall-clock time */
+  function openVisitorModal(slot: string, roomId: string, roomName: string) {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const nowTime = `${hh}:${mm}`;
+    setVisitorModal({ slot, roomId, roomName });
+    setVisitorName('');
+    setVisitorTime(nowTime); // prefill with actual current time
+    setVisitorExitTime('');
+  }
+
+  /** Open visitor exit modal for a specific visitor */
+  function openVisitorExitModal(slot: string, roomId: string, roomName: string, visitorId: string, visitorNameStr: string) {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const nowTime = `${hh}:${mm}`;
+    setVisitorExitModalState({ slot, roomId, roomName, visitorId, visitorName: visitorNameStr, exitTime: nowTime });
+  }
+
+  /** Confirm adding a visitor from the modal */
+  function confirmAddVisitor() {
+    if (!visitorModal || !visitorName.trim()) return;
+    addVisitor(visitorModal.slot, visitorModal.roomId, visitorName, visitorTime || visitorModal.slot, visitorExitTime || undefined);
+    setVisitorModal(null);
+  }
+
   const pendingSave = useRef<{ session: 'morning' | 'midday' | 'afternoon'; data: RatioCheckSession } | null>(null);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guard: never auto-save until the user has actually made a change.
+  // This prevents load/reset cycles (e.g. on date change or deploy) from
+  // overwriting saved data with empty state.
+  const hasUserEdited = useRef(false);
 
   function scheduleAutoSave(data: RatioCheckSession) {
+    hasUserEdited.current = true; // mark that user has made at least one edit
     pendingSave.current = { session: activeSession, data };
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
-      if (pendingSave.current) {
+      if (pendingSave.current && hasUserEdited.current) {
         save(pendingSave.current.session, pendingSave.current.data);
         pendingSave.current = null;
       }
@@ -836,6 +1212,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   // -- Print ------------------------------------------------------------------
   function handlePrint() { window.print(); }
+
+  // ISS unit IDs for badge display on chips
+  const issUnitIdsSet = useMemo(() => new Set(CENTRES.find(c => c.id === centreId)?.issUnitIds ?? []), [centreId]);
 
   // -- Styles ----------------------------------------------------------------
   const TGA_GREEN = '#2d5c18';
@@ -854,8 +1233,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const thStyle: React.CSSProperties = {
     backgroundColor: TGA_GREEN,
     color: 'white',
-    padding: '3px 5px',
-    fontSize: '10px',
+    padding: '2px 3px',
+    fontSize: '9px',
     fontWeight: 600,
     whiteSpace: 'nowrap',
     border: '1px solid #1a3a0a',
@@ -864,11 +1243,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   const tdBase: React.CSSProperties = {
     border: '1px solid #d0d8cc',
-    padding: '1px 3px',
-    fontSize: '11px',
+    padding: '1px 2px',
+    fontSize: '10px',
     verticalAlign: 'middle',
-    minWidth: '40px',
-    lineHeight: '1.2',
+    minWidth: '32px',
+    lineHeight: '1.1',
   };
 
   // -- FG label display helper ------------------------------------------------
@@ -876,10 +1255,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     if (fg.slots.length === 0) return 'No slots';
     const sorted = [...fg.slots].sort();
     if (sorted.length === 1) return sorted[0];
-    return `${sorted[0]} – ${sorted[sorted.length - 1]}`;
+    return `${sorted[0]} — ${sorted[sorted.length - 1]}`;
   }
 
-  const totalFGSlots = sessionData.familyGroupings.reduce((sum, fg) => sum + fg.slots.length, 0);
+  const totalFGSlots = sharedFamilyGroupings.reduce((sum, fg) => sum + fg.slots.length, 0);
 
   return (
     <div style={{ fontFamily: 'Arial, sans-serif' }}>
@@ -902,7 +1281,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             { key: 'afternoon' as const, label: 'Afternoon', sub: '2pm - 6pm' },
           ]).map(({ key: s, label, sub }) => (
             <button key={s} onClick={() => setActiveSession(s)}
-              style={{ padding: '10px 18px', borderRadius: '10px', fontWeight: 600, fontSize: '14px', minHeight: '48px', border: 'none', cursor: 'pointer',
+              style={{ padding: '6px 14px', borderRadius: '8px', fontWeight: 600, fontSize: '12px', minHeight: '36px', border: 'none', cursor: 'pointer',
                 backgroundColor: activeSession === s ? TGA_GREEN : 'white',
                 color: activeSession === s ? 'white' : TGA_GREEN,
                 boxShadow: activeSession === s ? 'none' : '0 0 0 1px #c0d0c0',
@@ -915,6 +1294,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           ))}
         </div>
 
+        {/* Activity columns toggle */}
+        <button
+          className="no-print"
+          onClick={() => setShowActivityCols(p => !p)}
+          style={{ padding: '6px 10px', borderRadius: '8px', fontWeight: 600, fontSize: '11px', border: '1px solid #d1d5db', background: showActivityCols ? '#f3f4f6' : 'white', cursor: 'pointer', color: '#6b7280', whiteSpace: 'nowrap' }}
+          title="Toggle Cleaning column"
+        >
+          {showActivityCols ? '🧹 Hide Clean' : '🧹 + Cleaning'}
+        </button>
+
         {/* Save status */}
         <span style={{ fontSize: '12px', color: saveStatus === 'saved' ? '#16a34a' : saveStatus === 'error' ? '#dc2626' : saveStatus === 'saving' ? '#d97706' : '#9ca3af' }}>
           {saveStatus === 'saving' && 'Saving...'}
@@ -922,7 +1311,28 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           {saveStatus === 'error' && 'Save error'}
         </span>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Live attendance refresh */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '1px' }}>
+            <button
+              onClick={refreshLiveAttendance}
+              disabled={attendanceRefreshing}
+              style={{
+                padding: '6px 12px', borderRadius: '8px', fontWeight: 600, fontSize: '11px',
+                backgroundColor: attendanceRefreshing ? '#f3f4f6' : 'white',
+                color: attendanceRefreshing ? '#9ca3af' : '#0369a1',
+                border: '1px solid #bae6fd', cursor: attendanceRefreshing ? 'default' : 'pointer',
+              }}
+            >
+              {attendanceRefreshing ? '⏳ Refreshing...' : '🔄 Refresh Attendance'}
+            </button>
+            {lastAttendanceRefresh && (
+              <span style={{ fontSize: '9px', color: '#9ca3af' }}>
+                Updated {lastAttendanceRefresh.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: true })}
+              </span>
+            )}
+          </div>
+
           {/* Family Groupings panel toggle */}
           <button
             onClick={() => setFgPanelOpen(v => !v)}
@@ -933,10 +1343,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               border: '1px solid #7c3aed', cursor: 'pointer',
             }}
           >
-            👨‍👩‍👧 Family Groupings
+            🏠 Family Groupings
             {totalFGSlots > 0 && (
               <span style={{ marginLeft: '6px', background: fgPanelOpen ? 'rgba(255,255,255,0.3)' : '#ede9fe', borderRadius: '10px', padding: '0 6px', fontSize: '10px' }}>
-                {sessionData.familyGroupings.length}
+                {sharedFamilyGroupings.length}
               </span>
             )}
           </button>
@@ -957,7 +1367,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               backgroundColor: 'white', color: TGA_GREEN, border: '1px solid #c0d0c0', cursor: 'pointer',
             }}
           >
-            🖨️ Print
+            ?🖨️ Print
           </button>
         </div>
       </div>
@@ -972,11 +1382,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           marginBottom: '10px',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
-            <span style={{ fontWeight: 700, fontSize: '13px', color: '#6d28d9' }}>👨‍👩‍👧 Family Groupings</span>
+            <span style={{ fontWeight: 700, fontSize: '13px', color: '#6d28d9' }}>🏠 Family Groupings</span>
             <span style={{ fontSize: '11px', color: '#8b5cf6' }}>
-              {sessionData.familyGroupings.length === 0
+              {sharedFamilyGroupings.length === 0
                 ? 'No groupings yet. Add one below.'
-                : `${sessionData.familyGroupings.length} grouping(s) configured.`}
+                : `${sharedFamilyGroupings.length} grouping(s) configured.`}
             </span>
             <button
               onClick={addFamilyGrouping}
@@ -990,14 +1400,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           </div>
 
           {/* FG list */}
-          {sessionData.familyGroupings.length === 0 && (
+          {sharedFamilyGroupings.length === 0 && (
             <div style={{ fontSize: '12px', color: '#9ca3af', textAlign: 'center', padding: '16px 0' }}>
               No family groupings configured. Click "+ Add Grouping" to create one.
             </div>
           )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {sessionData.familyGroupings.map(fg => {
+            {sharedFamilyGroupings.map(fg => {
               const isEditing = editingFgId === fg.id;
               const fgRooms = getFGRoomsForConfig(fg);
               const sortedSlots = [...fg.slots].sort();
@@ -1205,7 +1615,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       {/* -- Print header -- */}
       <div className="print-only" style={{ display: 'none', marginBottom: '8px' }}>
         <style>{`.print-only { display: block !important; }`}</style>
-        <strong>Head Count / Ratio Check - {activeSession === 'morning' ? 'Morning (7am-10am)' : activeSession === 'midday' ? 'Midday (10am-2pm)' : 'Afternoon (2pm–6pm)'}</strong>
+        <strong>Head Count / Ratio Check – {activeSession === 'morning' ? 'Morning (7am-10am)' : activeSession === 'midday' ? 'Midday (10am-2pm)' : 'Afternoon (2pm–6pm)'}</strong>
         {histDate && children.filter(ch => ch.sign_in).length === 0 && (
           <span style={{ fontSize: '10px', color: '#92400e', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '4px', padding: '1px 6px', marginLeft: '8px' }}>
             📅 Predicted attendance from {histDate}
@@ -1213,6 +1623,99 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         )}
 
       </div>
+
+      {/* -- Staff Finish Times panel -- */}
+      {(() => {
+        // Build sorted list of all staff finishing today
+        const finishList = rosters
+          .map(s => {
+            const endOverride = sharedTimeOverrides[String(s.employeeId)]?.end;
+            const endStr = endOverride || formatRosterTime(s.endTime);
+            return { s, endStr };
+          })
+          .filter(({ endStr }) => !!endStr)
+          .sort((a, b) => slotToMins(a.endStr) - slotToMins(b.endStr));
+
+        if (finishList.length === 0) return null;
+
+        return (
+          <div className="no-print" style={{
+            background: 'white', border: '1px solid #e5e7eb', borderRadius: '10px',
+            marginBottom: '8px', overflow: 'hidden',
+          }}>
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', gap: '10px',
+                padding: '8px 14px', cursor: 'pointer',
+                backgroundColor: showFinishPanel ? '#f0fdf4' : 'white',
+                borderBottom: showFinishPanel ? '1px solid #e5e7eb' : 'none',
+              }}
+              onClick={() => setShowFinishPanel(v => !v)}
+            >
+              <span style={{ fontWeight: 700, fontSize: '13px', color: TGA_GREEN }}>📅 Staff Finish Times</span>
+              <span style={{ fontSize: '11px', color: '#6b7280' }}>{finishList.length} staff finishing today</span>
+              <span style={{ marginLeft: 'auto', fontSize: '12px', color: '#9ca3af' }}>{showFinishPanel ? '?' : '?'}</span>
+            </div>
+            {showFinishPanel && (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f9fafb' }}>
+                    <th style={{ padding: '5px 10px', textAlign: 'left', fontWeight: 600, color: '#374151', borderBottom: '1px solid #e5e7eb', width: '80px' }}>Time</th>
+                    <th style={{ padding: '5px 10px', textAlign: 'left', fontWeight: 600, color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Name</th>
+                    <th style={{ padding: '5px 10px', textAlign: 'left', fontWeight: 600, color: '#374151', borderBottom: '1px solid #e5e7eb' }}>Room at finish</th>
+                    <th style={{ padding: '5px 10px', textAlign: 'center', fontWeight: 600, color: '#374151', borderBottom: '1px solid #e5e7eb', width: '40px' }}>?</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {finishList.map(({ s, endStr }) => {
+                    const done = markedFinished.has(s.employeeId);
+                    // Find the last slot where this staff member appears in any room
+                    let lastRoomName = '—';
+                    const allSlotsAll = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+                    for (let i = allSlotsAll.length - 1; i >= 0; i--) {
+                      const sl = allSlotsAll[i];
+                      for (const room of rooms) {
+                        if (getStaffForRoom(sl, room).some(x => x.employeeId === s.employeeId)) {
+                          lastRoomName = room.name;
+                          break;
+                        }
+                      }
+                      if (lastRoomName !== '—') break;
+                    }
+                    return (
+                      <tr key={s.employeeId} style={{ backgroundColor: done ? '#f3f4f6' : 'white', borderBottom: '1px solid #f3f4f6' }}>
+                        <td style={{ padding: '5px 10px', color: done ? '#9ca3af' : '#374151', textDecoration: done ? 'line-through' : 'none', fontWeight: 600 }}>
+                          {to12h(endStr)}
+                        </td>
+                        <td style={{ padding: '5px 10px', color: done ? '#9ca3af' : '#374151', textDecoration: done ? 'line-through' : 'none' }}>
+                          {s.employeeName}
+                        </td>
+                        <td style={{ padding: '5px 10px', color: done ? '#9ca3af' : '#6b7280', textDecoration: done ? 'line-through' : 'none', fontSize: '11px' }}>
+                          {lastRoomName}
+                        </td>
+                        <td style={{ padding: '5px 10px', textAlign: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={done}
+                            onChange={e => {
+                              setMarkedFinished(prev => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(s.employeeId); else next.delete(s.employeeId);
+                                return next;
+                              });
+                            }}
+                            style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        );
+      })()}
 
       {/* -- Touch selection banner -- */}
       {touchSelected && (() => {
@@ -1237,21 +1740,56 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'auto' }}>
           <thead>
             <tr>
-              <th style={{ ...thStyle, minWidth: '60px', position: 'sticky', left: 0, zIndex: 3 }}>Time</th>
+              <th style={{ ...thStyle, minWidth: '44px', position: 'sticky', left: 0, zIndex: 3 }}>Time</th>
               {rooms.map(room => (
-                <th key={room.id} colSpan={3} style={{ ...thStyle, minWidth: '120px' }}>
-                  {room.name}
+                <th key={room.id} colSpan={3} style={{ ...thStyle, minWidth: '90px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                    <span>{room.name}</span>
+                    <button
+                      className="no-print"
+                      onClick={e => { e.stopPropagation(); openVisitorModal(slots[0] ?? '07:00', room.id, room.name); }}
+                      style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px', border: '1px solid #d8b4fe', background: '#fdf4ff', cursor: 'pointer', color: '#7e22ce', fontWeight: 700, lineHeight: 1.4, flexShrink: 0 }}
+                      title="Log off-floor staff entering this room"
+                    >➕</button>
+                  </div>
+                  {/* Active visitors for this room (across all slots) */}
+                  {(() => {
+                    const allVisitors: Array<{ v: RoomVisitor; slot: string }> = [];
+                    for (const s of slots) {
+                      for (const v of getVisitorsForSlotRoom(s, room.id)) {
+                        if (!v.exitedAt) allVisitors.push({ v, slot: s });
+                      }
+                    }
+                    // Deduplicate by visitorId
+                    const seen = new Set<string>();
+                    const unique = allVisitors.filter(({ v }) => { if (seen.has(v.id)) return false; seen.add(v.id); return true; });
+                    if (unique.length === 0) return null;
+                    return (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', marginTop: '4px', justifyContent: 'center' }}>
+                        {unique.map(({ v, slot: entrySlot }) => (
+                          <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: '2px', background: '#f3e8ff', border: '1px solid #d8b4fe', borderRadius: '4px', padding: '1px 4px', fontSize: '9px', color: '#7e22ce' }}>
+                            <span>{v.name.split(' ')[0]} ({v.enteredAt})</span>
+                            <button
+                              className="no-print"
+                              onClick={e => { e.stopPropagation(); openVisitorExitModal(entrySlot, room.id, room.name, v.id, v.name); }}
+                              style={{ fontSize: '8px', padding: '0px 3px', borderRadius: '3px', border: '1px solid #d8b4fe', background: '#fdf4ff', color: '#7e22ce', cursor: 'pointer', fontWeight: 600, lineHeight: 1.4 }}
+                            >Exit</button>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </th>
               ))}
               {/* Totals header */}
-              <th style={{ ...thStyle, minWidth: '52px', backgroundColor: '#1a4a0a' }}>Total<br/>Children</th>
-              <th style={{ ...thStyle, minWidth: '52px', backgroundColor: '#1a4a0a' }}>Staff<br/>Req'd</th>
-              <th style={{ ...thStyle, minWidth: '60px' }}>Staff<br/>Avail</th>
-              <th style={{ ...thStyle, minWidth: '55px' }}>Spare</th>
-              <th style={{ ...thStyle, minWidth: '150px', width: '150px', backgroundColor: '#92400e' }}>Additional / Off Floor</th>
-              <th style={{ ...thStyle, minWidth: '110px', width: '110px', backgroundColor: '#1e40af' }}>📚 Programming</th>
-              <th style={{ ...thStyle, minWidth: '110px', width: '110px', backgroundColor: '#0f766e' }}>🍽 Lunch Break</th>
-              <th style={{ ...thStyle, minWidth: '110px', width: '110px', backgroundColor: '#7e22ce' }}>🧹 Cleaning</th>
+              <th style={{ ...thStyle, minWidth: '44px', backgroundColor: '#1a4a0a' }}>Tot<br/>Ch.</th>
+              <th style={{ ...thStyle, minWidth: '40px', backgroundColor: '#1a4a0a' }}>Req'd</th>
+              <th style={{ ...thStyle, minWidth: '44px' }}>Avail</th>
+              <th style={{ ...thStyle, minWidth: '38px' }}>Spare</th>
+              <th style={{ ...thStyle, minWidth: '110px', width: '110px', backgroundColor: '#92400e' }}>Additional / Off Floor</th>
+              <th style={{ ...thStyle, minWidth: '90px', width: '90px', backgroundColor: '#1e40af' }}>📚 Programming</th>
+              <th style={{ ...thStyle, minWidth: '90px', width: '90px', backgroundColor: '#0f766e' }}>🍽 Lunch</th>
+              {showActivityCols && <th style={{ ...thStyle, minWidth: '90px', width: '90px', backgroundColor: '#7e22ce' }}>🧹 Clean</th>}
 
             </tr>
             <tr>
@@ -1268,10 +1806,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               <th style={{ ...thStyle, backgroundColor: '#3d7822', fontSize: '9px' }}></th>
               <th style={{ ...thStyle, backgroundColor: '#3d7822', fontSize: '9px' }}></th>
               <th style={{ ...thStyle, backgroundColor: '#3d7822', fontSize: '9px' }}></th>
-              <th style={{ ...thStyle, backgroundColor: '#92400e', fontSize: '9px' }}>Drag to assign</th>
+              <th style={{ ...thStyle, backgroundColor: '#92400e', fontSize: '9px' }}></th>
               <th style={{ ...thStyle, backgroundColor: '#1e40af', fontSize: '9px' }}></th>
               <th style={{ ...thStyle, backgroundColor: '#0f766e', fontSize: '9px' }}></th>
-              <th style={{ ...thStyle, backgroundColor: '#7e22ce', fontSize: '9px' }}></th>
+              {showActivityCols && <th style={{ ...thStyle, backgroundColor: '#7e22ce', fontSize: '9px' }}></th>}
 
             </tr>
           </thead>
@@ -1372,12 +1910,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                         <div style={{ fontWeight: 700, color: '#374151', marginBottom: '6px', fontSize: '10px' }}>
                           Add/remove slot from grouping:
                         </div>
-                        {sessionData.familyGroupings.length === 0 && (
+                        {sharedFamilyGroupings.length === 0 && (
                           <div style={{ fontSize: '10px', color: '#9ca3af', marginBottom: '4px' }}>
                             No groupings yet.
                           </div>
                         )}
-                        {sessionData.familyGroupings.map(fg => {
+                        {sharedFamilyGroupings.map(fg => {
                           const hasSlot = fg.slots.includes(slot);
                           return (
                             <button
@@ -1457,16 +1995,23 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                               <span style={{ fontSize: '10px', fontWeight: 700, color: fg.color, whiteSpace: 'nowrap' }}>
-                                👨‍👩‍👧 {fg.label}
+                                ??????🏠 {fg.label}
                               </span>
                               <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
                                 {fgRooms.map(r => {
                                   const cnt = getChildCount(slot, r.id);
-                                  return cnt > 0 ? (
-                                    <span key={r.id} style={{ fontSize: '9px', color: '#6b7280', whiteSpace: 'nowrap' }}>
-                                      {r.name}: <strong style={{ color: fg.color }}>{cnt}</strong>
+                                  return (
+                                    <span key={r.id} style={{ fontSize: '9px', color: '#6b7280', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                                      {r.name}:
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        value={cnt}
+                                        onChange={e => updateCell(slot, r.id, { children: parseInt(e.target.value) || 0 })}
+                                        style={{ width: '32px', fontSize: '9px', border: '1px solid #d8b4fe', borderRadius: '3px', padding: '0 2px', textAlign: 'center' }}
+                                      />
                                     </span>
-                                  ) : null;
+                                  );
                                 })}
                               </div>
                               <span style={{ fontSize: '11px', whiteSpace: 'nowrap' }}>
@@ -1497,7 +2042,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                           userSelect: 'none',
                                         }}
                                       >
-                                        <span>{shortName(s.employeeName)}{hasOv && !isAdditional && ' →'}</span>
+                                        <span>{shortName(s.employeeName)}{hasOv && !isAdditional && ' ?'}</span>
+                                        {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
+                                        {sessionData.staffTimeOverrides[String(s.employeeId)]?.isOvertime && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fee2e2', color: '#dc2626', flexShrink: 0, lineHeight: '13px' }}>OT</span>}
+                                        {sessionData.staffTimeOverrides[String(s.employeeId)]?.comment && <span title={sessionData.staffTimeOverrides[String(s.employeeId)]?.comment} style={{ fontSize: '9px', color: '#6366f1', cursor: 'help', flexShrink: 0, lineHeight: 1 }}>✎</span>}
                                         {isAdditional && <span style={{ fontSize: '7px', color: '#b45309' }}>duties</span>}
                                       </div>
                                     );
@@ -1522,8 +2071,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                   minWidth: '240px', fontSize: '11px',
                                 }}>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                                    <span style={{ fontWeight: 700, fontSize: '11px', color: fg.color }}>🎨 {fg.label} - {slot}</span>
-                                    <button onClick={() => setEditingCell(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '14px', color: '#6b7280', padding: '0 2px', lineHeight: 1 }}>u00d7</button>
+                                    <span style={{ fontWeight: 700, fontSize: '11px', color: fg.color }}>🏠 {fg.label} - {slot}</span>
+                                    <button onClick={() => setEditingCell(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '14px', color: '#6b7280', padding: '0 2px', lineHeight: 1 }}>✕</button>
                                   </div>
 
                                   {fgStaffMembers.length > 0 && (
@@ -1538,26 +2087,28 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                               backgroundColor: hasOv ? '#fef3c7' : '#dcfce7',
                                               color: hasOv ? '#92400e' : '#166534', fontWeight: 600,
                                             }}>
-                                              {shortName(s.employeeName)}{hasOv && ' \u2192'}
+                                              {shortName(s.employeeName)}{hasOv && ' →'}
+                                              {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                              {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                                             </span>
                                             <span style={{ fontSize: '9px', color: '#9ca3af' }}>{s.inRoomName}</span>
                                             <button
                                               onClick={() => moveStaff(s.employeeId, slot, '__removed__')}
                                               style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px', border: '1px solid #fca5a5', background: '#fee2e2', color: '#dc2626', cursor: 'pointer' }}
-                                            >×</button>
+                                            >✕</button>
                                             <select
                                               value=""
                                               onChange={e => { if (e.target.value) moveStaff(s.employeeId, slot, e.target.value); }}
                                               style={{ fontSize: '10px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '1px 3px', cursor: 'pointer' }}
                                             >
-                                              <option value="">→ Move</option>
+                                              <option value="">→ Move to…</option>
                                               {rooms.filter(r => r.id !== s.inRoomId).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                                             </select>
                                             {hasOv && (
                                               <button
                                                 onClick={() => resetStaffMove(s.employeeId, slot)}
                                                 style={{ fontSize: '9px', padding: '1px 4px', borderRadius: '4px', border: '1px solid #d1d5db', background: 'white', color: '#6b7280', cursor: 'pointer' }}
-                                              >↺</button>
+                                              >✕</button>
                                             )}
                                           </div>
                                         );
@@ -1572,6 +2123,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                       {fgUnassigned.map(s => (
                                         <div key={s.employeeId} style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '3px', flexWrap: 'wrap' }}>
                                           <span style={{ fontSize: '10px', color: '#374151', flex: 1 }}>{shortName(s.employeeName)}</span>
+                                          {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                          {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                                           <select
                                             value=""
                                             onChange={e => { if (e.target.value) moveStaff(s.employeeId, slot, e.target.value); }}
@@ -1682,10 +2235,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                       }}
                                     >
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '2px', width: '100%' }}>
-                                        <span>{shortName(s.employeeName)}{hasOverride && ' \u2192'}</span>
+                                        <span>{shortName(s.employeeName)}{hasOverride && ' →'}</span>
+                                        {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                                         <button
                                           className="no-print"
-                                          onClick={e => { e.stopPropagation(); const t = getStaffTime(s); setTimeEditorStart(t.start); setTimeEditorEnd(t.end); setTimeEditorModal({ empId: s.employeeId, name: s.employeeName, rosterStart: formatRosterTime(s.startTime) || '', rosterEnd: formatRosterTime(s.endTime) || '' }); }}
+                                          onClick={e => { e.stopPropagation(); const t = getStaffTime(s); setTimeEditorStart(t.start); setTimeEditorEnd(t.end); setTimeEditorLunchStart(t.lunchStart ?? ''); setTimeEditorLunchEnd(t.lunchEnd ?? ''); setTimeEditorOvertime(sessionData.staffTimeOverrides[s.employeeId]?.isOvertime ?? false); setTimeEditorComment(sessionData.staffTimeOverrides[s.employeeId]?.comment ?? ''); setTimeEditorModal({ empId: s.employeeId, name: s.employeeName, rosterStart: formatRosterTime(s.startTime) || '', rosterEnd: formatRosterTime(s.endTime) || '' }); }}
                                           title="Edit time"
                                           style={{
                                             border: 'none', background: 'none', cursor: 'pointer',
@@ -1702,33 +2257,80 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                             fontSize: '9px', color: '#dc2626', padding: '0 1px', lineHeight: 1,
                                             display: 'inline-flex', alignItems: 'center', fontWeight: 700, marginLeft: 'auto',
                                           }}
-                                        >×</button>
+                                        >✕</button>
                                       </div>
                                       {staffTime.start && (
                                         <span style={{
                                           fontSize: '9px',
-                                          color: hasTimeOverride ? '#6366f1' : '#6b7280',
+                                          color: staffTime.source === 'deputy' ? '#0369a1' : hasTimeOverride ? '#6366f1' : '#6b7280',
                                           fontWeight: hasTimeOverride ? 700 : 400,
-                                        }}>{to12h(staffTime.start)}-{to12h(staffTime.end)}</span>
+                                        }}>
+                                          {staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}–{to12h(staffTime.end)}
+                                        </span>
+                                      )}
+                                      {staffTime.lunchStart && (
+                                        <span style={{ fontSize: '9px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>
+                                          🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `–${to12h(staffTime.lunchEnd)}` : '…'}
+                                        </span>
                                       )}
                                     </div>
 
                                   </div>
                                 );
                               })}
-                              {roomStaff.length === 0 && (
+                              {roomStaff.length === 0 && getVisitorsForSlotRoom(slot, room.id).length === 0 && (
                                 <span style={{ fontSize: '9px', color: '#93c5fd', fontStyle: 'italic' }}>
                                   {dragOver === `${room.id}:${slot}` ? 'Drop here' : '-'}
                                 </span>
                               )}
-                              <button
-                                className="no-print"
-                                onClick={e => { e.stopPropagation(); setEditingCell(editingCell === editCellKey ? null : editCellKey); }}
-                                style={{ marginLeft: 'auto', fontSize: '9px', padding: '1px 4px', borderRadius: '3px', border: '1px solid #d1d5db', background: 'white', cursor: 'pointer', color: '#6b7280', flexShrink: 0 }}
-                                title="Add staff (backup to drag)"
-                              >
-                                ➕
-                              </button>
+
+                              {/* Visitor chips */}
+                              {getVisitorsForSlotRoom(slot, room.id).map(v => {
+                                const slotMins = slotToMins(slot);
+                                const entered = slotToMins(v.enteredAt);
+                                const exited = v.exitedAt ? slotToMins(v.exitedAt) : null;
+                                const isActive = entered <= slotMins && (exited === null || exited > slotMins);
+                                return (
+                                  <div key={v.id} style={{
+                                    fontSize: '10px', padding: '2px 5px', borderRadius: '4px',
+                                    backgroundColor: isActive ? '#fdf4ff' : '#f3f4f6',
+                                    color: isActive ? '#7e22ce' : '#9ca3af',
+                                    border: `1px solid ${isActive ? '#d8b4fe' : '#e5e7eb'}`,
+                                    display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start',
+                                    minWidth: '60px', gap: '1px',
+                                  }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', width: '100%' }}>
+                                      <span style={{ fontSize: '9px' }}>✎</span>
+                                      <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{v.name}</span>
+                                      <button
+                                        className="no-print"
+                                        onClick={e => { e.stopPropagation(); removeVisitor(slot, room.id, v.id); }}
+                                        title="Remove visitor entry"
+                                        style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '9px', color: '#dc2626', padding: '0 1px', lineHeight: 1, marginLeft: 'auto', fontWeight: 700 }}
+                                      >✕</button>
+                                    </div>
+                                    <div style={{ fontSize: '8px', color: isActive ? '#9333ea' : '#9ca3af', display: 'flex', gap: '3px', alignItems: 'center' }}>
+                                      <span>in {to12h(v.enteredAt)}</span>
+                                      {v.exitedAt
+                                        ? <span>🚪 out {to12h(v.exitedAt)}</span>
+                                        : isActive && (
+                                          <button
+                                            className="no-print"
+                                            onClick={e => { e.stopPropagation(); openVisitorExitModal(slot, room.id, room.name, v.id, v.name); }}
+                                            title="Record exit time"
+                                            style={{
+                                              fontSize: '8px', padding: '0px 4px', borderRadius: '3px',
+                                              border: '1px solid #d8b4fe', background: '#fdf4ff',
+                                              color: '#7e22ce', cursor: 'pointer', fontWeight: 600,
+                                            }}
+                                          >Exit</button>
+                                        )
+                                      }
+                                    </div>
+                                  </div>
+                                );
+                              })}
+
                             </div>
 
                             {/* Simplified popover - Add staff only */}
@@ -1743,7 +2345,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                 }}>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                                     <span style={{ fontWeight: 700, fontSize: '11px', color: '#374151' }}>{room.name} - {slot}</span>
-                                    <button onClick={() => setEditingCell(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '14px', color: '#6b7280', padding: '0 2px', lineHeight: 1 }}>u00d7</button>
+                                    <button onClick={() => setEditingCell(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '14px', color: '#6b7280', padding: '0 2px', lineHeight: 1 }}>✕</button>
                                   </div>
 
                                   {/* Add staff section only - current staff shown via drag chips */}
@@ -1753,6 +2355,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                       {unassignedStaff.map(s => (
                                         <div key={s.employeeId} style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '3px' }}>
                                           <span style={{ fontSize: '10px', color: '#374151', flex: 1 }}>{shortName(s.employeeName)}</span>
+                                          {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                          {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                                           <button
                                             onClick={() => { moveStaff(s.employeeId, slot, room.id); setEditingCell(null); }}
                                             style={{ fontSize: '10px', padding: '1px 8px', borderRadius: '4px', border: '1px solid #86efac', background: '#dcfce7', color: '#166534', cursor: 'pointer', fontWeight: 600 }}
@@ -1863,10 +2467,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             >
                               <div style={{ display: 'flex', alignItems: 'center', gap: '2px', width: '100%' }}>
                                 <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{shortName(s.employeeName)}</span>
-                                <button className="no-print" onClick={e => { e.stopPropagation(); const t = getStaffTime(s); setTimeEditorStart(t.start); setTimeEditorEnd(t.end); setTimeEditorModal({ empId: s.employeeId, name: s.employeeName, rosterStart: formatRosterTime(s.startTime) || '', rosterEnd: formatRosterTime(s.endTime) || '' }); }}
+                                {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
+                                <button className="no-print" onClick={e => { e.stopPropagation(); const t = getStaffTime(s); setTimeEditorStart(t.start); setTimeEditorEnd(t.end); setTimeEditorLunchStart(t.lunchStart ?? ''); setTimeEditorLunchEnd(t.lunchEnd ?? ''); setTimeEditorOvertime(sessionData.staffTimeOverrides[s.employeeId]?.isOvertime ?? false); setTimeEditorComment(sessionData.staffTimeOverrides[s.employeeId]?.comment ?? ''); setTimeEditorModal({ empId: s.employeeId, name: s.employeeName, rosterStart: formatRosterTime(s.startTime) || '', rosterEnd: formatRosterTime(s.endTime) || '' }); }}
                                   title="Edit time" style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '8px', color: hasTimeOverride ? '#6366f1' : '#9ca3af', padding: '0 1px', lineHeight: 1 }}>⏱</button>
                               </div>
-                              {staffTime.start && <span style={{ fontSize: '7px', color: hasTimeOverride ? '#6366f1' : '#b45309', fontWeight: hasTimeOverride ? 700 : 400 }}>{to12h(staffTime.start)}-{to12h(staffTime.end)}</span>}
+                              {staffTime.start && <span style={{ fontSize: '7px', color: staffTime.source === 'deputy' ? '#0369a1' : hasTimeOverride ? '#6366f1' : '#b45309', fontWeight: hasTimeOverride ? 700 : 400 }}>{staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}–{to12h(staffTime.end)}</span>}
+              {staffTime.lunchStart && <span style={{ fontSize: '7px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `–${to12h(staffTime.lunchEnd)}` : '…'}</span>}
                             </div>
 
                           </div>
@@ -1880,7 +2487,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     </div>
                   </td>
 
-                  {/* Programming column - drop target */}
+                  {/* Programming column — always visible */}
                   {(() => {
                     const manualProg = getManualActivityStaff(slot, '__programming__');
                     // floatProg/floatLunch/floatClean now handled by offFloorStaffBySlot (draggable)
@@ -1898,7 +2505,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             onClick={e => { e.stopPropagation(); handleChipTap(s.employeeId, slot, '__programming__'); }}
                             title={s.employeeName + ' - drag or tap to reassign'}
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#dbeafe', color: '#1e40af', border: '1px solid #93c5fd', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
-                            {shortName(s.employeeName)} <span style={{ fontSize: '9px', opacity: 0.7 }}>✎</span>
+                            {shortName(s.employeeName)} <span style={{ fontSize: '9px', opacity: 0.7 }}>✓</span>
+                            {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                            {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
                         {(offFloorStaffBySlot[slot]?.programming ?? []).filter(s => !manualProg.some(m => m.employeeId === s.employeeId)).map(s => (
@@ -1908,6 +2517,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             title={s.employeeName + ' - scheduled for programming, drag or tap to reassign'}
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#dbeafe', color: '#1e40af', border: '1px dashed #93c5fd', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
                             {shortName(s.employeeName)}
+                            {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                            {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
                         {!manualProg.length && !(offFloorStaffBySlot[slot]?.programming?.length) && <span style={{ fontSize: '9px', color: dragOver === `prog:${slot}` ? '#3b82f6' : '#9ca3af' }}>{dragOver === `prog:${slot}` ? 'Drop here' : '-'}</span>}
@@ -1915,7 +2526,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     </td>
                     );
                   })()}
-                  {/* Lunch Break column - drop target */}
+                  {/* Lunch column — always visible */}
                   {(() => {
                     const manualLunch = getManualActivityStaff(slot, '__lunch__');
 
@@ -1933,7 +2544,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             onClick={e => { e.stopPropagation(); handleChipTap(s.employeeId, slot, '__lunch__'); }}
                             title={s.employeeName + ' - drag or tap to reassign'}
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#ccfbf1', color: '#0f766e', border: '1px solid #5eead4', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
-                            {shortName(s.employeeName)} <span style={{ fontSize: '9px', opacity: 0.7 }}>✎</span>
+                            {shortName(s.employeeName)} <span style={{ fontSize: '9px', opacity: 0.7 }}>✓</span>
+                            {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                            {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
                         {(offFloorStaffBySlot[slot]?.lunch ?? []).filter(s => !manualLunch.some(m => m.employeeId === s.employeeId)).map(s => (
@@ -1943,6 +2556,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             title={s.employeeName + ' - on lunch break, drag or tap to reassign'}
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#ccfbf1', color: '#0f766e', border: '1px dashed #5eead4', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
                             {shortName(s.employeeName)}
+                            {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                            {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
                         {!manualLunch.length && !(offFloorStaffBySlot[slot]?.lunch?.length) && <span style={{ fontSize: '9px', color: dragOver === `lunch:${slot}` ? '#0f766e' : '#9ca3af' }}>{dragOver === `lunch:${slot}` ? 'Drop here' : '-'}</span>}
@@ -1950,8 +2565,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     </td>
                     );
                   })()}
-                  {/* Cleaning column - drop target */}
-                  {(() => {
+                  {showActivityCols && (() => {
                     const manualClean = getManualActivityStaff(slot, '__cleaning__');
 
                     const bg = dragOver === `clean:${slot}` ? '#e9d5ff' : '#faf5ff';
@@ -1968,7 +2582,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             onClick={e => { e.stopPropagation(); handleChipTap(s.employeeId, slot, '__cleaning__'); }}
                             title={s.employeeName + ' - drag or tap to reassign'}
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#7e22ce', border: '1px solid #c4b5fd', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
-                            {shortName(s.employeeName)} <span style={{ fontSize: '9px', opacity: 0.7 }}>✎</span>
+                            {shortName(s.employeeName)} <span style={{ fontSize: '9px', opacity: 0.7 }}>✓</span>
+                            {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                            {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
                         {(offFloorStaffBySlot[slot]?.cleaning ?? []).filter(s => !manualClean.some(m => m.employeeId === s.employeeId)).map(s => (
@@ -1978,6 +2594,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             title={s.employeeName + ' - scheduled for cleaning, drag or tap to reassign'}
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#7e22ce', border: '1px dashed #c4b5fd', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
                             {shortName(s.employeeName)}
+                            {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                            {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
                         {!manualClean.length && !(offFloorStaffBySlot[slot]?.cleaning?.length) && <span style={{ fontSize: '9px', color: dragOver === `clean:${slot}` ? '#7e22ce' : '#9ca3af' }}>{dragOver === `clean:${slot}` ? 'Drop here' : '-'}</span>}
@@ -2002,6 +2620,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         <span><span style={{ display: 'inline-block', width: '14px', height: '14px', backgroundColor: hexToRgba('#7c3aed', 0.07), border: '2px solid #7c3aed', verticalAlign: 'middle', marginRight: '4px' }}></span>Family Grouping row</span>
         <span style={{ color: '#8b5cf6' }}>* = FG combined ratio</span>
         <span><span style={{ display: 'inline-block', width: '14px', height: '14px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', verticalAlign: 'middle', marginRight: '4px' }}></span>Additional duties (off floor)</span>
+        <span><span style={{ display: 'inline-block', width: '14px', height: '14px', backgroundColor: '#fdf4ff', border: '1px solid #d8b4fe', verticalAlign: 'middle', marginRight: '4px' }}></span>👤 Visitor/passing staff (counts toward floor ratio while present)</span>
       </div>
 
 
@@ -2014,7 +2633,131 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         Multiple independent Family Groupings can be active simultaneously - each merges its rooms into one ratio calculation.
         * in Staff Req'd = includes FG combined figure(s).
       </div>
-      {/* ── Time editor modal — single global instance ── */}
+      {/* -- Visitor exit modal -- */}
+      {visitorExitModalState && (
+        <>
+          <div className="no-print" style={{ position: 'fixed', inset: 0, zIndex: 999, backgroundColor: 'rgba(0,0,0,0.35)' }} onClick={() => setVisitorExitModalState(null)} />
+          <div className="no-print" onClick={e => e.stopPropagation()} style={{
+            position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+            zIndex: 1000, background: 'white', borderRadius: '14px',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.22)', padding: '20px 22px', width: '280px',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <span style={{ fontWeight: 700, color: '#7e22ce', fontSize: '14px' }}>🚪 Log Room Exit</span>
+              <button onClick={() => setVisitorExitModalState(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#9ca3af', padding: '0 2px', lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '14px' }}>
+              {visitorExitModalState.visitorName} leaving {visitorExitModalState.roomName}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+              <span style={{ fontSize: '13px', color: '#374151', minWidth: '56px' }}>Exit time</span>
+              <input
+                type="time"
+                value={visitorExitModalState.exitTime}
+                onChange={e => setVisitorExitModalState(prev => prev ? { ...prev, exitTime: e.target.value } : null)}
+                style={{ fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1 }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => {
+                  if (!visitorExitModalState) return;
+                  setVisitorExit(visitorExitModalState.slot, visitorExitModalState.roomId, visitorExitModalState.visitorId, visitorExitModalState.exitTime);
+                  setVisitorExitModalState(null);
+                }}
+                style={{ flex: 1, padding: '9px', borderRadius: '8px', border: 'none', backgroundColor: '#7e22ce', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+              >Record Exit</button>
+              <button
+                onClick={() => setVisitorExitModalState(null)}
+                style={{ padding: '9px 14px', borderRadius: '8px', border: '1px solid #d1d5db', backgroundColor: 'white', color: '#6b7280', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
+              >Cancel</button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* -- Visitor log modal -- */}
+      {visitorModal && (() => {
+        // Build dropdown: off-floor staff across all slots in the current session (so header button works regardless of slot)
+        const allOffFloor = slots.flatMap(s => getAdditionalDutiesStaff(s));
+        const seen = new Set<number>();
+        const offFloorCandidates = allOffFloor.filter(s => { if (seen.has(s.employeeId)) return false; seen.add(s.employeeId); return true; });
+        return (
+          <>
+            <div className="no-print" style={{ position: 'fixed', inset: 0, zIndex: 999, backgroundColor: 'rgba(0,0,0,0.35)' }} onClick={() => setVisitorModal(null)} />
+            <div className="no-print" onClick={e => e.stopPropagation()} style={{
+              position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+              zIndex: 1000, background: 'white', borderRadius: '14px',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.22)', padding: '20px 22px', width: '300px',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <span style={{ fontWeight: 700, color: '#7e22ce', fontSize: '14px' }}>🚪 Log Room Visit</span>
+                <button onClick={() => setVisitorModal(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#9ca3af', padding: '0 2px', lineHeight: 1 }}>✕</button>
+              </div>
+              <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '14px' }}>
+                {visitorModal.roomName} — recording entry at {to12h(visitorTime || visitorModal.slot)}
+              </div>
+
+              {/* Person dropdown or free text */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '13px', color: '#374151', minWidth: '56px' }}>Person</span>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {offFloorCandidates.length > 0 && (
+                      <select
+                        value=""
+                        onChange={e => { if (e.target.value) setVisitorName(e.target.value); }}
+                        style={{ fontSize: '12px', border: '1px solid #d8b4fe', borderRadius: '6px', padding: '5px 8px', color: '#374151', background: '#fdf4ff' }}
+                      >
+                        <option value="">Select from off-floor staff…</option>
+                        {offFloorCandidates.map(s => (
+                          <option key={s.employeeId} value={s.employeeName}>{s.employeeName}</option>
+                        ))}
+                      </select>
+                    )}
+                    <input
+                      type="text"
+                      placeholder="Or type name (e.g. AD, Director)"
+                      value={visitorName}
+                      onChange={e => setVisitorName(e.target.value)}
+                      style={{ fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', outline: 'none' }}
+                      onKeyDown={e => { if (e.key === 'Enter') confirmAddVisitor(); }}
+                    />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '13px', color: '#374151', minWidth: '56px' }}>Enter</span>
+                  <input type="time" value={visitorTime} onChange={e => setVisitorTime(e.target.value)}
+                    style={{ fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1 }} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '13px', color: '#374151', minWidth: '56px' }}>Exit</span>
+                  <input type="time" value={visitorExitTime} onChange={e => setVisitorExitTime(e.target.value)}
+                    placeholder="Leave blank if still in room"
+                    style={{ fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1 }} />
+                </div>
+                <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '-4px' }}>
+                  Leave Exit blank to record entry only — you can exit them later from the chip.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={confirmAddVisitor}
+                  disabled={!visitorName.trim()}
+                  style={{ flex: 1, padding: '9px', borderRadius: '8px', border: 'none', backgroundColor: visitorName.trim() ? '#7e22ce' : '#e9d5ff', color: 'white', fontWeight: 700, fontSize: '13px', cursor: visitorName.trim() ? 'pointer' : 'default' }}
+                >Log Entry</button>
+                <button
+                  onClick={() => setVisitorModal(null)}
+                  style={{ padding: '9px 14px', borderRadius: '8px', border: '1px solid #d1d5db', backgroundColor: 'white', color: '#6b7280', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
+                >Cancel</button>
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
+      {/* -- Time editor modal — single global instance -- */}
       {timeEditorModal && (
         <>
           <div className="no-print" style={{ position: 'fixed', inset: 0, zIndex: 999, backgroundColor: 'rgba(0,0,0,0.35)' }} onClick={() => setTimeEditorModal(null)} />
@@ -2025,7 +2768,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
               <span style={{ fontWeight: 700, color: '#2d5c18', fontSize: '14px' }}>{timeEditorModal.name}</span>
-              <button onClick={() => setTimeEditorModal(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#9ca3af', padding: '0 2px', lineHeight: 1 }}>×</button>
+              <button onClick={() => setTimeEditorModal(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#9ca3af', padding: '0 2px', lineHeight: 1 }}>✕</button>
             </div>
             {timeEditorModal.rosterStart && (
               <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '14px' }}>
@@ -2034,19 +2777,55 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ fontSize: '13px', color: '#374151', minWidth: '46px' }}>Start</span>
+                <span style={{ fontSize: '13px', color: '#374151', minWidth: '60px' }}>Start</span>
                 <input type="time" value={timeEditorStart} onChange={e => setTimeEditorStart(e.target.value)}
                   style={{ fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1 }} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ fontSize: '13px', color: '#374151', minWidth: '46px' }}>Finish</span>
+                <span style={{ fontSize: '13px', color: '#374151', minWidth: '60px' }}>Finish</span>
                 <input type="time" value={timeEditorEnd} onChange={e => setTimeEditorEnd(e.target.value)}
                   style={{ fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1 }} />
+              </div>
+              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ fontSize: '11px', color: '#6b7280', fontWeight: 600 }}>🍽 Lunch Break</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '13px', color: '#374151', minWidth: '60px' }}>Break start</span>
+                  <input type="time" value={timeEditorLunchStart} onChange={e => setTimeEditorLunchStart(e.target.value)}
+                    style={{ fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1 }} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '13px', color: '#374151', minWidth: '60px' }}>Break end</span>
+                  <input type="time" value={timeEditorLunchEnd} onChange={e => setTimeEditorLunchEnd(e.target.value)}
+                    style={{ fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1 }} />
+                </div>
+                <div style={{ fontSize: '10px', color: '#9ca3af' }}>Auto-populated from Deputy when staff clock break. You can override manually.</div>
+              </div>
+              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={timeEditorOvertime} onChange={e => setTimeEditorOvertime(e.target.checked)}
+                    style={{ width: '16px', height: '16px', accentColor: '#dc2626', cursor: 'pointer' }} />
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#dc2626' }}>🕒 Overtime</span>
+                </label>
+                {timeEditorOvertime && (
+                  <div style={{ fontSize: '11px', color: '#dc2626', backgroundColor: '#fee2e2', borderRadius: '6px', padding: '6px 8px' }}>
+                    Set the <strong>Finish</strong> time above to the actual overtime end time — the ratio check will reflect the extended hours.
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                  <span style={{ fontSize: '13px', color: '#374151', minWidth: '60px', paddingTop: '6px' }}>📝 Note</span>
+                  <textarea
+                    value={timeEditorComment}
+                    onChange={e => setTimeEditorComment(e.target.value)}
+                    placeholder="e.g. covering Room 2, late pickup…"
+                    rows={2}
+                    style={{ fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1, resize: 'vertical', fontFamily: 'inherit' }}
+                  />
+                </div>
               </div>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
-                onClick={() => { updateStaffTimeOverride(timeEditorModal.empId, timeEditorStart, timeEditorEnd); setTimeEditorModal(null); }}
+                onClick={() => { updateStaffTimeOverride(timeEditorModal.empId, timeEditorStart, timeEditorEnd, timeEditorLunchStart || undefined, timeEditorLunchEnd || undefined, timeEditorOvertime, timeEditorComment || undefined); setTimeEditorModal(null); }}
                 style={{ flex: 1, padding: '9px', borderRadius: '8px', border: 'none', backgroundColor: '#2d5c18', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
               >Save</button>
               <button

@@ -23,7 +23,7 @@ import {
 interface AppUser {
   email:    string;
   name:     string;
-  role:     'admin' | 'ceo' | 'area_manager' | 'director';
+  role:     'admin' | 'ceo' | 'area_manager' | 'director' | 'assistant_director';
   centreId: string | null;  // primary centre
   password: string;         // plain text (internal tool)
   fromDb:   boolean;        // false = config-only, can't delete
@@ -37,17 +37,19 @@ const BLANK_USER: Omit<AppUser, 'dirty' | 'saving' | 'fromDb' | 'allowedCentreId
 };
 
 const ROLE_LABELS: Record<string, string> = {
-  admin:        'Admin',
-  ceo:          'Admin (legacy)',
-  area_manager: 'Area Manager',
-  director:     'Director',
+  admin:              'Admin',
+  ceo:                'Admin (legacy)',
+  area_manager:       'Area Manager',
+  director:           'Director',
+  assistant_director: 'Assistant Director',
 };
 
 const ROLE_COLORS: Record<string, { bg: string; text: string }> = {
-  admin:        { bg: '#E2F1DA', text: '#2d5c18' },
-  ceo:          { bg: '#E2F1DA', text: '#2d5c18' },
-  area_manager: { bg: '#dbeafe', text: '#1d4ed8' },
-  director:     { bg: '#ede9fe', text: '#6d28d9' },
+  admin:              { bg: '#E2F1DA', text: '#2d5c18' },
+  ceo:                { bg: '#E2F1DA', text: '#2d5c18' },
+  area_manager:       { bg: '#dbeafe', text: '#1d4ed8' },
+  director:           { bg: '#ede9fe', text: '#6d28d9' },
+  assistant_director: { bg: '#fef3c7', text: '#92400e' },
 };
 
 export default function SettingsPage() {
@@ -444,6 +446,7 @@ CREATE POLICY "service_role all" ON centre_rules FOR ALL USING (true);`}
               <select className={inputCls} style={inputStyle}
                 value={newUser.role} onChange={e => setNewUser(p => ({ ...p, role: e.target.value as AppUser['role'] }))}>
                 <option value="director">Director</option>
+                <option value="assistant_director">Assistant Director</option>
                 <option value="area_manager">Area Manager</option>
                 <option value="admin">Admin</option>
               </select>
@@ -593,6 +596,7 @@ CREATE POLICY "service_role all" ON centre_rules FOR ALL USING (true);`}
                         <select className={inputCls} style={inputStyle} value={u.role}
                           onChange={e => update(u.email, { role: e.target.value as AppUser['role'] })}>
                           <option value="director">Director</option>
+                          <option value="assistant_director">Assistant Director</option>
                           <option value="area_manager">Area Manager</option>
                           <option value="admin">Admin</option>
                         </select>
@@ -677,22 +681,24 @@ CREATE POLICY "service_role all" ON centre_rules FOR ALL USING (true);`}
 // ─── Role Permissions Tab ─────────────────────────────────────────────────────
 
 const CONFIGURABLE_ROLES: { key: AppRole; label: string; description: string; color: string; border: string }[] = [
-  { key: 'director',     label: 'Director',     description: 'Centre directors — single centre access',      color: '#6d28d9', border: '#ede9fe' },
-  { key: 'area_manager', label: 'Area Manager', description: 'Multi-centre managers — broader visibility',   color: '#1d4ed8', border: '#dbeafe' },
-  { key: 'admin',        label: 'Admin',        description: 'HQ administrators — full access to everything', color: '#2d5c18', border: '#E2F1DA' },
+  { key: 'director',           label: 'Director',           description: 'Centre directors — single centre access',                       color: '#6d28d9', border: '#ede9fe' },
+  { key: 'assistant_director', label: 'Assistant Director', description: 'ADs — single centre, ratio check & summary only',               color: '#92400e', border: '#fef3c7' },
+  { key: 'area_manager',       label: 'Area Manager',       description: 'Multi-centre managers — broader visibility',                    color: '#1d4ed8', border: '#dbeafe' },
+  { key: 'admin',              label: 'Admin',              description: 'HQ administrators — full access to everything',                  color: '#2d5c18', border: '#E2F1DA' },
 ];
 
 function RolePermissionsTab() {
   const [activeRole, setActiveRole] = useState<AppRole>('director');
   const [rolePerms, setRolePerms] = useState<Record<AppRole, RolePermissions>>({
-    director:     getBuiltinDefaults('director'),
-    area_manager: getBuiltinDefaults('area_manager'),
+    director:           getBuiltinDefaults('director'),
+    assistant_director: getBuiltinDefaults('assistant_director'),
+    area_manager:       getBuiltinDefaults('area_manager'),
     admin:        getBuiltinDefaults('admin'),
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedRole, setSavedRole] = useState<AppRole | null>(null);
-  const [dirty, setDirty] = useState<Record<AppRole, boolean>>({ director: false, area_manager: false, admin: false });
+  const [dirty, setDirty] = useState<Record<AppRole, boolean>>({ director: false, assistant_director: false, area_manager: false, admin: false });
   const [sqlHint, setSqlHint] = useState(false);
 
   useEffect(() => {

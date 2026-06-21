@@ -193,6 +193,8 @@ export default function ReportingPage() {
   const [roomFilter, setRoomFilter]    = useState<string>('all');
   const [wwccExpiryFilter, setWwccExpiryFilter] = useState<'all'|'90'|'60'|'30'|'expired'>('all');
   const [wwccExpiryRows, setWwccExpiryRows] = useState<WwccExpiryRow[]>([]);
+  const [wwccSyncing, setWwccSyncing]   = useState(false);
+  const [wwccSyncMsg, setWwccSyncMsg]   = useState<string | null>(null);
   const [occupancyRows, setOccupancyRows]   = useState<OccupancyRow[]>([]);
   const [rosterOptData, setRosterOptData]   = useState<RosterOptResult[]>([]);
   const [rosterRecs, setRosterRecs]         = useState<RosterRec[]>([]);
@@ -230,13 +232,21 @@ export default function ReportingPage() {
                 (e.blockType === 'lunch_break' && entries.some(o => o.employeeId === e.employeeId && o.room === roomFilter)));
           if (filtered.length === 0) return '';
 
-          const rows = filtered.map((e, i) => {
-            const prevSame   = i > 0 && filtered[i-1].employeeId === e.employeeId;
+          // Track by name (not employeeId) — same person can have multiple Deputy
+          // roster entries with different employeeIds (float unit + support unit).
+          const seenNames = new Set<string>();
+          const rows = filtered.map((e) => {
             const isLunch    = e.blockType === 'lunch_break';
             const isGrouping = e.blockType === 'grouping';
             const isCover    = e.blockType === 'lunch_cover' || e.blockType === 'float_move';
             const isLeave    = e.staffType === 'leave';
             const isFloat    = e.staffType === 'float' || e.staffType === 'iss';
+            // Indent as a sub-row when we've already seen this person's name.
+            // Leave entries are always top-level (never indent).
+            const isFirstRow = isLeave || !seenNames.has(e.name);
+            if (!isLeave) seenNames.add(e.name);
+            const prevSame = !isFirstRow
+              && (isLunch || isGrouping || isCover || e.blockType === 'shift');
             const isMorningFG  = isGrouping && parseInt(e.inTime) < 12;
             const isAfternoonFG = isGrouping && parseInt(e.inTime) >= 12;
             const bg = isLunch ? '#fffbeb'
@@ -247,14 +257,15 @@ export default function ReportingPage() {
             const nameCell = prevSame
               ? `&nbsp;&nbsp;└ ${e.name}`
               : `${e.name}${isFloat ? ` <span class="badge ${e.staffType}">${e.staffType === 'iss' ? 'ISS' : 'Float'}</span>` : isLeave ? ' <span class="badge leave">Leave</span>' : isGrouping ? ` <span class="badge grouping">${fgBadge}</span>` : ''}`;
-            const typeLabel = isLunch ? 'Lunch' : isMorningFG ? 'Morning FG' : isAfternoonFG ? 'Afternoon FG' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : 'Shift';
+            const isSupport = e.staffType === 'support';
+            const typeLabel = isLunch ? 'Lunch' : isMorningFG ? 'Morning FG' : isAfternoonFG ? 'Afternoon FG' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : isSupport ? 'Support' : 'Shift';
             return `<tr style="background:${bg}">
               <td>${nameCell}</td>
               <td>${isLunch ? '🍽 ' : isCover ? '↳ ' : isMorningFG ? '🌅 ' : isAfternoonFG ? '🌆 ' : ''}${e.room}</td>
               <td><strong>${e.inTime}</strong></td>
-              <td>${e.outTime}</td>
+              <td>${e.outTime || (isLunch ? '…' : '-')}</td>
               <td><span style="font-size:9px">${typeLabel}</span></td>
-              <td>${(() => { const r2 = wwccLookup(e.name); const noData = !r2||(!r2.wwcc_number&&!r2.under_18); const rl = e.room.toLowerCase(); if (noData && ['chef','kitchen','cook'].some(kw => rl.includes(kw))) return '<span style="color:#854d0e;font-size:10px">Kitchen Staff</span>'; if (noData) return '<em>-</em>'; if (r2&&r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2&&r2.wwcc_number ? r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : '') : '<em>-</em>'; })()}</td>
+              <td>${(() => { const r2 = wwccLookup(e.name); const noData = !r2||(!r2.wwcc_number&&!r2.under_18); const rl = e.room.toLowerCase(); if (isLunch) return ''; if (noData && ['chef','kitchen','cook'].some(kw => rl.includes(kw))) return '<span style="color:#854d0e;font-size:10px">Kitchen Staff</span>'; if (noData) return '<em>-</em>'; if (r2&&r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2&&r2.wwcc_number ? r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : '') : '<em>-</em>'; })()}</td>
               <td>${e.note ?? '-'}</td>
             </tr>`;
           }).join('');
@@ -449,7 +460,7 @@ export default function ReportingPage() {
 
       for (const date of dates) {
         // Fetch in parallel
-        const [att, rosters, allocations, floatScheds, groupingSessionRows, ratioCheckRows] = await Promise.all([
+        const [att, rosters, allocations, floatScheds, groupingSessionRows, ratioCheckRows, deputyActuals] = await Promise.all([
           fetchAttendance(campus, date),
           fetchRostersForDate(allUnitIds, date),
           fetch(`/api/staff-allocations?centre=${encodeURIComponent(centre.id)}&date=${date}`)
@@ -460,7 +471,9 @@ export default function ReportingPage() {
             .then(r => r.ok ? r.json() : []).catch(() => []),
           fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centre.id)}&date=${date}`)
             .then(r => r.ok ? r.json() : []).catch(() => []),
-          Promise.resolve([]), // rosterCacheDay removed - use rosters variable instead
+          // Fetch actual Deputy timesheet times scoped to this centre's unit IDs
+          fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []),
         ]);
         if (needsEducator) groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
 
@@ -582,14 +595,51 @@ export default function ReportingPage() {
           }
         }
 
-        // Build combined staffMoves + FG configs from all ratio-check sessions
+        // Build combined staffMoves + FG configs + time overrides from all ratio-check sessions
         const ratioStaffMoves: Record<string, string> = {};
         const ratioFGConfigs: Array<{ id: string; label: string; roomIds: string[]; slots: string[]; heldInRoom?: string }> = [];
+        const ratioTimeOverrides: Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string }> = {};
+
         for (const row of (ratioCheckRows as any[])) {
           const moves = (row.data?.staffMoves ?? {}) as Record<string, string>;
           Object.assign(ratioStaffMoves, moves);
           for (const fg of (row.data?.familyGroupings ?? [])) {
             if (!ratioFGConfigs.find(f => f.id === fg.id)) ratioFGConfigs.push(fg);
+          }
+          // Merge Supabase overrides — these come from the Ratio Check browser 5-min Deputy poll
+          // and are the most complete/accurate source (contain all staff clocked in that day)
+          const overrides = (row.data?.staffTimeOverrides ?? {}) as Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string }>;
+          for (const [empId, ov] of Object.entries(overrides)) {
+            // Manual overrides always win; Deputy actuals fill in if no existing entry
+            if (!ratioTimeOverrides[empId] || ov.source === 'manual') {
+              ratioTimeOverrides[empId] = ov;
+            } else if (!ratioTimeOverrides[empId].lunchStart && ov.lunchStart) {
+              // Supplement missing lunch from another session's data
+              ratioTimeOverrides[empId] = { ...ratioTimeOverrides[empId], lunchStart: ov.lunchStart, lunchEnd: ov.lunchEnd };
+            }
+          }
+        }
+
+        // Supplement with per-centre Deputy timesheets API (fills gaps for staff
+        // not yet in Supabase e.g. first load of the day before any Ratio Check opened)
+        for (const ts of (deputyActuals as any[])) {
+          if (!ts.actualStart) continue;
+          const empId = String(ts.employeeId);
+          const existing = ratioTimeOverrides[empId];
+          if (existing?.source === 'manual') continue; // never overwrite manual
+          const brk = (ts.breaks as any[])?.find((b: any) => b.type === 'meal' && (b.status === 'finished' || b.status === 'in_progress'));
+          const fromApi = {
+            start:      ts.actualStart || existing?.start || '',
+            end:        ts.actualEnd   || existing?.end   || '',
+            lunchStart: brk?.breakStart ?? existing?.lunchStart,
+            lunchEnd:   brk?.breakEnd   ?? existing?.lunchEnd,
+            source:     'deputy' as const,
+          };
+          if (!existing) {
+            ratioTimeOverrides[empId] = fromApi;
+          } else if (!existing.lunchStart && fromApi.lunchStart) {
+            // Fill in missing lunch from direct API
+            ratioTimeOverrides[empId] = { ...existing, lunchStart: fromApi.lunchStart, lunchEnd: fromApi.lunchEnd };
           }
         }
 
@@ -608,6 +658,15 @@ export default function ReportingPage() {
         }
         function sm151(slot: string): number {
           const [h, mm] = slot.split(':').map(Number); return h * 60 + mm;
+        }
+
+        // Build a map from employeeId -> natural room id (for covered-person room lookup)
+        const empNaturalRoomId: Record<number, string> = {};
+        for (const r of (rosters as any[])) {
+          const unitId = r.OperationalUnit as number;
+          const empId2 = r.Employee as number;
+          const naturalRm = centre.rooms.find(rm => rm.deputyUnitId === unitId);
+          if (naturalRm) empNaturalRoomId[empId2] = naturalRm.id;
         }
 
         // Build off-floor and float-covering maps from float schedules
@@ -629,9 +688,16 @@ export default function ReportingPage() {
                 if (ct === 'programming' || ct === 'cleaning') off.add(covId);
                 if (block.type === 'break' && ct !== 'ratio') off.add(covId);
               }
-              if (block.roomId && floatId) {
-                if (!cover[block.roomId]) cover[block.roomId] = [];
-                if (!cover[block.roomId].includes(floatId)) cover[block.roomId].push(floatId);
+              // Determine the room the float is physically covering:
+              // - explicit roomId on the block (lunch/ratio cover)
+              // - OR derive from the covered person's natural room (programming/cleaning cover)
+              let effectiveRoomId: string | undefined = block.roomId;
+              if (!effectiveRoomId && covId) {
+                effectiveRoomId = empNaturalRoomId[covId];
+              }
+              if (effectiveRoomId && floatId) {
+                if (!cover[effectiveRoomId]) cover[effectiveRoomId] = [];
+                if (!cover[effectiveRoomId].includes(floatId)) cover[effectiveRoomId].push(floatId);
               }
             }
           }
@@ -642,8 +708,9 @@ export default function ReportingPage() {
         // Day-level allocations from staff-allocations
         const dayAlloc151: Record<number, string> = (allocations as any[])[0]?.moves ?? {};
 
-        // Helper: get a staff member's room/activity at a given slot
-        function posAt(empId: number, slot: string): { room: string; blockType: EducatorEntry['blockType']; note?: string } {
+        // Helper: get a staff member's room/activity at a given slot.
+        // exactIn/exactOut: if set, the caller should use these instead of slot-boundary times
+        function posAt(empId: number, slot: string): { room: string; blockType: EducatorEntry['blockType']; note?: string; exactIn?: string; exactOut?: string } {
           const key = `${empId}:${slot}`;
           const move = ratioStaffMoves[key];
           if (move !== undefined) {
@@ -654,6 +721,8 @@ export default function ReportingPage() {
             if (move === '__removed__')     return { room: 'Off Roster', blockType: 'shift' };
             const r = centre.rooms.find(r => r.id === move);
             if (r) return { room: r.name, blockType: 'shift' };
+            // move is a pool sentinel ('float', 'iss') — not a real room, treat as unassigned
+            if (move === 'float' || move === 'iss') return { room: '', blockType: 'shift' };
           }
           // Float schedule off-floor
           const off = offFloor151[slot] ?? new Set<number>();
@@ -666,9 +735,11 @@ export default function ReportingPage() {
                 if (sm151(slot) < bS || sm151(slot) >= bE) continue;
                 const ct = String(block.coverType ?? '').toLowerCase();
                 const floatName: string = fsRow.employee_name ?? '';
-                if (ct === 'programming') return { room: 'Programming', blockType: 'shift', note: floatName ? `Programming - covered by ${floatName}` : 'Programming - covered by float' };
-                if (ct === 'cleaning')    return { room: 'Cleaning',    blockType: 'shift', note: floatName ? `Cleaning - covered by ${floatName}` : 'Cleaning - covered by float' };
-                return { room: 'Lunch Break', blockType: 'lunch_break', note: floatName ? `Meal break - covered by ${floatName}` : 'Meal break' };
+                const exactIn  = String(block.startTime ?? '');
+                const exactOut = String(block.endTime   ?? '');
+                if (ct === 'programming') return { room: 'Programming', blockType: 'shift', note: floatName ? `Programming - covered by ${floatName}` : 'Programming - covered by float', exactIn, exactOut };
+                if (ct === 'cleaning')    return { room: 'Cleaning',    blockType: 'shift', note: floatName ? `Cleaning - covered by ${floatName}` : 'Cleaning - covered by float', exactIn, exactOut };
+                return { room: 'Lunch Break', blockType: 'lunch_break', note: floatName ? `Meal break - covered by ${floatName}` : 'Meal break', exactIn, exactOut };
               }
             }
             return { room: 'Lunch Break', blockType: 'lunch_break' };
@@ -679,8 +750,10 @@ export default function ReportingPage() {
             if ((empIds as number[]).includes(empId)) {
               const r = centre.rooms.find(r => r.id === roomId);
               if (r) {
-                // Find covering context from float schedule block
+                // Find covering context from float schedule block, and grab exact times
                 let coverNote: string | undefined;
+                let exactIn: string | undefined;
+                let exactOut: string | undefined;
                 for (const fsRow of (floatScheds as any[])) {
                   if (fsRow.employee_id !== empId) continue;
                   for (const block of (fsRow.schedule ?? [])) {
@@ -688,6 +761,8 @@ export default function ReportingPage() {
                     const bE = sm151(String(block.endTime   ?? '00:00'));
                     if (sm151(slot) < bS || sm151(slot) >= bE) continue;
                     const ct = String(block.coverType ?? '').toLowerCase();
+                    exactIn  = String(block.startTime ?? '');
+                    exactOut = String(block.endTime   ?? '');
                     if (ct === 'lunch' && block.coveringEmployeeName) {
                       coverNote = `Covering lunch break for ${block.coveringEmployeeName}`;
                     } else if (ct === 'programming' && block.coveringEmployeeName) {
@@ -699,13 +774,14 @@ export default function ReportingPage() {
                   }
                   if (coverNote !== undefined) break;
                 }
-                return { room: r.name, blockType: 'shift', note: coverNote };
+                return { room: r.name, blockType: 'shift', note: coverNote, exactIn, exactOut };
               }
             }
           }
           // Day-level allocation
           const dayRoom = dayAlloc151[empId];
           if (dayRoom) {
+            if (dayRoom === 'float' || dayRoom === 'iss') return { room: '', blockType: 'shift' };
             const r = centre.rooms.find(r => r.id === dayRoom);
             if (r) return { room: r.name, blockType: 'shift' };
           }
@@ -727,8 +803,15 @@ export default function ReportingPage() {
           const rawUnit = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
           if (rawUnit.includes('staff meeting')) continue;
 
-          const shiftIn  = fmtTime(r.StartTime);
-          const shiftOut = fmtTime(r.EndTime);
+          // Use actual Deputy times from Ratio Check overrides if available, else fall back to rostered
+          // Leave entries always use roster times — Deputy clock-in overrides don't apply to leave blocks
+          // Support entries (e.g. Trainee Study Time) also use their own roster times — they may have
+          // different hours to the main shift and the clock-in override reflects the main shift only.
+          const isLeaveUnit   = leaveSet2.has(unitId as number);
+          const isSupportUnit = !isLeaveUnit && !floatSet2.has(unitId) && !issSet2.has(unitId) && !roomSet2.has(unitId);
+          const actualOverride = (!isLeaveUnit && !isSupportUnit) ? ratioTimeOverrides[String(empId)] : undefined;
+          const shiftIn  = actualOverride?.start || fmtTime(r.StartTime);
+          const shiftOut = actualOverride?.end   || fmtTime(r.EndTime);
           if (shiftIn === '-' || shiftOut === '-') continue;
 
           const staffType: EducatorEntry['staffType'] =
@@ -744,13 +827,23 @@ export default function ReportingPage() {
             continue;
           }
 
-          // Natural room name - for non-ratio support staff use the actual Deputy unit name
-          // so kitchen/chef staff can be identified by keyword in the WWCC column
+          // Support staff (AD, Directors, Admin, etc.) — run them through the full
+          // slot-position logic just like room/float staff so that ratio check moves
+          // (manual drags into rooms) are always reflected in the report.
+          // The only difference: their naturalRoomName falls back to their Deputy unit name.
+          if (staffType === 'support') {
+            // fall through to the slot-position logic below
+          }
+
           const naturalRoom = centre.rooms.find(rm => rm.deputyUnitId === unitId);
           const deputyUnitName = r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '';
+          // Room staff: fall back to their natural Deputy room.
+          // Float/ISS: no fallback — location comes entirely from ratio check moves.
+          // Support (AD, Directors, etc.): fall back to their Deputy unit name so they
+          //   always appear in the report; ratio check moves override specific slots.
           const naturalRoomName = naturalRoom?.name ?? (
-            staffType === 'float' ? 'Float Pool'
-            : staffType === 'iss' ? 'ISS'
+            staffType === 'float' ? ''
+            : staffType === 'iss'   ? ''
             : deputyUnitName || 'Support'
           );
 
@@ -764,7 +857,7 @@ export default function ReportingPage() {
           if (shiftSlots.length === 0) continue;
 
           // Position at each slot (including FG override)
-          const positions: Array<{ slot: string; room: string; blockType: EducatorEntry['blockType']; note?: string }> = [];
+          const positions: Array<{ slot: string; room: string; blockType: EducatorEntry['blockType']; note?: string; exactIn?: string; exactOut?: string }> = [];
           for (const slot of shiftSlots) {
             // Check if a confirmed FG covers this employee at this slot
             let fgPos: { room: string; blockType: EducatorEntry['blockType']; note?: string } | null = null;
@@ -773,7 +866,7 @@ export default function ReportingPage() {
                 if (!fg.slots.includes(slot)) continue;
                 const fgRoomIds = fg.roomIds.length === 0 ? centre.rooms.map(r => r.id) : fg.roomIds;
                 if (fgRoomIds.includes(naturalRoom.id)) {
-                  const heldIn = fg.heldInRoom ? (centre.rooms.find(r => r.id === fg.heldInRoom)?.name ?? fg.label) : fg.label;
+                  const heldIn = fg.heldInRoom ? (centre.rooms.find(r => r.id === fg.heldInRoom)?.name ?? fg.heldInRoom) : fg.label;
                   fgPos = { room: heldIn, blockType: 'grouping' as EducatorEntry['blockType'], note: `${fg.label} - held in ${heldIn}` };
                   break;
                 }
@@ -784,26 +877,84 @@ export default function ReportingPage() {
             } else {
               const pos = posAt(empId, slot);
               const room = pos.room || naturalRoomName;
-              positions.push({ slot, room, blockType: pos.blockType, note: pos.note });
+              positions.push({ slot, room, blockType: pos.blockType, note: pos.note, exactIn: pos.exactIn, exactOut: pos.exactOut });
             }
           }
 
           // Merge consecutive same-room/blockType slots
+          const lunchStart = actualOverride?.lunchStart;
+          const lunchEnd   = actualOverride?.lunchEnd;
           let i = 0;
           while (i < positions.length) {
             const start = positions[i];
             let j = i + 1;
-            while (j < positions.length && positions[j].room === start.room && positions[j].blockType === start.blockType) j++;
+            // Merge consecutive slots in the same room with the same blockType.
+            // Note differences within the same room are ignored — the first slot's
+            // note is used for the whole block.
+            // IMPORTANT: if any slot in the block has exactOut set (from a float
+            // schedule block), stop merging there — the float schedule end time is
+            // a hard cap and ratio check propagation must not bleed past it.
+            while (j < positions.length &&
+              positions[j].room === start.room &&
+              positions[j].blockType === start.blockType &&
+              !positions[j - 1].exactOut) j++;
             const lastSlot = positions[j - 1].slot;
             const endMins = sm151(lastSlot) + 15;
-            const endTime = `${String(Math.floor(endMins/60)).padStart(2,'0')}:${String(endMins%60).padStart(2,'0')}`;
+            const slotEndTime = `${String(Math.floor(endMins/60)).padStart(2,'0')}:${String(endMins%60).padStart(2,'0')}`;
             if (start.room && start.room !== 'Off Roster') {
+              const isFirstBlock = i === 0;
+              const isLastBlock  = j === positions.length;
+              // For float cover blocks, use exact schedule times from the float schedule
+              // (e.g. 12:38 not 12:30) rather than slot boundaries.
+              // exactIn on the first slot of the block = exact start; exactOut on the last slot = exact end.
+              // Use exact float schedule times when available.
+              // exactIn: from the first slot of the block (float schedule start time).
+              // exactOut: from the last slot of the block IF it has exactOut set
+              //   (float schedule end time — hard cap, stops ratio check bleed-over).
+              const exactBlockIn  = start.exactIn;
+              const exactBlockOut = positions[j - 1].exactOut;
+              // Actual in: exact float schedule time > clock-in > slot start
+              let entryIn  = exactBlockIn  ? exactBlockIn
+                           : isFirstBlock && shiftIn && shiftIn !== '-' ? shiftIn
+                           : start.slot;
+              // Actual out: exact float schedule time > clock-out > slot end time
+              let entryOut = exactBlockOut ? exactBlockOut
+                           : isLastBlock && shiftOut && shiftOut !== '-' ? shiftOut
+                           : slotEndTime;
+              // If lunch break exists, trim shift blocks around the break so there
+              // are no gaps: block before lunch ends exactly at lunchStart,
+              // block after lunch starts exactly at lunchEnd.
+              if (lunchStart && lunchEnd) {
+                const blockStartMins = sm151(entryIn);
+                const blockEndMins   = sm151(entryOut);
+                const lunchStartMins = sm151(lunchStart);
+                const lunchEndMins   = sm151(lunchEnd);
+                if (blockStartMins >= lunchStartMins && blockEndMins <= lunchEndMins) {
+                  // Entirely within lunch — skip
+                  i = j; continue;
+                }
+                if (blockStartMins < lunchStartMins && blockEndMins > lunchEndMins) {
+                  // Block spans the entire lunch window — split into pre + post
+                  // Pre-lunch block
+                  entries.push({ employeeId: empId, name, room: start.room, inTime: entryIn, outTime: lunchStart, blockType: start.blockType, staffType, note: start.note });
+                  // Post-lunch block
+                  entries.push({ employeeId: empId, name, room: start.room, inTime: lunchEnd, outTime: entryOut, blockType: start.blockType, staffType, note: start.note });
+                  i = j; continue;
+                }
+                if (blockStartMins < lunchStartMins && blockEndMins > lunchStartMins) {
+                  // Block runs into lunch start — trim end to exact lunch start time
+                  entryOut = lunchStart;
+                } else if (blockEndMins > lunchEndMins && blockStartMins <= lunchEndMins) {
+                  // Block starts at or during lunch — push start to exact lunch end time
+                  entryIn = lunchEnd;
+                }
+              }
               entries.push({
                 employeeId: empId,
                 name,
                 room: start.room,
-                inTime: start.slot,
-                outTime: endTime,
+                inTime:  entryIn,
+                outTime: entryOut,
                 blockType: start.blockType,
                 staffType,
                 note: start.note,
@@ -812,6 +963,37 @@ export default function ReportingPage() {
             i = j;
           }
         }
+
+        // Deduplicate entries: when the same person appears in both a float unit
+        // and support unit in Deputy, the loop processes them twice producing
+        // overlapping entries. Resolve by keeping the ratio-check-sourced entry
+        // ('shift') over float-schedule-derived ('float' staffType or 'float_move').
+        // Overlap = same employee, same room, time ranges intersect.
+        const dedupedEntries: EducatorEntry[] = [];
+        for (const entry of entries) {
+          const eS = sm151(entry.inTime);
+          const eE = sm151(entry.outTime);
+          const conflict = dedupedEntries.findIndex(e => {
+            if (e.employeeId !== entry.employeeId) return false;
+            if (e.room !== entry.room) return false;
+            const cS = sm151(e.inTime);
+            const cE = sm151(e.outTime);
+            return eS < cE && eE > cS; // overlapping time ranges
+          });
+          if (conflict === -1) {
+            dedupedEntries.push(entry);
+          } else {
+            const existing = dedupedEntries[conflict];
+            // Prefer ratio-check-sourced (shift, non-float staffType) over float-derived
+            const entryIsRatioCheck = entry.blockType === 'shift' && entry.staffType !== 'float';
+            const existingIsRatioCheck = existing.blockType === 'shift' && existing.staffType !== 'float';
+            if (entryIsRatioCheck && !existingIsRatioCheck) {
+              dedupedEntries[conflict] = entry;
+            }
+          }
+        }
+        entries.length = 0;
+        entries.push(...dedupedEntries);
 
         // Overlay confirmed family groupings (same logic as before)
         const confirmedGroupings = (groupingSessionRows as any[]).filter(gs =>
@@ -823,7 +1005,8 @@ export default function ReportingPage() {
             const gEnd   = gs.session_end   as string;
             const gLabel = gs.group_label   as string;
             const heldInId   = gs.held_in_room as string | undefined;
-            const heldInRoom = centre.rooms.find(r => r.id === heldInId)?.name ?? gLabel;
+            // heldInId is either a room ID (look up name) or an outdoor area name string (use directly)
+            const heldInRoom = centre.rooms.find(r => r.id === heldInId)?.name ?? heldInId ?? gLabel;
             const staffIds: number[] = gs.staff_ids ?? [];
             const staffNames: string[] = gs.staff_names ?? [];
             const staffRoomIds: string[] = gs.staff_rooms ?? [];
@@ -872,6 +1055,38 @@ export default function ReportingPage() {
             }
           }
         }
+
+        // Inject actual lunch break rows from Ratio Check overrides (Deputy actuals or manual)
+        // For each staff member with actual break times, insert a dedicated Lunch row
+        // Track which employeeIds already have a lunch_break positional entry (from Ratio Check moves)
+        const lunchEntriesToAdd: typeof entries = [];
+        const seenLunchEmpIds = new Set<number>();
+        for (const entry of entries) {
+          if (entry.blockType === 'lunch_break') continue;
+          if (seenLunchEmpIds.has(entry.employeeId)) continue;
+          const override = ratioTimeOverrides[String(entry.employeeId)];
+          if (!override?.lunchStart) continue;
+          seenLunchEmpIds.add(entry.employeeId);
+          // Remove any existing positional lunch_break entry for this employee (will be replaced)
+          // Add a clean lunch row with actual times
+          lunchEntriesToAdd.push({
+            employeeId: entry.employeeId,
+            name:       entry.name,
+            room:       'Lunch Break',
+            inTime:     override.lunchStart,
+            outTime:    override.lunchEnd ?? '',
+            blockType:  'lunch_break',
+            staffType:  entry.staffType,
+            note:       override.lunchEnd ? 'Deputy actual' : 'In progress',
+          });
+        }
+        // Remove old positional lunch entries that will be replaced with actual times
+        const filteredEntries = entries.filter(e =>
+          e.blockType !== 'lunch_break' || !seenLunchEmpIds.has(e.employeeId)
+        );
+        entries.length = 0;
+        filteredEntries.forEach(e => entries.push(e));
+        lunchEntriesToAdd.forEach(e => entries.push(e));
 
         if (entries.length > 0) {
           // Sort by staff name, then by inTime within each person
@@ -1115,6 +1330,7 @@ export default function ReportingPage() {
            * Handles: brackets, role abbreviations, hyphens, copy markers, verbose roles.
            */
           const normaliseName = (name: string) => name
+            .replace(/^(NIL|N\/A|TBA|TBD):\s*/i, '')             // strip NIL:/TBA: prefixes
             .replace(/\s*[\(\[{][^\)\]{}]*[\)\]{}]\s*/g, ' ')  // strip (brackets)
             .replace(/\s+-\s+.+$/i, '')                          // strip - role descriptor
             .replace(/\s+\b(RL|EL|CD|AD|ECT|2IC|HOD|HOE|RN|DON)\b\s*$/i, '') // role abbrevs
@@ -1410,9 +1626,9 @@ export default function ReportingPage() {
                   <strong>Regulation 151 Record</strong> - Each row is a single time block: one educator, one room, one period. Float movements are broken into individual blocks. Linked to the Plan of Day float schedule and lunch planner.
                 </div>
 
-                {/* Room filter */}
+                {/* Room filter + WWCC resync */}
                 {educatorRows.length > 0 && (
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
                     <span className="text-sm font-medium" style={{ color: '#2d5c18' }}>Filter by room:</span>
                     <select
                       value={roomFilter}
@@ -1429,6 +1645,47 @@ export default function ReportingPage() {
                       <button onClick={() => setRoomFilter('all')}
                         className="text-xs px-2 py-1 rounded-lg border"
                         style={{ borderColor: '#D0E8B8', color: '#596570' }}>Clear</button>
+                    )}
+                    <button
+                      disabled={wwccSyncing}
+                      onClick={async () => {
+                        setWwccSyncing(true);
+                        setWwccSyncMsg(null);
+                        try {
+                          let total = 0;
+                          for (const c of selectedCentres) {
+                            const r = await fetch('/api/sync-wwcc-centre', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ centre: c.name }),
+                            });
+                            const j = await r.json();
+                            total += j.upserted ?? 0;
+                          }
+                          setWwccSyncMsg(`✅ WWCC synced — ${total} records updated.`);
+                          // Reload WWCC lookup after sync
+                          const res = await fetch('/api/staff-wwcc');
+                          if (res.ok) {
+                            const records: { full_name: string; full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }[] = await res.json();
+                            const normMap: Record<string, any> = {};
+                            for (const rec of records) normMap[rec.full_name_norm] = rec;
+                            setWwccLookup(() => (name: string) => normMap[name.toLowerCase().replace(/\s+/g,' ').trim()] ?? null);
+                          }
+                        } catch (e: any) {
+                          setWwccSyncMsg(`❌ Sync failed: ${e.message}`);
+                        } finally {
+                          setWwccSyncing(false);
+                          setTimeout(() => setWwccSyncMsg(null), 5000);
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                      style={{ backgroundColor: wwccSyncing ? '#e5e7eb' : '#2d5c18', color: wwccSyncing ? '#6b7280' : 'white' }}>
+                      {wwccSyncing ? '⏳ Syncing…' : '🔄 Resync WWCC'}
+                    </button>
+                    {wwccSyncMsg && (
+                      <span className="text-xs" style={{ color: wwccSyncMsg.startsWith('✅') ? '#2d5c18' : '#dc2626' }}>
+                        {wwccSyncMsg}
+                      </span>
                     )}
                   </div>
                 )}
@@ -1479,7 +1736,7 @@ export default function ReportingPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {filtered.map((e, i) => {
+                            {(() => { const seenNamesInner = new Set<number>(); return filtered.map((e) => {
                               const isLunch       = e.blockType === 'lunch_break';
                               const isGrouping    = e.blockType === 'grouping';
                               const isMorningFG   = isGrouping && parseInt(e.inTime) < 12;
@@ -1487,18 +1744,23 @@ export default function ReportingPage() {
                               const isFloat    = e.staffType === 'float' || e.staffType === 'iss';
                               const isLeave    = e.staffType === 'leave';
                               const isCover    = e.blockType === 'lunch_cover' || e.blockType === 'float_move';
-                              const prevSame   = i > 0 && filtered[i-1].employeeId === e.employeeId;
+                              const isFirstRowInner = isLeave || !seenNamesInner.has(e.employeeId);
+                              if (!isLeave) seenNamesInner.add(e.employeeId);
+                              const prevSame = !isFirstRowInner
+                                && (isLunch || isGrouping || isCover || e.blockType === 'shift');
+                              const isSupport = e.staffType === 'support';
                               const bg = isLunch       ? '#fffbeb'
                                 : isMorningFG   ? '#f0fdf4'
                                 : isAfternoonFG ? '#faf5ff'
                                 : isLeave    ? '#fef2f2'
                                 : isFloat    ? '#eff6ff'
+                                : isSupport  ? '#faf5ff'
                                 : isCover    ? '#f0fdf4'
-                                : i % 2 === 0 ? 'white' : '#fafffe';
+                                : 'white';
                               const fgColor = isMorningFG ? '#166534' : '#6d28d9';
 
                               return (
-                              <tr key={`${e.employeeId}-${e.inTime}-${e.room}-${i}`}
+                              <tr key={`${e.employeeId}-${e.inTime}-${e.room}`}
                                 className="border-t"
                                 style={{ borderColor: prevSame ? '#f3f4f6' : '#E2F1DA', backgroundColor: bg }}>
                                 <td className="py-2 px-4 font-medium" style={{ color: '#050505' }}>
@@ -1507,6 +1769,7 @@ export default function ReportingPage() {
                                     : <span>{e.name}
                                         {isFloat && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>{e.staffType === 'iss' ? 'ISS' : 'Float'}</span>}
                                         {isLeave && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>Leave</span>}
+                                        {isSupport && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#ede9fe', color: '#6d28d9' }}>Support</span>}
                                         {isMorningFG && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>Morning FG</span>}
                                         {isAfternoonFG && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#ede9fe', color: '#6d28d9' }}>Afternoon FG</span>}
                                       </span>
@@ -1523,10 +1786,10 @@ export default function ReportingPage() {
                                 <td className="py-2 px-4">
                                   <span className="text-xs px-2 py-0.5 rounded-full font-medium"
                                     style={{
-                                      backgroundColor: isLunch ? '#fef3c7' : isGrouping ? '#d1fae5' : isCover ? '#dcfce7' : isLeave ? '#fee2e2' : isFloat ? '#dbeafe' : '#f0fdf4',
-                                      color: isLunch ? '#92400e' : isGrouping ? '#065f46' : isCover ? '#166534' : isLeave ? '#dc2626' : isFloat ? '#1d4ed8' : '#166534',
+                                      backgroundColor: isLunch ? '#fef3c7' : isGrouping ? '#d1fae5' : isCover ? '#dcfce7' : isLeave ? '#fee2e2' : isFloat ? '#dbeafe' : isSupport ? '#ede9fe' : '#f0fdf4',
+                                      color: isLunch ? '#92400e' : isGrouping ? '#065f46' : isCover ? '#166534' : isLeave ? '#dc2626' : isFloat ? '#1d4ed8' : isSupport ? '#6d28d9' : '#166534',
                                     }}>
-                                    {isLunch ? 'Lunch' : isGrouping ? 'Grouped' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : 'Shift'}
+                                    {isLunch ? 'Lunch' : isGrouping ? 'Grouped' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : isSupport ? 'Support' : 'Shift'}
                                   </span>
                                 </td>
                                 <td className="py-2 px-4">
@@ -1539,7 +1802,7 @@ export default function ReportingPage() {
                                     if (isKitchen) return (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>Kitchen Staff</span>
                                     );
-                                    if (noUsefulData) return <span className="text-xs italic" style={{ color: '#9ca3af' }}>-</span>;
+                                    if (noUsefulData) return <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>No WWCC on file</span>;
                                     if (rec!.under_18) return (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>Under 18</span>
                                     );
@@ -1564,7 +1827,7 @@ export default function ReportingPage() {
                                 <td className="py-2 px-4 text-xs" style={{ color: e.note ? '#d97706' : '#9ca3af' }}>{e.note ?? '-'}</td>
                               </tr>
                               );
-                            })}
+                            });})()}
                           </tbody>
                         </table>
                       </div>
@@ -1999,20 +2262,56 @@ export default function ReportingPage() {
                   );
                 })()}
 
-                <div className="flex gap-2 flex-wrap">
-                  {(['all', 'expired', '30', '60', '90'] as const).map(f => {
-                    const fLabel: Record<string, string> = { all: 'All', expired: 'Expired', '30': 'Expiring <30d', '60': 'Expiring <60d', '90': 'Expiring <90d' };
-                    return (
-                      <button key={f} onClick={() => setWwccExpiryFilter(f)}
-                        className="px-3 py-1.5 rounded-xl text-xs font-semibold"
-                        style={wwccExpiryFilter === f
-                          ? { backgroundColor: '#2d5c18', color: 'white' }
-                          : { backgroundColor: 'white', color: '#5a9228', border: '1px solid #D0E8B8' }}>
-                        {fLabel[f]}
-                      </button>
-                    );
-                  })}
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex gap-2 flex-wrap">
+                    {(['all', 'expired', '30', '60', '90'] as const).map(f => {
+                      const fLabel: Record<string, string> = { all: 'All', expired: 'Expired', '30': 'Expiring <30d', '60': 'Expiring <60d', '90': 'Expiring <90d' };
+                      return (
+                        <button key={f} onClick={() => setWwccExpiryFilter(f)}
+                          className="px-3 py-1.5 rounded-xl text-xs font-semibold"
+                          style={wwccExpiryFilter === f
+                            ? { backgroundColor: '#2d5c18', color: 'white' }
+                            : { backgroundColor: 'white', color: '#5a9228', border: '1px solid #D0E8B8' }}>
+                          {fLabel[f]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    disabled={wwccSyncing}
+                    onClick={async () => {
+                      setWwccSyncing(true);
+                      setWwccSyncMsg(null);
+                      try {
+                        const centres = [...new Set(wwccExpiryRows.map(r => r.centre).filter(Boolean))];
+                        if (centres.length === 0) { setWwccSyncMsg('No centres to sync.'); return; }
+                        let total = 0;
+                        for (const c of centres) {
+                          const r = await fetch('/api/sync-wwcc-centre', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ centre: c }),
+                          });
+                          const j = await r.json();
+                          total += j.upserted ?? 0;
+                        }
+                        setWwccSyncMsg(`✅ Synced — ${total} records updated. Reload to see latest data.`);
+                      } catch (e: any) {
+                        setWwccSyncMsg(`❌ Sync failed: ${e.message}`);
+                      } finally {
+                        setWwccSyncing(false);
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                    style={{ backgroundColor: wwccSyncing ? '#e5e7eb' : '#2d5c18', color: wwccSyncing ? '#6b7280' : 'white' }}>
+                    {wwccSyncing ? '⏳ Syncing…' : '🔄 Sync WWCC'}
+                  </button>
                 </div>
+                {wwccSyncMsg && (
+                  <div className="text-xs px-3 py-2 rounded-xl" style={{ backgroundColor: '#F5FAF3', color: '#2d5c18' }}>
+                    {wwccSyncMsg}
+                  </div>
+                )}
 
                 <div className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
                   <table className="w-full text-sm">

@@ -5,7 +5,7 @@
 
 import { SUPABASE_URL, SUPABASE_ANON } from '../config';
 
-export type AppRole = 'admin' | 'area_manager' | 'director';
+export type AppRole = 'admin' | 'area_manager' | 'director' | 'assistant_director';
 
 export interface PagePermission {
   key: string;
@@ -37,9 +37,20 @@ export function getBuiltinDefaults(role: AppRole): RolePermissions {
       return {
         dashboard: true,
         ratio:     true,
-        summary:   false,
+        summary:   true,
         week:      true,
         reporting: true,
+        config:    false,
+        settings:  false,
+      };
+    case 'assistant_director':
+      // Assistant Directors: Ratio Check + Summary only. Single centre, no reports or plan.
+      return {
+        dashboard: false,
+        ratio:     true,
+        summary:   true,
+        week:      false,
+        reporting: false,
         config:    false,
         settings:  false,
       };
@@ -64,9 +75,10 @@ export async function loadRolePermissions(): Promise<void> {
       if (res.ok) {
         const rows: { role: string; permissions: RolePermissions }[] = await res.json();
         const map: RolePermissionMap = {
-          admin:        { ...getBuiltinDefaults('admin') },
-          area_manager: { ...getBuiltinDefaults('area_manager') },
-          director:     { ...getBuiltinDefaults('director') },
+          admin:              { ...getBuiltinDefaults('admin') },
+          area_manager:       { ...getBuiltinDefaults('area_manager') },
+          director:           { ...getBuiltinDefaults('director') },
+          assistant_director: { ...getBuiltinDefaults('assistant_director') },
         };
         for (const row of rows) {
           const r = row.role as AppRole;
@@ -78,9 +90,10 @@ export async function loadRolePermissions(): Promise<void> {
     } catch { /* fall through */ }
     // Fallback to built-in defaults
     _cache = {
-      admin:        getBuiltinDefaults('admin'),
-      area_manager: getBuiltinDefaults('area_manager'),
-      director:     getBuiltinDefaults('director'),
+      admin:              getBuiltinDefaults('admin'),
+      area_manager:       getBuiltinDefaults('area_manager'),
+      director:           getBuiltinDefaults('director'),
+      assistant_director: getBuiltinDefaults('assistant_director'),
     };
   })();
 

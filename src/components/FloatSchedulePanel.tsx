@@ -17,6 +17,7 @@ import type { AttendanceChild, Room, RoomRatioStatus, RosteredStaff, FloatStaff 
 import { toMins, minsToAmPm, minsToHHMM, hhmmToMins } from '../utils/timeUtils';
 import { getUser } from '../auth';
 import { loadCentreRules, breakLabelForTime, getBreakWindow } from '../utils/centreRules';
+import { enqueueSave } from '../utils/syncQueue';
 import type { CentreRule } from '../utils/centreRules';
 
 // â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -729,21 +730,18 @@ export default function FloatSchedulePanel({
     // Save to localStorage immediately (works even without Supabase table)
     localStorage.setItem(lsKey, JSON.stringify(schedule));
 
-    // Supabase
-    try {
-      await fetch('/api/float-schedules', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          centre_id:    centreId,
-          date,
-          employee_id:  float.employeeId,
-          employee_name: float.employeeName,
-          schedule:     blocks,
-          saved_by:     user?.email ?? null,
-        }),
-      });
-    } catch { /* saved locally */ }
+    // Supabase (with offline queue fallback)
+    const saveResult = await enqueueSave('/api/float-schedules', {
+      centre_id:     centreId,
+      date,
+      employee_id:   float.employeeId,
+      employee_name: float.employeeName,
+      schedule:      blocks,
+      saved_by:      user?.email ?? null,
+    });
+    if (saveResult === 'queued') {
+      console.warn('[FloatSchedule] Supabase unavailable — save queued for retry');
+    }
 
     // Also sync break-cover info into lunch_schedules so LunchBreakPanel stays in sync
     try {

@@ -19,7 +19,7 @@ import RatioTimeline from '../components/RatioTimeline';
 import FloatSchedulePanel from '../components/FloatSchedulePanel';
 import LunchBreakPanel from '../components/LunchBreakPanel';
 import FloatBreakPanel from '../components/FloatBreakPanel';
-import RatioCheckPanel from '../components/RatioCheckPanel';
+import RatioCheckPanel, { type LunchAlert } from '../components/RatioCheckPanel';
 import PredictedCoveragePanel from '../components/PredictedCoveragePanel';
 import SummaryTab from '../components/SummaryTab';
 import type { AttendanceChild, RoomRatioStatus, RosteredStaff, FloatStaff } from '../types';
@@ -109,8 +109,11 @@ function StaffChip({ staff }: { staff: RosteredStaff }) {
         {getInitials(staff.employeeName)}
       </div>
       <div className="min-w-0">
-        <div className="text-xs font-medium truncate" style={{ color: '#2d5c18' }}>
+        <div className="text-xs font-medium truncate flex items-center gap-1" style={{ color: '#2d5c18' }}>
           {staff.employeeName}
+          {staff.isInternalCasual && (
+            <span className="flex-shrink-0 text-xs font-semibold px-1 py-0 rounded" style={{ backgroundColor: '#fef3c7', color: '#92400e', fontSize: '9px', lineHeight: '14px' }}>IC</span>
+          )}
         </div>
         <div className="text-xs" style={{ color: '#596570' }}>
           {timeStr || 'Time not set'}
@@ -130,7 +133,9 @@ interface DragProps {
   movedOutIds: Set<number>;         // employees dragged away from this room
 }
 
-function RoomCard({ roomStatus, drag }: { roomStatus: RoomRatioStatus; drag?: DragProps }) {
+type RoomForecastData = { expected: number | null; weeksUsed: number; booked?: number | null } | null;
+
+function RoomCard({ roomStatus, drag, forecast }: { roomStatus: RoomRatioStatus; drag?: DragProps; issAssigned?: FloatStaff[]; forecast?: RoomForecastData }) {
   const { room, presentCount, ageBreakdown, requiredStaff, staffCount, shortage, status, rosteredStaff } = roomStatus;
 
   const dragOver     = drag?.isDragOver ?? false;
@@ -163,11 +168,40 @@ function RoomCard({ roomStatus, drag }: { roomStatus: RoomRatioStatus; drag?: Dr
       </div>
 
       <div className="px-4 py-3 space-y-3">
-        {/* Children count */}
-        <div className="flex items-center justify-between">
+        {/* Children count -- Expected / Booked / Actual */}
+        <div className="flex items-center justify-between mb-1">
           <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#2d5c18' }}>Children</span>
           <span className="text-2xl font-bold" style={{ color: '#2d5c18' }}>{presentCount}</span>
         </div>
+        {(forecast?.booked != null || forecast?.expected != null) && (
+          <div className="flex gap-2 -mt-1 mb-1">
+            {forecast?.expected != null && (
+              <div className="flex-1 rounded-lg px-2 py-1 text-center" style={{ backgroundColor: '#f0f9ff' }}>
+                <div className="text-xs font-bold" style={{ color: '#0369a1' }}>{forecast.expected}</div>
+                <div className="text-xs" style={{ color: '#0284c7', opacity: 0.8 }}>expected</div>
+              </div>
+            )}
+            {forecast?.booked != null && (
+              <div className="flex-1 rounded-lg px-2 py-1 text-center" style={{ backgroundColor: '#f0f4ff' }}>
+                <div className="text-xs font-bold" style={{ color: '#3730a3' }}>{forecast.booked}</div>
+                <div className="text-xs" style={{ color: '#6366f1', opacity: 0.8 }}>booked</div>
+              </div>
+            )}
+            {(forecast?.expected != null || forecast?.booked != null) && (() => {
+              const base = forecast?.expected ?? forecast?.booked;
+              if (base == null || presentCount === 0) return null;
+              const diff = presentCount - base;
+              if (diff === 0) return null;
+              const over = diff > 0;
+              return (
+                <div className="flex-1 rounded-lg px-2 py-1 text-center" style={{ backgroundColor: over ? '#f0fdf4' : '#fefce8' }}>
+                  <div className="text-xs font-bold" style={{ color: over ? '#15803d' : '#92400e' }}>{over ? '+' : ''}{diff}</div>
+                  <div className="text-xs" style={{ color: over ? '#16a34a' : '#a16207', opacity: 0.8 }}>vs exp</div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
 
         {/* Age breakdown */}
         {ageBreakdown.length > 0 && (
@@ -628,7 +662,18 @@ function FloatPoolSection({
                   className={`flex items-center justify-between ${onDragStart ? 'cursor-grab active:cursor-grabbing' : ''}`}
                 >
                   <StaffChip staff={s} />
-                  <span className="text-xs px-2 py-0.5 rounded-full font-semibold ml-2" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>AD</span>
+                  <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                    <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>AD</span>
+                    {onFloatClick && (
+                      <button
+                        onClick={() => onFloatClick(s as FloatStaff)}
+                        className="text-xs px-2 py-0.5 rounded-full font-medium hover:opacity-80"
+                        style={{ backgroundColor: savedFloatIds?.has(s.employeeId) ? '#bbf7d0' : '#E2F1DA', color: '#2d5c18' }}
+                      >
+                        {savedFloatIds?.has(s.employeeId) ? '✅ Day Planned' : '📋 Plan day'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -700,6 +745,8 @@ export default function RatioDashboardPage() {
   const [supportStaff, setSupportStaff] = useState<RosteredStaff[]>([]);
   const [issStaff, setIssStaff]           = useState<FloatStaff[]>([]);
   const [allRosters, setAllRosters]   = useState<RosteredStaff[]>([]);
+  // Set of normalised names who are internal casuals (from staff_wwcc table)
+  const [internalCasualSet, setInternalCasualSet] = useState<Set<string>>(new Set());
   const [activeView, setActiveView]   = useState<'plan-of-day' | 'ratio-check' | 'summary'>('plan-of-day');
   const [planSubView, setPlanSubView] = useState<'live' | 'plan'>('live');
 
@@ -709,6 +756,7 @@ export default function RatioDashboardPage() {
   // and every child from that past day will have a sign_out — so showCurrentOnly would
   // filter all of them out. Always use all-day mode for future dates.
   const isFutureDate = date > todayStr();
+  const [lunchAlerts, setLunchAlerts] = useState<LunchAlert[]>([]);
   const showCurrentOnly = !isFutureDate && planSubView === 'live';
 
   // effectiveDate: which date's attendance data to fetch.
@@ -717,21 +765,26 @@ export default function RatioDashboardPage() {
   // - Explicit 'expected' mode always uses prior-week for forward-looking planning.
   const effectiveDate = React.useMemo(() => {
     if (viewMode === 'expected') {
-      const d = new Date(date + 'T00:00:00');
-      d.setDate(d.getDate() - 7);
+      const d = new Date(date + 'T12:00:00Z');
+      d.setUTCDate(d.getUTCDate() - 7);
       return d.toISOString().slice(0, 10);
     }
     // For today or any past date, actual attendance records exist in Owna/Supabase
     if (date <= todayStr()) return date;
     // Future date: fall back to same weekday last week
-    const d = new Date(date + 'T00:00:00');
-    d.setDate(d.getDate() - 7);
+    const d = new Date(date + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() - 7);
     return d.toISOString().slice(0, 10);
   }, [date, viewMode]);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [ownaRefreshedAt, setOwnaRefreshedAt] = useState<Date | null>(null);
+
+  // Booked / Expected forecast data per room
+  type RoomForecast = { expected: number | null; weeksUsed: number; booked?: number | null };
+  type ForecastData = { booked: number | null; capacity: number | null; rooms: Record<string, RoomForecast> };
+  const [forecast, setForecast] = useState<ForecastData | null>(null);
 
   // -- Drag-and-drop: manual staff reallocation (persisted per centre+date) --------
   const movesKey = `tga_pod_moves:${selectedCentreId}:${date}`;
@@ -827,6 +880,12 @@ export default function RatioDashboardPage() {
   // Effective room statuses — always rebuilt with current view mode so switching
   // between "All Day" and "Currently Present" is instantly reflected without refetch.
   // roomStatuses is always stored with showCurrentOnly=false (full day data).
+  // Stamp isInternalCasual onto every roster entry based on the fetched casual set
+  const normName = (n: string) => n.toLowerCase().replace(/\s+/g, ' ').trim();
+  const tagCasual = useCallback(<T extends RosteredStaff>(arr: T[]): T[] =>
+    internalCasualSet.size === 0 ? arr : arr.map(s => ({ ...s, isInternalCasual: internalCasualSet.has(normName(s.employeeName)) }))
+  , [internalCasualSet]);
+
   const effectiveRoomStatuses = useMemo((): RoomRatioStatus[] => {
     const nowS = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
     const nowM  = nowS.getHours() * 60 + nowS.getMinutes();
@@ -834,7 +893,7 @@ export default function RatioDashboardPage() {
     if (!hasOverrides) {
       // No manual moves — re-apply current mode filter to full-day data
       return roomStatuses.map(rs =>
-        buildRoomStatus(rs.room, children as any, rs.rosteredStaff, showCurrentOnly, nowM)
+        buildRoomStatus(rs.room, children as any, tagCasual(rs.rosteredStaff), showCurrentOnly, nowM)
       );
     }
 
@@ -858,9 +917,9 @@ export default function RatioDashboardPage() {
         !staying.some(x => x.employeeId === s.employeeId) &&
         !movedIn.some(x => x.employeeId === s.employeeId)
       );
-      return buildRoomStatus(rs.room, children as any, [...staying, ...movedIn, ...issMovedHere], showCurrentOnly, nowM);
+      return buildRoomStatus(rs.room, children as any, tagCasual([...staying, ...movedIn, ...issMovedHere]), showCurrentOnly, nowM);
     });
-  }, [roomStatuses, floats, issStaff, supportStaff, staffMoves, children, showCurrentOnly, hasOverrides]);
+  }, [roomStatuses, floats, issStaff, supportStaff, staffMoves, children, showCurrentOnly, hasOverrides, tagCasual]);
 
   // ISS staff: split into unassigned, moved-to-room, moved-to-float
   const effectiveIssStaff = useMemo((): FloatStaff[] => {
@@ -893,54 +952,113 @@ export default function RatioDashboardPage() {
   const effectiveFloats = useMemo((): FloatStaff[] => {
     // ADs shown separately with AD badge; excluded from main float list to avoid double-display
     const adIds = new Set(adStaff.map(s => s.employeeId));
+    // Support staff manually moved to float pool
     const supportAsFloats = supportStaff
       .filter(s => staffMoves[s.employeeId] === 'float' && !adIds.has(s.employeeId)) as FloatStaff[];
-    if (!hasOverrides) return [...floats, ...supportAsFloats];
-    return [
-      ...floats.filter(f => !staffMoves[f.employeeId] || staffMoves[f.employeeId] === 'float'),
-      ...supportAsFloats,
-    ];
-  }, [floats, supportStaff, adStaff, staffMoves, hasOverrides]);
+    // Room staff manually moved to float pool (they disappear from their room card)
+    const roomStaffAsFloats = roomStatuses
+      .flatMap(rs => rs.rosteredStaff)
+      .filter(s => staffMoves[s.employeeId] === 'float') as FloatStaff[];
+    const result = !hasOverrides
+      ? [...floats, ...supportAsFloats]
+      : [
+          ...floats.filter(f => !staffMoves[f.employeeId] || staffMoves[f.employeeId] === 'float'),
+          ...supportAsFloats,
+          ...roomStaffAsFloats,
+        ];
+    // Split shift rule: only count staff in the float pool if their shift overlaps
+    // the 10am–2pm core window. Staff who only work morning (e.g. 7am–11am) or
+    // afternoon (e.g. 2pm–6pm) should not inflate the float pool count —
+    // they go under Support instead. Manually moved staff always stay in float pool
+    // regardless of their shift time (explicit override).
+    const WINDOW_START = 10 * 60; // 10:00
+    const WINDOW_END   = 14 * 60; // 14:00
+    const filtered = tagCasual(result).filter((f: FloatStaff) => {
+      // Always keep manually moved staff (explicit director decision)
+      if (staffMoves[f.employeeId]) return true;
+      const s = toMins(f.startTime);
+      const e = toMins(f.endTime);
+      if (s === null || e === null) return true; // no time info, keep
+      // Overlaps 10am–2pm = starts before 2pm AND ends after 10am
+      return s < WINDOW_END && e > WINDOW_START;
+    });
+    return filtered as FloatStaff[];
+  }, [floats, supportStaff, adStaff, roomStatuses, staffMoves, hasOverrides, tagCasual]);
 
   // Effective support staff: those not dragged into a room
   const effectiveSupportStaff = useMemo((): RosteredStaff[] => {
-    if (!hasOverrides) return supportStaff;
-    return supportStaff.filter(s => !staffMoves[s.employeeId] || staffMoves[s.employeeId] === 'support');
-  }, [supportStaff, staffMoves, hasOverrides]);
+    const arr = !hasOverrides ? supportStaff : supportStaff.filter(s => !staffMoves[s.employeeId] || staffMoves[s.employeeId] === 'support');
+    return tagCasual(arr);
+  }, [supportStaff, staffMoves, hasOverrides, tagCasual]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (forceRefresh = false) => {
     setLoading(true);
     setError(null);
+    setForecast(null);
     try {
       // Fetch attendance + rosters in parallel (cached for 5 min)
       // Use ownaName for Supabase campus lookup (e.g. 'Ed Park 2' not 'Edmondson Park 2')
       const campusName = centre.ownaName ?? centre.name;
       const attKey = `attendance:${campusName}:${effectiveDate}`;
       const rosterKey = `rosters:${selectedCentreId}:${date}`;
-      const [attendanceRes, rosters] = await Promise.all([
-        withCache(attKey, () => fetch(`/api/attendance?campus=${encodeURIComponent(campusName)}&date=${effectiveDate}`).then(r => r.json())),
-        withCache(rosterKey, () => fetchRosters(date, allUnitIds)),
+      const forecastKey = `forecast:${campusName}:${date}`;
+
+      // When force-refreshing, bust browser-side cache for this centre+date
+      if (forceRefresh) {
+        bustCache(attKey);
+        bustCache(rosterKey);
+        bustCache(forecastKey);
+      }
+
+      // For future dates beyond today: use enrolled children + project ages at the target date
+      // rather than fetching last week's attendance (which gives wrong ages and wrong room data).
+      const useFutureEnrolled = isFutureDate;
+
+      const [attendanceRes, enrolledRes, rosters, forecastRes] = await Promise.all([
+        useFutureEnrolled
+          ? Promise.resolve([])
+          : withCache(attKey, () => fetch(`/api/attendance?campus=${encodeURIComponent(campusName)}&date=${effectiveDate}`).then(r => r.json())),
+        useFutureEnrolled
+          ? withCache(`expected:${campusName}:${date}`, () => fetch(`/api/children-expected?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()), 900000)
+          : Promise.resolve([]),
+        withCache(rosterKey, () => fetchRosters(date, allUnitIds, forceRefresh)),
+        withCache(forecastKey, () => fetch(`/api/room-forecast?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()).catch(() => null), 300000),
       ]);
+      setForecast(forecastRes ?? null);
 
-      // Map attendance rows ? AttendanceChild with ageMonths
-      // Also extract the most recent scraped_at to show Owna data freshness
-      const safeAttendance: { child_name: string; room: string; sign_in: string|null; sign_out: string|null; predicted_sign_out: string|null; age: string|null; updated_at?: string|null }[] = Array.isArray(attendanceRes) ? attendanceRes : [];
-      const childRows: AttendanceChild[] = safeAttendance.map(row => ({
-        child_name: row.child_name,
-        room: row.room,
-        sign_in: row.sign_in,
-        sign_out: row.sign_out,
-        predicted_sign_out: row.predicted_sign_out ?? null,
-        age: row.age,
-        ageMonths: parseAgeMonths(row.age),
-      }));
+      let childRows: AttendanceChild[];
 
-      // Find the most recent scraped_at across all rows
-      const latestScrape = safeAttendance
-        .map(r => r.updated_at ? new Date(r.updated_at) : null)
-        .filter((d): d is Date => d !== null && !isNaN(d.getTime()))
-        .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
-      setOwnaRefreshedAt(latestScrape);
+      if (useFutureEnrolled && Array.isArray(enrolledRes) && enrolledRes.length > 0) {
+        // children-expected API returns children expected on this specific weekday
+        // based on historical attendance patterns, with age already projected to target date
+        childRows = (enrolledRes as { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[]).map(c => ({
+          child_name:           c.full_name,
+          room:                 c.room ?? '',
+          sign_in:              '08:00',  // assumed present all day for ratio planning
+          sign_out:             null,
+          predicted_sign_out:   null,
+          age:                  null,
+          ageMonths:            c.ageMonths ?? 36,
+        }));
+        setOwnaRefreshedAt(null); // no Owna scrape for future dates
+      } else {
+        // Past/today: map actual attendance rows
+        const safeAttendance: { child_name: string; room: string; sign_in: string|null; sign_out: string|null; predicted_sign_out: string|null; age: string|null; updated_at?: string|null }[] = Array.isArray(attendanceRes) ? attendanceRes : [];
+        childRows = safeAttendance.map(row => ({
+          child_name: row.child_name,
+          room: row.room,
+          sign_in: row.sign_in,
+          sign_out: row.sign_out,
+          predicted_sign_out: row.predicted_sign_out ?? null,
+          age: row.age,
+          ageMonths: parseAgeMonths(row.age),
+        }));
+        const latestScrape = safeAttendance
+          .map(r => r.updated_at ? new Date(r.updated_at) : null)
+          .filter((d): d is Date => d !== null && !isNaN(d.getTime()))
+          .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+        setOwnaRefreshedAt(latestScrape);
+      }
 
       setChildren(childRows);
 
@@ -968,14 +1086,51 @@ export default function RatioDashboardPage() {
 
       // Build room statuses — always with showCurrentOnly=false so we store the
       // complete day's data. effectiveRoomStatuses re-applies the mode filter live.
+      //
+      // For future dates: if the room-forecast has an expected count for a room,
+      // trim the historical childRows to that count so ratios use expected numbers.
+      // We keep the age distribution from the historical cohort (sorted youngest-first
+      // so the most conservative/youngest ages are preserved for ratio purposes).
       const statuses: RoomRatioStatus[] = centre.rooms.map(room => {
         const roomStaff = rosters.filter(r => r.unitId === room.deputyUnitId);
-        return buildRoomStatus(room, childRows, roomStaff, false, nowMinsToday);
+        let roomChildren = childRows;
+        if (isFutureDate && forecastRes?.rooms) {
+          // Find the forecast entry for this room (ownaRoomName substring match)
+          const owna = (room.ownaRoomName ?? room.name).toLowerCase();
+          const forecastEntry = Object.entries(forecastRes.rooms as Record<string, { expected: number | null; booked?: number | null }>)
+            .find(([roomName]) => roomName.toLowerCase().includes(owna) || owna.includes(roomName.toLowerCase()));
+          const expectedCount = forecastEntry?.[1]?.expected;
+          if (expectedCount != null) {
+            // Filter to this room's children then trim to expected count
+            // Sort youngest first so conservative ratio ages are kept
+            const roomKids = childRows
+              .filter(ch => ch.room.toLowerCase().includes(owna))
+              .sort((a, b) => (a.ageMonths ?? 999) - (b.ageMonths ?? 999))
+              .slice(0, expectedCount);
+            // Replace this room's children in the full array with the trimmed set
+            const otherKids = childRows.filter(ch => !ch.room.toLowerCase().includes(owna));
+            roomChildren = [...otherKids, ...roomKids];
+          }
+        }
+        return buildRoomStatus(room, roomChildren, roomStaff, false, nowMinsToday);
       });
 
       // Sanity check: also flag rooms whose unit IDs got no rosters
       setRoomStatuses(statuses);
       setLastUpdated(new Date());
+
+      // Fetch internal casual flags from WWCC table (best-effort, non-blocking)
+      fetch('/api/staff-wwcc')
+        .then(r => r.ok ? r.json() : [])
+        .then((records: { full_name: string; is_internal_casual?: boolean }[]) => {
+          const normName = (n: string) => n.toLowerCase().replace(/\s+/g, ' ').trim();
+          const casualSet = new Set<string>();
+          for (const rec of records) {
+            if (rec.is_internal_casual) casualSet.add(normName(rec.full_name));
+          }
+          setInternalCasualSet(casualSet);
+        })
+        .catch(() => {});
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data');
     } finally {
@@ -1041,7 +1196,7 @@ export default function RatioDashboardPage() {
             Ratio Dashboard
           </h1>
           <p className="text-sm mt-0.5" style={{ color: '#596570' }}>
-            {centre.name} · {safeFormat(new Date(date + 'T00:00:00'), 'EEEE d MMMM yyyy')}
+            {centre.name} · {safeFormat(new Date(date + 'T12:00:00Z'), 'EEEE d MMMM yyyy')}
           </p>
           <div className="flex items-center gap-1.5 mt-1">
             {effectiveDate !== date ? (
@@ -1080,7 +1235,7 @@ export default function RatioDashboardPage() {
           <div className="flex items-center gap-1">
             <button
               onClick={() => {
-                const d = new Date(date + 'T00:00:00');
+                const d = new Date(date + 'T12:00:00Z');
                 d.setDate(d.getDate() - 1);
                 setDate(d.toISOString().slice(0, 10));
               }}
@@ -1097,7 +1252,7 @@ export default function RatioDashboardPage() {
             />
             <button
               onClick={() => {
-                const d = new Date(date + 'T00:00:00');
+                const d = new Date(date + 'T12:00:00Z');
                 d.setDate(d.getDate() + 1);
                 setDate(d.toISOString().slice(0, 10));
               }}
@@ -1117,7 +1272,7 @@ export default function RatioDashboardPage() {
           </button>
           {/* Refresh */}
           <button
-            onClick={() => { bustCache(`attendance:${centre.ownaName ?? centre.name}`); bustCache(`rosters:${selectedCentreId}`); load(); }}
+            onClick={() => load(true)}
             disabled={loading}
             className="px-4 py-2 rounded-xl font-medium text-sm text-white transition-all hover:opacity-90 disabled:opacity-50"
             style={{ backgroundColor: '#2d5c18' }}
@@ -1152,6 +1307,28 @@ export default function RatioDashboardPage() {
         >🗒️ Summary</button>
       </div>
 
+      {/* -- Lunch overdue alerts — shown across all tabs -- */}
+      {!isFutureDate && lunchAlerts.length > 0 && (
+        <div className="no-print mb-4 rounded-xl border p-3" style={{ borderColor: '#fcd34d', backgroundColor: '#fffbeb' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+            <span style={{ fontSize: '15px' }}>🍝</span>
+            <span style={{ fontWeight: 700, fontSize: '13px', color: '#92400e' }}>
+              Lunch break overdue — {lunchAlerts.length} staff member{lunchAlerts.length !== 1 ? 's' : ''} haven't started their break
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {lunchAlerts.map(a => (
+              <span key={a.employeeId} style={{
+                fontSize: '12px', padding: '3px 8px', borderRadius: '6px',
+                backgroundColor: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e',
+              }}>
+                {a.employeeName.split(' ')[0]} — scheduled {a.scheduledLunch} ({a.minutesOverdue}m overdue)
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* -- Ratio Check Panel -- */}
       {activeView === 'ratio-check' && (
         <div
@@ -1164,6 +1341,7 @@ export default function RatioDashboardPage() {
             rooms={centre.rooms}
             children={children}
             rosters={allRosters.filter(r => !leaveUnitIds.includes(r.unitId))}
+            onLunchAlerts={setLunchAlerts}
           />
         </div>
       )}
@@ -1205,8 +1383,8 @@ export default function RatioDashboardPage() {
         )}
         {isFutureDate && (
           <span style={{ fontSize: '11px', borderRadius: '4px', padding: '2px 8px',
-            color: '#92400e', backgroundColor: '#fef3c7', border: '1px solid #fcd34d' }}>
-            📅 Predicted from {effectiveDate} (same weekday last week)
+            color: '#1d4ed8', backgroundColor: '#dbeafe', border: '1px solid #93c5fd' }}>
+            📅 Expected attendance based on historical patterns · {new Date(date + 'T12:00:00+10:00').toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
           </span>
         )}
         {!isFutureDate && planSubView === 'plan' && (
@@ -1246,27 +1424,35 @@ export default function RatioDashboardPage() {
         <div className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#E2F1DA' }}>
           Centre Summary
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="flex gap-3">
           {/* Total children */}
-          <div className="rounded-xl p-3" style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}>
-            <div className="text-2xl mb-1">👶</div>
+          <div className="flex-1 rounded-xl p-2" style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}>
+            <div className="text-base mb-0.5">👶</div>
             {loading ? (
-              <SkeletonPulse className="h-8 w-12 bg-white/20 mb-1" />
+              <SkeletonPulse className="h-6 w-10 bg-white/20 mb-1" />
             ) : (
-              <div className="text-2xl font-bold text-white">{totalChildren}</div>
+              <div className="text-lg font-bold text-white leading-tight">{totalChildren}</div>
             )}
             <div className="text-xs" style={{ color: '#E2F1DA' }}>
-              {showCurrentOnly ? 'Currently present' : 'Attended today'}
+              {showCurrentOnly ? 'Currently present' : isFutureDate ? 'Expected' : 'Attended today'}
             </div>
           </div>
 
+          {/* Booked */}
+          {forecast?.booked != null && (
+            <div className="flex-1 rounded-xl p-2" style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}>
+              <div className="text-base mb-0.5">📋</div>
+              {loading ? (<SkeletonPulse className="h-6 w-10 bg-white/20 mb-1" />) : (<div className="text-lg font-bold text-white leading-tight">{forecast.booked}</div>)}
+              <div className="text-xs" style={{ color: '#E2F1DA' }}>Booked</div>
+            </div>
+          )}
           {/* Total staff */}
-          <div className="rounded-xl p-3" style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}>
-            <div className="text-2xl mb-1">👤</div>
+          <div className="flex-1 rounded-xl p-2" style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}>
+            <div className="text-base mb-0.5">👤</div>
             {loading ? (
-              <SkeletonPulse className="h-8 w-12 bg-white/20 mb-1" />
+              <SkeletonPulse className="h-6 w-10 bg-white/20 mb-1" />
             ) : (
-              <div className="text-2xl font-bold text-white">{totalStaff}</div>
+              <div className="text-lg font-bold text-white leading-tight">{totalStaff}</div>
             )}
             <div className="text-xs" style={{ color: '#E2F1DA' }}>
               {showCurrentOnly ? 'Currently on shift' : 'Staff rostered'}
@@ -1274,12 +1460,12 @@ export default function RatioDashboardPage() {
           </div>
 
           {/* Rooms at risk */}
-          <div className="rounded-xl p-3" style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}>
-            <div className="text-2xl mb-1">🚨</div>
+          <div className="flex-1 rounded-xl p-2" style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}>
+            <div className="text-base mb-0.5">🚨</div>
             {loading ? (
-              <SkeletonPulse className="h-8 w-12 bg-white/20 mb-1" />
+              <SkeletonPulse className="h-6 w-10 bg-white/20 mb-1" />
             ) : (
-              <div className="text-2xl font-bold" style={{ color: roomsAtRisk.length > 0 ? '#fca5a5' : '#E2F1DA' }}>
+              <div className="text-lg font-bold leading-tight" style={{ color: roomsAtRisk.length > 0 ? '#fca5a5' : '#E2F1DA' }}>
                 {roomsAtRisk.length}
               </div>
             )}
@@ -1287,13 +1473,13 @@ export default function RatioDashboardPage() {
           </div>
 
           {/* Overall status */}
-          <div className="rounded-xl p-3" style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}>
-            <div className="text-2xl mb-1">🟦</div>
+          <div className="flex-1 rounded-xl p-2" style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}>
+            <div className="text-base mb-0.5">🟦</div>
             {loading ? (
               <SkeletonPulse className="h-8 w-20 bg-white/20 mb-1" />
             ) : (
               <div
-                className="text-base font-bold"
+                className="text-sm font-bold leading-tight"
                 style={{ color: overallStatus === 'green' ? '#E2F1DA' : '#fca5a5' }}
               >
                 {overallStatus === 'green' ? '✅ Compliant' : '⚠️ Action needed'}
@@ -1327,7 +1513,7 @@ export default function RatioDashboardPage() {
         {hasOverrides ? (
           <div className="flex items-center justify-between mb-3 px-3 py-2 rounded-xl flex-wrap gap-2" style={{ backgroundColor: '#F5FAF3', border: '1px solid #c6e0c6' }}>
             <span className="text-xs font-semibold" style={{ color: '#2d5c18' }}>
-              ✅ Reallocation active — {safeFormat(new Date(date + 'T00:00:00'), 'd MMM yyyy')}
+              ✅ Reallocation active — {safeFormat(new Date(date + 'T12:00:00Z'), 'd MMM yyyy')}
               {movesSaved && !saveFlash && <span style={{ color: '#16a34a' }}> · ✔️ Saved</span>}
             </span>
             <div className="flex items-center gap-2">
@@ -1338,7 +1524,7 @@ export default function RatioDashboardPage() {
                   className="text-xs font-semibold px-3 py-1 rounded-lg"
                   style={{ backgroundColor: '#5a9228', color: 'white' }}
                 >
-                  💾 Save for {safeFormat(new Date(date + 'T00:00:00'), 'd MMM')}
+                  💾 Save for {safeFormat(new Date(date + 'T12:00:00Z'), 'd MMM')}
                 </button>
               )}
               <button onClick={resetMoves} className="text-xs font-semibold px-3 py-1 rounded-lg" style={{ backgroundColor: '#A0D083', color: 'white' }}>Reset</button>
@@ -1372,6 +1558,12 @@ export default function RatioDashboardPage() {
               <RoomCard
                 key={rs.room.id}
                 roomStatus={rs}
+                issAssigned={issStaff.filter(s => staffMoves[s.employeeId] === rs.room.id)}
+                forecast={forecast?.rooms ? (() => {
+                  const owna = (rs.room.ownaRoomName ?? rs.room.name).toLowerCase();
+                  const match = Object.entries(forecast.rooms).find(([k]) => k.toLowerCase().includes(owna) || owna.includes(k.toLowerCase()));
+                  return match ? match[1] : null;
+                })() : null}
                 drag={{
                   onDragStart,
                   onDragOver,

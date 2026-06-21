@@ -458,7 +458,7 @@ export default function MorningBriefingPage() {
 
       {/* ── Centre cards ── */}
       {loading ? (
-        <div className={`grid gap-4 ${isCeo ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1 max-w-2xl'}`}>
+        <div style={isCeo ? { display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', width: '100%' } : { display: 'grid', gap: '16px', maxWidth: '672px' }}>
           {Array.from({ length: isCeo ? 6 : 1 }).map((_, i) => (
             <div key={i} className="rounded-2xl border p-5 animate-pulse"
               style={{ borderColor: '#E2F1DA', backgroundColor: 'white' }}>
@@ -470,7 +470,7 @@ export default function MorningBriefingPage() {
           ))}
         </div>
       ) : (
-        <div className={`grid gap-4 ${isCeo ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1 max-w-2xl'}`}>
+        <div style={isCeo ? { display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', width: '100%' } : { display: 'grid', gap: '16px', maxWidth: '672px' }}>
           {cards.map(card => (
             <div
               key={card.centreId}

@@ -7,6 +7,11 @@
     --tga-light: #e8f0e8;
   }
   
+  body, #root {
+    width: 100%;
+    min-height: 100vh;
+  }
+
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background-color: #f5f7f5;

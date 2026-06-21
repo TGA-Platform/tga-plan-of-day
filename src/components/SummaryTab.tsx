@@ -43,11 +43,61 @@ function isActivity(id: string): id is ActivityKey {
   return ['__additional__','__programming__','__lunch__','__cleaning__'].includes(id);
 }
 
+// Full ordered slot sequence (mirrors RatioCheckPanel constants)
+const ALL_SLOTS = [
+  '07:00','07:15','07:30','07:45',
+  '08:00','08:15','08:30','08:45',
+  '09:00','09:15','09:30','09:45',
+  '10:00','10:30',
+  '11:00','11:30',
+  '12:00','12:30',
+  '13:00','13:30',
+  '14:00','14:30',
+  '15:00','15:30','15:45',
+  '16:00','16:15','16:30','16:45',
+  '17:00','17:15','17:30','17:45',
+  '18:00',
+];
+
+// Given a slot start time, return its end time (= next slot start, or +15min for last)
+function slotEnd(slot: string): string {
+  const idx = ALL_SLOTS.indexOf(slot);
+  if (idx >= 0 && idx < ALL_SLOTS.length - 1) return ALL_SLOTS[idx + 1];
+  // Fallback: add 15 minutes
+  const [h, m = 0] = slot.split(':').map(Number);
+  const total = h * 60 + m + 15;
+  return `${String(Math.floor(total / 60)).padStart(2,'0')}:${String(total % 60).padStart(2,'0')}`;
+}
+
+// Collapse a sorted list of slot start times into contiguous ranges, returned as "Xam–Yam"
+function slotsToRanges(sorted: string[]): string {
+  if (sorted.length === 0) return '';
+  const ranges: string[] = [];
+  let rangeStart = sorted[0];
+  let rangeEnd   = slotEnd(sorted[0]);
+
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === rangeEnd) {
+      // Contiguous — extend the range
+      rangeEnd = slotEnd(sorted[i]);
+    } else {
+      ranges.push(`${to12h(rangeStart)}–${to12h(rangeEnd)}`);
+      rangeStart = sorted[i];
+      rangeEnd   = slotEnd(sorted[i]);
+    }
+  }
+  ranges.push(`${to12h(rangeStart)}–${to12h(rangeEnd)}`);
+  return ranges.join(', ');
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function to12h(hhmm: string): string {
   if (!hhmm || hhmm === '—') return hhmm;
-  const [h, m] = hhmm.split(':').map(Number);
+  const parts = hhmm.split(':').map(Number);
+  const h = parts[0] ?? 0;
+  const m = parts[1] ?? 0; // default 0 if no minutes part (e.g. legacy slot keys like "9")
+  if (isNaN(h)) return hhmm; // not a time string — return as-is
   const ampm = h < 12 ? 'am' : 'pm';
   const h12 = h % 12 || 12;
   return m === 0 ? `${h12}${ampm}` : `${h12}:${String(m).padStart(2,'0')}${ampm}`;
@@ -406,7 +456,7 @@ export default function SummaryTab({
                                     {nameOf(parseInt(empIdStr))}
                                   </span>
                                   <span style={{ color: '#9ca3af' }}>
-                                    {sorted.map(s => to12h(s)).join(', ')}
+                                    {slotsToRanges(sorted)}
                                   </span>
                                 </div>
                               );
