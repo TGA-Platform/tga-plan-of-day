@@ -283,7 +283,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [visitorTime, setVisitorTime] = useState('');
   const [visitorExitTime, setVisitorExitTime] = useState('');
   const [visitorExitModalState, setVisitorExitModalState] = useState<{ slot: string; roomId: string; roomName: string; visitorId: string; visitorName: string; exitTime: string } | null>(null);
-  const [showActivityCols, setShowActivityCols] = useState(false); // Prog/Lunch/Clean hidden by default to save space
+  // showActivityCols removed — all three columns always visible
 
   // --- Deputy actual timesheets — poll every 5 minutes -----------------------
   const allUnitIds = useMemo(() => {
