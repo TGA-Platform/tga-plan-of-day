@@ -1995,7 +1995,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                               <span style={{ fontSize: '10px', fontWeight: 700, color: fg.color, whiteSpace: 'nowrap' }}>
-                                ??????🏠 {fg.label}
+                                👨‍👩‍👧 {fg.label}
                               </span>
                               <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
                                 {fgRooms.map(r => {
