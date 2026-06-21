@@ -1045,10 +1045,26 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   /** Get effective times for a staff member: shared override if set, else natural roster times */
   function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
-    if (override) return override;
+    if (override) {
+      // If Deputy hasn't recorded a lunch time yet, fall through to check float schedule
+      if (override.lunchStart) return override;
+      // No Deputy lunch yet — check float schedule for planned own-lunch block
+      const fsRow = floatScheds.find(f => f.employee_id === s.employeeId);
+      const ownLunch = fsRow?.schedule?.find((b: any) => b.coverType === 'own-lunch');
+      return {
+        ...override,
+        lunchStart: ownLunch?.startTime ?? undefined,
+        lunchEnd:   ownLunch?.endTime   ?? undefined,
+      };
+    }
+    // No override at all — check float schedule for planned own-lunch block
+    const fsRow = floatScheds.find(f => f.employee_id === s.employeeId);
+    const ownLunch = fsRow?.schedule?.find((b: any) => b.coverType === 'own-lunch');
     return {
       start: formatRosterTime(s.startTime),
       end: formatRosterTime(s.endTime),
+      lunchStart: ownLunch?.startTime ?? undefined,
+      lunchEnd:   ownLunch?.endTime   ?? undefined,
     };
   }
 
