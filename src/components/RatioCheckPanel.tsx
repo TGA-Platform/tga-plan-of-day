@@ -927,9 +927,20 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   /** Write FG changes to ALL three sessions so groupings persist across morning/midday/afternoon */
   function syncFGToAllSessions(updater: (fgs: FamilyGroupingConfig[]) => FamilyGroupingConfig[]) {
     hasUserEdited.current = true;
-    setMorningData(prev =>   { const next = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; save('morning',   next); return next; });
-    setMiddayData(prev =>    { const next = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; save('midday',    next); return next; });
-    setAfternoonData(prev => { const next = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; save('afternoon', next); return next; });
+    // Compute new FG lists outside setState updaters to avoid calling async save()
+    // inside a React state updater (unreliable — updaters may run multiple times).
+    let nextMorning:   RatioCheckSession | null = null;
+    let nextMidday:    RatioCheckSession | null = null;
+    let nextAfternoon: RatioCheckSession | null = null;
+    setMorningData(prev =>   { nextMorning   = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; return nextMorning; });
+    setMiddayData(prev =>    { nextMidday    = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; return nextMidday; });
+    setAfternoonData(prev => { nextAfternoon = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; return nextAfternoon; });
+    // Schedule saves after state updates are queued
+    setTimeout(() => {
+      if (nextMorning)   save('morning',   nextMorning);
+      if (nextMidday)    save('midday',    nextMidday);
+      if (nextAfternoon) save('afternoon', nextAfternoon);
+    }, 0);
   }
 
   function addFamilyGrouping() {
