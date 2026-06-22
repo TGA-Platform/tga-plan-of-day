@@ -72,7 +72,7 @@ const SUPPORT_COVER_ROLES = ['assistant director', 'educational leader', 'ed lea
 export function generateLunchSchedule(
   roomStatuses:   RoomRatioStatus[],
   floats:         FloatStaff[],
-  issStaff:       FloatStaff[],
+  _issStaff:      FloatStaff[], // ISS self-manage breaks — excluded from cover pool
   _staffMoves:    Record<number, string>,
   lunchWindow:    LunchWindow,
   supportStaff:   RosteredStaff[] = [],
@@ -104,14 +104,8 @@ export function generateLunchSchedule(
       shiftStartMins: hhmmToMins(parseShiftTime(f.startTime)),
       shiftEndMins:   hhmmToMins(parseShiftTime(f.endTime)),
     })),
-    ...issStaff.map(f => ({
-      id:             f.employeeId,
-      name:           f.employeeName,
-      type:           'iss' as const,
-      nextAvailMins:  windowStart,
-      shiftStartMins: hhmmToMins(parseShiftTime(f.startTime)),
-      shiftEndMins:   hhmmToMins(parseShiftTime(f.endTime)),
-    })),
+    // ISS staff are excluded from the coverer pool — they self-manage their own breaks
+    // and should not be assigned to cover room staff lunch breaks.
     // Support staff (AD/Ed Leader) as last resort when no float/ISS available
     ...eligibleSupport.map(s => ({
       id:             s.employeeId,

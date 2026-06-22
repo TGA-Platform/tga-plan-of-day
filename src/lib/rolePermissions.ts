@@ -44,9 +44,9 @@ export function getBuiltinDefaults(role: AppRole): RolePermissions {
         settings:  false,
       };
     case 'assistant_director':
-      // Assistant Directors: Ratio Check + Summary only. Single centre, no reports or plan.
+      // Assistant Directors: Plan of Day + Ratio Check + Summary. No reports/config/settings.
       return {
-        dashboard: false,
+        dashboard: true,
         ratio:     true,
         summary:   true,
         week:      false,
