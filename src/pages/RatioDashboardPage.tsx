@@ -972,15 +972,18 @@ export default function RatioDashboardPage() {
     // they go under Support instead. Manually moved staff always stay in float pool
     // regardless of their shift time (explicit override).
     const WINDOW_START = 10 * 60; // 10:00
-    const WINDOW_END   = 14 * 60; // 14:00
+
     const filtered = tagCasual(result).filter((f: FloatStaff) => {
       // Always keep manually moved staff (explicit director decision)
       if (staffMoves[f.employeeId]) return true;
       const s = toMins(f.startTime);
       const e = toMins(f.endTime);
       if (s === null || e === null) return true; // no time info, keep
-      // Overlaps 10am–2pm = starts before 2pm AND ends after 10am
-      return s < WINDOW_END && e > WINDOW_START;
+      // Overlaps 10am–2pm usefully = ends after 10am AND starts early enough
+      // to cover at least one 30-min break before 2pm (i.e. starts before 13:30).
+      // A shift starting at 13:45 only has 15 min before window closes — not useful.
+      const USEFUL_START_CUTOFF = 13 * 60 + 30; // 13:30
+      return e > WINDOW_START && s < USEFUL_START_CUTOFF;
     });
     return filtered as FloatStaff[];
   }, [floats, supportStaff, adStaff, roomStatuses, staffMoves, hasOverrides, tagCasual]);
