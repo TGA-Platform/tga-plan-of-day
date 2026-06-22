@@ -62,12 +62,15 @@ export async function fetchRosters(date: string, unitIds: number[], force = fals
     const employeeIds = rosters.map((r: any) => r.Employee).filter(Boolean);
     const names = await fetchEmployeeNames(employeeIds);
     
-    return rosters
+    const mapped: RosteredStaff[] = rosters
       .filter((r: any) => {
         // Exclude open/unassigned shifts (Employee = 0) — these show as "Staff #0"
         if (!r.Employee || r.Employee === 0) return false;
         const uName = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
-        return !uName.includes('staff meeting');
+        // Exclude non-ratio units: staff meetings, trainee study time
+        if (uName.includes('staff meeting')) return false;
+        if (uName.includes('study time')) return false;
+        return true;
       })
       .map((r: any) => ({
         employeeId: r.Employee,
@@ -79,6 +82,29 @@ export async function fetchRosters(date: string, unitIds: number[], force = fals
         // Deputy uses OperationalUnitInfo (not OperationalUnitObject) in _DPMetaData
         unitName: r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '',
       }));
+
+    // Deduplicate by employeeId: if an employee has multiple roster entries
+    // (e.g. split shift or multiple unit assignments), merge into one entry
+    // using the earliest startTime and latest endTime so their full shift is covered.
+    const byEmpId = new Map<number, RosteredStaff>();
+    for (const entry of mapped) {
+      const existing = byEmpId.get(entry.employeeId);
+      if (!existing) {
+        byEmpId.set(entry.employeeId, entry);
+      } else {
+        // Keep earliest start, latest end
+        const existStart = String(existing.startTime);
+        const entryStart = String(entry.startTime);
+        const existEnd   = String(existing.endTime);
+        const entryEnd   = String(entry.endTime);
+        byEmpId.set(entry.employeeId, {
+          ...existing,
+          startTime: existStart <= entryStart ? existing.startTime : entry.startTime,
+          endTime:   existEnd   >= entryEnd   ? existing.endTime   : entry.endTime,
+        });
+      }
+    }
+    return Array.from(byEmpId.values());
   } catch (err) {
     console.error('fetchRosters error:', err);
     return [];
