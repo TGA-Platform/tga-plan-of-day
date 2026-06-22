@@ -219,6 +219,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [middayData,    setMiddayData]    = useState<RatioCheckSession>(EMPTY_SESSION);
   const [afternoonData, setAfternoonData] = useState<RatioCheckSession>(EMPTY_SESSION);
   const [floatScheds,         setFloatScheds]         = useState<any[]>([]);
+  const [lunchScheds,         setLunchScheds]         = useState<Array<{ employeeId: number; lunchStart: string; lunchEnd: string }>>([]);
   const [dayAllocations,      setDayAllocations]      = useState<Record<number,string>>({});
 
   // -- Lunch break overdue alerts --------------------------------------------
@@ -467,6 +468,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       try {
         const fr = await fetch(`/api/float-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
         if (!cancelled && fr.ok) setFloatScheds(await fr.json());
+        // Load lunch schedule (from LunchBreakPanel) to show planned lunch times on chips
+        try {
+          const lr = await fetch(`/api/lunch-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
+          if (!cancelled && lr.ok) {
+            const lrows = await lr.json();
+            // API returns [{ schedule: [...] }] — extract the schedule array
+            const sched = Array.isArray(lrows) && lrows.length > 0 ? (lrows[0].schedule ?? []) : [];
+            setLunchScheds(sched.filter((e: any) => e.employeeId && e.lunchStart));
+          }
+        } catch { /* offline */ }
       } catch { /* offline */ }
       // Fetch live attendance for the actual date - always real-time for Ratio Check
       try {
@@ -1056,26 +1067,28 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   /** Get effective times for a staff member: shared override if set, else natural roster times */
   function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
-    if (override) {
-      // If Deputy hasn't recorded a lunch time yet, fall through to check float schedule
-      if (override.lunchStart) return override;
-      // No Deputy lunch yet — check float schedule for planned own-lunch block
-      const fsRow = floatScheds.find(f => f.employee_id === s.employeeId);
-      const ownLunch = fsRow?.schedule?.find((b: any) => b.coverType === 'own-lunch');
-      return {
-        ...override,
-        lunchStart: ownLunch?.startTime ?? undefined,
-        lunchEnd:   ownLunch?.endTime   ?? undefined,
-      };
-    }
-    // No override at all — check float schedule for planned own-lunch block
+    // Planned lunch from LunchBreakPanel (room staff) — fallback when Deputy hasn't recorded actual yet
+    const lunchEntry = lunchScheds.find(e => e.employeeId === s.employeeId);
+    // Planned lunch from FloatSchedulePanel (float staff own-lunch block)
     const fsRow = floatScheds.find(f => f.employee_id === s.employeeId);
     const ownLunch = fsRow?.schedule?.find((b: any) => b.coverType === 'own-lunch');
+    // Planned lunch: prefer LunchBreakPanel, fall back to FloatSchedule own-lunch
+    const plannedLunchStart = lunchEntry?.lunchStart ?? ownLunch?.startTime ?? undefined;
+    const plannedLunchEnd   = lunchEntry?.lunchEnd   ?? ownLunch?.endTime   ?? undefined;
+    if (override) {
+      // Deputy actual lunch takes priority; fall back to planned if Deputy hasn't recorded it yet
+      return {
+        ...override,
+        lunchStart: override.lunchStart ?? plannedLunchStart,
+        lunchEnd:   override.lunchEnd   ?? plannedLunchEnd,
+      };
+    }
+    // No Deputy override — use roster times + planned lunch
     return {
       start: formatRosterTime(s.startTime),
       end: formatRosterTime(s.endTime),
-      lunchStart: ownLunch?.startTime ?? undefined,
-      lunchEnd:   ownLunch?.endTime   ?? undefined,
+      lunchStart: plannedLunchStart,
+      lunchEnd:   plannedLunchEnd,
     };
   }
 
