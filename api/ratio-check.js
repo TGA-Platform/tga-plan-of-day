@@ -46,6 +46,25 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'session and data are required for POST' });
     }
 
+    // Safety guard: if incoming familyGroupings is empty, check whether the DB already
+    // has non-empty FGs for this record. If so, preserve them — never overwrite real FG
+    // data with an empty array. This protects against client-side race conditions.
+    const incomingFGs = data.familyGroupings ?? [];
+    if (incomingFGs.length === 0) {
+      try {
+        const checkUrl = `${SUPABASE_URL}/rest/v1/ratio_check_data?centre_id=eq.${encodeURIComponent(centre_id)}&date=eq.${date}&session=eq.${encodeURIComponent(session)}&select=data->>familyGroupings`;
+        const checkR = await fetch(checkUrl, { headers: HEADERS });
+        if (checkR.ok) {
+          const rows = await checkR.json();
+          const existing = rows?.[0]?.familyGroupings;
+          if (existing && existing !== '[]') {
+            // Preserve existing FGs — incoming save has none, DB has real data
+            data.familyGroupings = JSON.parse(existing);
+          }
+        }
+      } catch { /* non-fatal — proceed with save as-is */ }
+    }
+
     // Upsert — must specify on_conflict columns so PostgREST resolves the UNIQUE constraint
     const url = `${SUPABASE_URL}/rest/v1/ratio_check_data?on_conflict=centre_id,date,session`;
     const r = await fetch(url, {
