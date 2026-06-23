@@ -197,6 +197,9 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
       const merged = await mergeFloatCoverage(centreId, date, withOverrides);
       setSchedule(merged);
       setLoading(false);
+      // 5. Auto-save so RatioCheckPanel can display planned lunch times
+      //    without requiring the director to manually click Save.
+      await saveSchedule(centreId, date, merged);
     }
 
     init();
