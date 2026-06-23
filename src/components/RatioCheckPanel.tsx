@@ -436,6 +436,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     if (autoSaveTimer.current) { clearTimeout(autoSaveTimer.current); autoSaveTimer.current = null; }
     pendingSave.current = null;
     hasUserEdited.current = false;
+    // Reset float/lunch schedules immediately so stale data from a previous centre
+    // doesn't bleed through while the new centre's data loads.
+    setFloatScheds([]);
+    setLunchScheds([]);
     async function load() {
       try {
         const r = await fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centreId)}&date=${date}`);
