@@ -27,7 +27,7 @@ interface RoomVisitor {
   id: string;           // unique per entry
   name: string;         // display name (free text or from dropdown)
   enteredAt: string;    // HH:MM
-  exitedAt?: string;    // HH:MM — set when they leave
+  exitedAt?: string;    // HH:MM - set when they leave
 }
 
 interface RatioCheckSession {
@@ -237,7 +237,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const alerts: LunchAlert[] = [];
     for (const r of rosters) {
       const override = allOverrides[String(r.employeeId)];
-      // If Deputy/manual already shows lunch started — no alert
+      // If Deputy/manual already shows lunch started - no alert
       if (override?.lunchStart) continue;
       const start = rosterTimeToMins(r.startTime);
       const end   = rosterTimeToMins(r.endTime);
@@ -261,7 +261,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [attendanceRefreshing, setAttendanceRefreshing] = useState(false);
   const [lastAttendanceRefresh, setLastAttendanceRefresh] = useState<Date | null>(null);
   const [editingCell, setEditingCell] = useState<string | null>(null);
-  // Single global time editor modal — one at a time, avoids duplicate popovers
+  // Single global time editor modal - one at a time, avoids duplicate popovers
   const [timeEditorModal, setTimeEditorModal] = useState<{ empId: number; name: string; rosterStart: string; rosterEnd: string } | null>(null);
   const [timeEditorStart, setTimeEditorStart] = useState('');
   const [timeEditorEnd, setTimeEditorEnd] = useState('');
@@ -287,9 +287,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [visitorTime, setVisitorTime] = useState('');
   const [visitorExitTime, setVisitorExitTime] = useState('');
   const [visitorExitModalState, setVisitorExitModalState] = useState<{ slot: string; roomId: string; roomName: string; visitorId: string; visitorName: string; exitTime: string } | null>(null);
-  // showActivityCols removed — all three columns always visible
+  // showActivityCols removed - all three columns always visible
 
-  // --- Deputy actual timesheets — poll every 5 minutes -----------------------
+  // --- Deputy actual timesheets - poll every 5 minutes -----------------------
   const allUnitIds = useMemo(() => {
     const centre = CENTRES.find(c => c.id === centreId);
     if (!centre) return [];
@@ -307,11 +307,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     // Poll on today's date every 5 min (live clock-ins); for past dates, fetch once (approved timesheets)
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
     const isToday = date === today;
-    // Don't fetch future dates — no timesheets yet
+    // Don't fetch future dates - no timesheets yet
     if (date > today) return;
 
     async function fetchActuals() {
-      // Don't save until initial data load is complete — avoids overwriting FGs with empty state
+      // Don't save until initial data load is complete - avoids overwriting FGs with empty state
       if (!initialLoadDone.current) return;
       try {
         const r = await fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`);
@@ -322,12 +322,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           breaks: Array<{ breakStart: string | null; breakEnd: string | null; type: string; status: string }>;
         }> = await r.json();
 
-        // Merge actuals into time overrides — manual overrides take precedence
+        // Merge actuals into time overrides - manual overrides take precedence
         for (const ts of actuals) {
           // Accept both real-time clock-ins (kiosk/app) AND manager-approved timesheets
           // The backend already filters to entries with actual StartTimeLocalized set,
           // so everything returned here has genuine actual times.
-          if (!ts.actualStart) continue; // no actual times available — skip
+          if (!ts.actualStart) continue; // no actual times available - skip
           const key = String(ts.employeeId);
 
           setMorningData(prev => {
@@ -392,7 +392,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             return next;
           });
         }
-      } catch { /* network error — fail silently */ }
+      } catch { /* network error - fail silently */ }
     }
 
     fetchActuals(); // immediate first fetch
@@ -402,7 +402,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   }, [date, allUnitIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
   // --- End Deputy polling ---------------------------------------------------
 
-  // Family groupings are shared across all sessions — merge by id so FGs created in any session are visible everywhere
+  // Family groupings are shared across all sessions - merge by id so FGs created in any session are visible everywhere
   const sharedFamilyGroupings = useMemo(() => {
     const allById = new Map<string, FamilyGroupingConfig>();
     for (const d of [morningData, middayData, afternoonData]) {
@@ -413,7 +413,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return [...allById.values()];
   }, [morningData.familyGroupings, middayData.familyGroupings, afternoonData.familyGroupings]);
 
-    // Time overrides are shared across all sessions — merge all three (any session's value wins)
+    // Time overrides are shared across all sessions - merge all three (any session's value wins)
   const sharedTimeOverrides = useMemo(() => ({
     ...morningData.staffTimeOverrides,
     ...middayData.staffTimeOverrides,
@@ -470,7 +470,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           if (row.session === 'afternoon') setAfternoonData(d);
         }
       } catch { /* offline */ }
-      // Mark initial load complete — Deputy polling may now safely call save()
+      // Mark initial load complete - Deputy polling may now safely call save()
       if (!cancelled) initialLoadDone.current = true;
       try {
         const fr = await fetch(`/api/float-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
@@ -480,7 +480,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           const lr = await fetch(`/api/lunch-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
           if (!cancelled && lr.ok) {
             const lrows = await lr.json();
-            // API returns [{ schedule: [...] }] — extract the schedule array
+            // API returns [{ schedule: [...] }] - extract the schedule array
             const sched = Array.isArray(lrows) && lrows.length > 0 ? (lrows[0].schedule ?? []) : [];
             setLunchScheds(sched.filter((e: any) => e.employeeId && e.lunchStart));
           }
@@ -579,8 +579,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       setSaveStatus('saved');
     } else if (result === 'queued') {
       // Saved locally, will sync when Supabase comes back
-      setSaveStatus('saved'); // show saved — it IS saved locally and will sync
-      console.warn('[RatioCheck] Supabase unavailable — queued for retry');
+      setSaveStatus('saved'); // show saved - it IS saved locally and will sync
+      console.warn('[RatioCheck] Supabase unavailable - queued for retry');
     } else {
       setSaveStatus('error');
     }
@@ -590,7 +590,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   // -- Computed children counts (auto-populated) ------------------------------
   // Computed children counts for Ratio Check:
-  // Priority: 1. Live attendance for this date (real-time) — if live data is loaded,
+  // Priority: 1. Live attendance for this date (real-time) - if live data is loaded,
   //              use it as-is (even if 0 = no children signed in yet).
   //              Only fall back to prop/hist if NO live data has loaded at all.
   //           2. Prop children (parent-provided, may be historical in plan mode)
@@ -601,10 +601,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     for (const slot of slots) {
       for (const room of rooms) {
         if (hasLiveData) {
-          // Live data loaded — trust it exactly (0 means 0 children signed in yet)
+          // Live data loaded - trust it exactly (0 means 0 children signed in yet)
           counts[cellKey(slot, room.id)] = countChildrenAtSlot(liveChildren, room, slot);
         } else {
-          // No live data yet — fall back to prop then historical
+          // No live data yet - fall back to prop then historical
           const prop = countChildrenAtSlot(children, room, slot);
           const hist = countChildrenAtSlot(historicalChildren, room, slot);
           counts[cellKey(slot, room.id)] = prop > 0 ? prop : hist;
@@ -946,7 +946,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   function syncFGToAllSessions(updater: (fgs: FamilyGroupingConfig[]) => FamilyGroupingConfig[]) {
     hasUserEdited.current = true;
     // Compute new FG lists outside setState updaters to avoid calling async save()
-    // inside a React state updater (unreliable — updaters may run multiple times).
+    // inside a React state updater (unreliable - updaters may run multiple times).
     let nextMorning:   RatioCheckSession | null = null;
     let nextMidday:    RatioCheckSession | null = null;
     let nextAfternoon: RatioCheckSession | null = null;
@@ -1074,7 +1074,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   /** Get effective times for a staff member: shared override if set, else natural roster times */
   function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
-    // Planned lunch from LunchBreakPanel (room staff) — fallback when Deputy hasn't recorded actual yet
+    // Planned lunch from LunchBreakPanel (room staff) - fallback when Deputy hasn't recorded actual yet
     const lunchEntry = lunchScheds.find(e => e.employeeId === s.employeeId);
     // Planned lunch from FloatSchedulePanel (float staff own-lunch block)
     const fsRow = floatScheds.find(f => f.employee_id === s.employeeId);
@@ -1090,7 +1090,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         lunchEnd:   override.lunchEnd   ?? plannedLunchEnd,
       };
     }
-    // No Deputy override — use roster times + planned lunch
+    // No Deputy override - use roster times + planned lunch
     return {
       start: formatRosterTime(s.startTime),
       end: formatRosterTime(s.endTime),
@@ -1293,7 +1293,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     if (fg.slots.length === 0) return 'No slots';
     const sorted = [...fg.slots].sort();
     if (sorted.length === 1) return sorted[0];
-    return `${sorted[0]} — ${sorted[sorted.length - 1]}`;
+    return `${sorted[0]} - ${sorted[sorted.length - 1]}`;
   }
 
   const totalFGSlots = sharedFamilyGroupings.reduce((sum, fg) => sum + fg.slots.length, 0);
@@ -1645,7 +1645,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       {/* -- Print header -- */}
       <div className="print-only" style={{ display: 'none', marginBottom: '8px' }}>
         <style>{`.print-only { display: block !important; }`}</style>
-        <strong>Head Count / Ratio Check – {activeSession === 'morning' ? 'Morning (7am-10am)' : activeSession === 'midday' ? 'Midday (10am-2pm)' : 'Afternoon (2pm–6pm)'}</strong>
+        <strong>Head Count / Ratio Check - {activeSession === 'morning' ? 'Morning (7am-10am)' : activeSession === 'midday' ? 'Midday (10am-2pm)' : 'Afternoon (2pm-6pm)'}</strong>
         {histDate && children.filter(ch => ch.sign_in).length === 0 && (
           <span style={{ fontSize: '10px', color: '#92400e', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '4px', padding: '1px 6px', marginLeft: '8px' }}>
             📅 Predicted attendance from {histDate}
@@ -1700,7 +1700,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                   {finishList.map(({ s, endStr }) => {
                     const done = markedFinished.has(s.employeeId);
                     // Find the last slot where this staff member appears in any room
-                    let lastRoomName = '—';
+                    let lastRoomName = '-';
                     const allSlotsAll = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
                     for (let i = allSlotsAll.length - 1; i >= 0; i--) {
                       const sl = allSlotsAll[i];
@@ -1710,7 +1710,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                           break;
                         }
                       }
-                      if (lastRoomName !== '—') break;
+                      if (lastRoomName !== '-') break;
                     }
                     return (
                       <tr key={s.employeeId} style={{ backgroundColor: done ? '#f3f4f6' : 'white', borderBottom: '1px solid #f3f4f6' }}>
@@ -2131,7 +2131,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                               onChange={e => { if (e.target.value) moveStaff(s.employeeId, slot, e.target.value); }}
                                               style={{ fontSize: '10px', border: '1px solid #d1d5db', borderRadius: '4px', padding: '1px 3px', cursor: 'pointer' }}
                                             >
-                                              <option value="">→ Move to…</option>
+                                              <option value="">→ Move to...</option>
                                               {rooms.filter(r => r.id !== s.inRoomId).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                                             </select>
                                             {hasOv && (
@@ -2295,12 +2295,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                           color: staffTime.source === 'deputy' ? '#0369a1' : hasTimeOverride ? '#6366f1' : '#6b7280',
                                           fontWeight: hasTimeOverride ? 700 : 400,
                                         }}>
-                                          {staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}–{to12h(staffTime.end)}
+                                          {staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}{staffTime.end ? `-${to12h(staffTime.end)}` : '→'}
                                         </span>
                                       )}
                                       {staffTime.lunchStart && (
                                         <span style={{ fontSize: '9px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>
-                                          🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `–${to12h(staffTime.lunchEnd)}` : '…'}
+                                          🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}
                                         </span>
                                       )}
                                     </div>
@@ -2502,8 +2502,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                 <button className="no-print" onClick={e => { e.stopPropagation(); const t = getStaffTime(s); setTimeEditorStart(t.start); setTimeEditorEnd(t.end); setTimeEditorLunchStart(t.lunchStart ?? ''); setTimeEditorLunchEnd(t.lunchEnd ?? ''); setTimeEditorOvertime(sessionData.staffTimeOverrides[s.employeeId]?.isOvertime ?? false); setTimeEditorComment(sessionData.staffTimeOverrides[s.employeeId]?.comment ?? ''); setTimeEditorModal({ empId: s.employeeId, name: s.employeeName, rosterStart: formatRosterTime(s.startTime) || '', rosterEnd: formatRosterTime(s.endTime) || '' }); }}
                                   title="Edit time" style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '8px', color: hasTimeOverride ? '#6366f1' : '#9ca3af', padding: '0 1px', lineHeight: 1 }}>⏱</button>
                               </div>
-                              {staffTime.start && <span style={{ fontSize: '7px', color: staffTime.source === 'deputy' ? '#0369a1' : hasTimeOverride ? '#6366f1' : '#b45309', fontWeight: hasTimeOverride ? 700 : 400 }}>{staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}–{to12h(staffTime.end)}</span>}
-              {staffTime.lunchStart && <span style={{ fontSize: '7px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `–${to12h(staffTime.lunchEnd)}` : '…'}</span>}
+                              {staffTime.start && <span style={{ fontSize: '7px', color: staffTime.source === 'deputy' ? '#0369a1' : hasTimeOverride ? '#6366f1' : '#b45309', fontWeight: hasTimeOverride ? 700 : 400 }}>{staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}{staffTime.end ? `-${to12h(staffTime.end)}` : '→'}</span>}
+              {staffTime.lunchStart && <span style={{ fontSize: '7px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}</span>}
                             </div>
 
                           </div>
@@ -2517,7 +2517,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     </div>
                   </td>
 
-                  {/* Programming column — always visible */}
+                  {/* Programming column - always visible */}
                   {(() => {
                     const manualProg = getManualActivityStaff(slot, '__programming__');
                     // floatProg/floatLunch/floatClean now handled by offFloorStaffBySlot (draggable)
@@ -2556,7 +2556,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     </td>
                     );
                   })()}
-                  {/* Lunch column — always visible */}
+                  {/* Lunch column - always visible */}
                   {(() => {
                     const manualLunch = getManualActivityStaff(slot, '__lunch__');
 
@@ -2725,7 +2725,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                 <button onClick={() => setVisitorModal(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#9ca3af', padding: '0 2px', lineHeight: 1 }}>✕</button>
               </div>
               <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '14px' }}>
-                {visitorModal.roomName} — recording entry at {to12h(visitorTime || visitorModal.slot)}
+                {visitorModal.roomName} - recording entry at {to12h(visitorTime || visitorModal.slot)}
               </div>
 
               {/* Person dropdown or free text */}
@@ -2739,7 +2739,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                         onChange={e => { if (e.target.value) setVisitorName(e.target.value); }}
                         style={{ fontSize: '12px', border: '1px solid #d8b4fe', borderRadius: '6px', padding: '5px 8px', color: '#374151', background: '#fdf4ff' }}
                       >
-                        <option value="">Select from off-floor staff…</option>
+                        <option value="">Select from off-floor staff...</option>
                         {offFloorCandidates.map(s => (
                           <option key={s.employeeId} value={s.employeeName}>{s.employeeName}</option>
                         ))}
@@ -2767,7 +2767,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     style={{ fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1 }} />
                 </div>
                 <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '-4px' }}>
-                  Leave Exit blank to record entry only — you can exit them later from the chip.
+                  Leave Exit blank to record entry only - you can exit them later from the chip.
                 </div>
               </div>
 
@@ -2787,7 +2787,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         );
       })()}
 
-      {/* -- Time editor modal — single global instance -- */}
+      {/* -- Time editor modal - single global instance -- */}
       {timeEditorModal && (
         <>
           <div className="no-print" style={{ position: 'fixed', inset: 0, zIndex: 999, backgroundColor: 'rgba(0,0,0,0.35)' }} onClick={() => setTimeEditorModal(null)} />
@@ -2802,7 +2802,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             </div>
             {timeEditorModal.rosterStart && (
               <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '14px' }}>
-                Roster: {timeEditorModal.rosterStart}–{timeEditorModal.rosterEnd}
+                Roster: {timeEditorModal.rosterStart}-{timeEditorModal.rosterEnd}
               </div>
             )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
@@ -2838,7 +2838,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                 </label>
                 {timeEditorOvertime && (
                   <div style={{ fontSize: '11px', color: '#dc2626', backgroundColor: '#fee2e2', borderRadius: '6px', padding: '6px 8px' }}>
-                    Set the <strong>Finish</strong> time above to the actual overtime end time — the ratio check will reflect the extended hours.
+                    Set the <strong>Finish</strong> time above to the actual overtime end time - the ratio check will reflect the extended hours.
                   </div>
                 )}
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
@@ -2846,7 +2846,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                   <textarea
                     value={timeEditorComment}
                     onChange={e => setTimeEditorComment(e.target.value)}
-                    placeholder="e.g. covering Room 2, late pickup…"
+                    placeholder="e.g. covering Room 2, late pickup..."
                     rows={2}
                     style={{ fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1, resize: 'vertical', fontFamily: 'inherit' }}
                   />
