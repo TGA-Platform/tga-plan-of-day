@@ -147,17 +147,19 @@ export default async function handler(req, res) {
       if (gap >= SPLIT_GAP_MINS) { isSplit = true; break; }
     }
     if (isSplit) {
-      // One merged entry: earliest start, latest end, isSplitShift=true, splitSegments for display
-      // Study Time / non-ratio segments are included in raw sorted but we use the float segments for times
-      const first = sorted[0];
-      const last  = sorted[sorted.length - 1];
-      deduped.push({
-        ...first,
-        StartTime:     first.StartTime,
-        EndTime:       last.EndTime,
-        isSplitShift:  true,
-        splitSegments: sorted.map(s => ({ StartTime: s.StartTime, EndTime: s.EndTime })),
+      // Split shift: keep each segment as a separate entry so the ratio check
+      // slot filter shows staff only when they are actually on shift.
+      // Mark all segments with isSplitShift=true so the dashboard routes them
+      // to Support and shows the Plan Day button.
+      // Exclude study time / non-ratio segments (they have no ratio value).
+      const ratioSegments = sorted.filter(e => {
+        const uName = (e._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
+        return !uName.includes('study time') && !uName.includes('staff meeting');
       });
+      const allSegments = ratioSegments.map(s => ({ StartTime: s.StartTime, EndTime: s.EndTime }));
+      for (const seg of ratioSegments) {
+        deduped.push({ ...seg, isSplitShift: true, splitSegments: allSegments });
+      }
     } else {
       // Not split — merge into one (earliest start, latest end)
       const first = sorted[0];

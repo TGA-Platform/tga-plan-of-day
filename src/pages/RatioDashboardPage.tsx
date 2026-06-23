@@ -1084,11 +1084,15 @@ export default function RatioDashboardPage() {
       // Split-shift floats go to support — they don't cover the 10am-2pm window continuously.
       // Director can still manually drag them to float if needed.
       const floatRosters:   FloatStaff[]    = rosters.filter(r => floatSet.has(r.unitId) && !r.isSplitShift);
-      const splitShiftFloats: RosteredStaff[] = rosters.filter(r => floatSet.has(r.unitId) && r.isSplitShift);
+      // Split shift: multiple segments per employee — deduplicate to one entry for Support display
+      const splitShiftSeen = new Set<number>();
+      const splitShiftFloats: RosteredStaff[] = rosters
+        .filter(r => floatSet.has(r.unitId) && r.isSplitShift)
+        .filter(r => { if (splitShiftSeen.has(r.employeeId)) return false; splitShiftSeen.add(r.employeeId); return true; });
       const issRosters:     FloatStaff[]    = rosters.filter(r => issSet.has(r.unitId));
       const supportRosters: RosteredStaff[] = [
         ...rosters.filter(r => nonRatioSet.has(r.unitId)),
-        ...splitShiftFloats,  // split-shift float unit staff appear in support
+        ...splitShiftFloats,  // split-shift float unit staff appear in support (one entry per person)
       ];
 
       setOnLeave(leaveRosters);
