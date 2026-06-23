@@ -808,10 +808,12 @@ export default function ReportingPage() {
           // Support entries (e.g. Trainee Study Time) also use their own roster times — they may have
           // different hours to the main shift and the clock-in override reflects the main shift only.
           const isLeaveUnit   = leaveSet2.has(unitId as number);
-          const isSupportUnit = !isLeaveUnit && !floatSet2.has(unitId) && !issSet2.has(unitId) && !roomSet2.has(unitId);
-          const actualOverride = (!isLeaveUnit && !isSupportUnit) ? ratioTimeOverrides[String(empId)] : undefined;
+          // Study Time units are secondary blocks (not the person's main shift) — skip override
+          const isStudyTime = rawUnit.includes('study time');
+          const actualOverride = (!isLeaveUnit && !isStudyTime) ? ratioTimeOverrides[String(empId)] : undefined;
           const shiftIn  = actualOverride?.start || fmtTime(r.StartTime);
-          const shiftOut = actualOverride?.end   || fmtTime(r.EndTime);
+          // If Deputy hasn't clocked them out yet, fall back to rostered end time
+          const shiftOut = (actualOverride?.end || '') || fmtTime(r.EndTime);
           if (shiftIn === '-' || shiftOut === '-') continue;
 
           const staffType: EducatorEntry['staffType'] =
