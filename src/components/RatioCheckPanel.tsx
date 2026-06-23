@@ -237,14 +237,23 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     // Merge overrides across all three session panels to catch any set lunch time
     const allOverrides = { ...morningData.staffTimeOverrides, ...middayData.staffTimeOverrides, ...afternoonData.staffTimeOverrides };
     const alerts: LunchAlert[] = [];
+    // Deduplicate rosters by employeeId (split shift staff appear twice)
+    const seen = new Set<number>();
     for (const r of rosters) {
+      if (seen.has(r.employeeId)) continue;
+      seen.add(r.employeeId);
       const override = allOverrides[String(r.employeeId)];
-      // If Deputy/manual already shows lunch started - no alert
+      // If Deputy/manual already shows lunch started or finished — no alert
       if (override?.lunchStart) continue;
-      const start = rosterTimeToMins(r.startTime);
-      const end   = rosterTimeToMins(r.endTime);
-      if (start === null || end === null || end === 0) continue;
+      // Use actual Deputy times if available, else fall back to roster times
+      const startStr = override?.start || formatRosterTime(r.startTime);
+      const endStr   = override?.end   || formatRosterTime(r.endTime);
+      const start = slotToMins(startStr);
+      const end   = endStr ? slotToMins(endStr) : null;
+      if (!start || !end) continue;
       if ((end - start) < 300) continue; // shifts < 5h don't need lunch
+      // Only flag staff still on shift — if they've already finished, no point alerting
+      if (end <= nowMins) continue;
       // Expected lunch = midpoint of shift rounded to nearest 30 min
       const midMins = Math.round((start + end) / 2 / 30) * 30;
       const overdueBy = nowMins - midMins;
