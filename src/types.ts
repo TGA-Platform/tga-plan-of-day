@@ -36,6 +36,8 @@ export interface RosteredStaff {
   unitId: number;
   unitName: string;
   isInternalCasual?: boolean;
+  isSplitShift?: boolean;  // true when employee has 2 roster entries with a gap ≥ 2 hours
+  splitSegments?: { startTime: string; endTime: string }[]; // both segments for display
 }
 
 export interface AbsentStaff {

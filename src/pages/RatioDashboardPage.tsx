@@ -98,7 +98,10 @@ function AgeBreakdownRow({ label, count, ratio }: { label: string; count: number
 function StaffChip({ staff }: { staff: RosteredStaff }) {
   const start = formatTime(staff.startTime);
   const end   = formatTime(staff.endTime);
-  const timeStr = start && end ? `${start}–${end}` : start || end || '';
+  // Split shift: show each segment separately e.g. "7:00–10:00 / 14:00–18:00"
+  const timeStr = staff.isSplitShift && staff.splitSegments?.length
+    ? staff.splitSegments.map(seg => `${formatTime(seg.startTime)}–${formatTime(seg.endTime)}`).join(' / ')
+    : start && end ? `${start}–${end}` : start || end || '';
   return (
     <div className="flex items-center gap-2 py-1">
       <div
@@ -113,6 +116,9 @@ function StaffChip({ staff }: { staff: RosteredStaff }) {
           {staff.employeeName}
           {staff.isInternalCasual && (
             <span className="flex-shrink-0 text-xs font-semibold px-1 py-0 rounded" style={{ backgroundColor: '#fef3c7', color: '#92400e', fontSize: '9px', lineHeight: '14px' }}>IC</span>
+          )}
+          {staff.isSplitShift && (
+            <span className="flex-shrink-0 text-xs font-semibold px-1 py-0 rounded" style={{ backgroundColor: '#e0e7ff', color: '#3730a3', fontSize: '9px', lineHeight: '14px' }}>SPLIT</span>
           )}
         </div>
         <div className="text-xs" style={{ color: '#596570' }}>
@@ -976,6 +982,9 @@ export default function RatioDashboardPage() {
     const filtered = tagCasual(result).filter((f: FloatStaff) => {
       // Always keep manually moved staff (explicit director decision)
       if (staffMoves[f.employeeId]) return true;
+      // Split-shift staff are excluded from auto float pool (go to Support instead).
+      // Director can still manually drag them to float via staffMoves above.
+      if (f.isSplitShift) return false;
       const s = toMins(f.startTime);
       const e = toMins(f.endTime);
       if (s === null || e === null) return true; // no time info, keep
@@ -1072,9 +1081,15 @@ export default function RatioDashboardPage() {
 
       const issSet        = new Set(issUnitIds);
       const leaveRosters:   RosteredStaff[] = rosters.filter(r => leaveSet.has(r.unitId));
-      const floatRosters:   FloatStaff[]    = rosters.filter(r => floatSet.has(r.unitId));
+      // Split-shift floats go to support — they don't cover the 10am-2pm window continuously.
+      // Director can still manually drag them to float if needed.
+      const floatRosters:   FloatStaff[]    = rosters.filter(r => floatSet.has(r.unitId) && !r.isSplitShift);
+      const splitShiftFloats: RosteredStaff[] = rosters.filter(r => floatSet.has(r.unitId) && r.isSplitShift);
       const issRosters:     FloatStaff[]    = rosters.filter(r => issSet.has(r.unitId));
-      const supportRosters: RosteredStaff[] = rosters.filter(r => nonRatioSet.has(r.unitId));
+      const supportRosters: RosteredStaff[] = [
+        ...rosters.filter(r => nonRatioSet.has(r.unitId)),
+        ...splitShiftFloats,  // split-shift float unit staff appear in support
+      ];
 
       setOnLeave(leaveRosters);
       setFloats(floatRosters);

@@ -83,28 +83,63 @@ export async function fetchRosters(date: string, unitIds: number[], force = fals
         unitName: r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '',
       }));
 
-    // Deduplicate by employeeId: if an employee has multiple roster entries
-    // (e.g. split shift or multiple unit assignments), merge into one entry
-    // using the earliest startTime and latest endTime so their full shift is covered.
-    const byEmpId = new Map<number, RosteredStaff>();
+    // Deduplicate by employeeId: if an employee has multiple roster entries,
+    // detect whether it's a split shift (gap ≥ 2 hours between segments).
+    // Split shifts are kept as a single entry marked isSplitShift=true with
+    // splitSegments storing both times. Non-split duplicates are merged as before.
+    const SPLIT_GAP_MINS = 120; // 2 hours
+    const toMinsLocal = (t: string): number => {
+      if (!t) return 0;
+      const parts = String(t).split(':').map(Number);
+      return (parts[0] ?? 0) * 60 + (parts[1] ?? 0);
+    };
+
+    // Group all entries by employeeId first
+    const groupedByEmp = new Map<number, RosteredStaff[]>();
     for (const entry of mapped) {
-      const existing = byEmpId.get(entry.employeeId);
-      if (!existing) {
-        byEmpId.set(entry.employeeId, entry);
-      } else {
-        // Keep earliest start, latest end
-        const existStart = String(existing.startTime);
-        const entryStart = String(entry.startTime);
-        const existEnd   = String(existing.endTime);
-        const entryEnd   = String(entry.endTime);
-        byEmpId.set(entry.employeeId, {
-          ...existing,
-          startTime: existStart <= entryStart ? existing.startTime : entry.startTime,
-          endTime:   existEnd   >= entryEnd   ? existing.endTime   : entry.endTime,
+      const group = groupedByEmp.get(entry.employeeId) ?? [];
+      group.push(entry);
+      groupedByEmp.set(entry.employeeId, group);
+    }
+
+    const result: RosteredStaff[] = [];
+    for (const [, entries] of groupedByEmp) {
+      if (entries.length === 1) {
+        result.push(entries[0]);
+        continue;
+      }
+      // Sort by startTime
+      const sorted = [...entries].sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)));
+      // Check if any consecutive pair has a gap ≥ 2 hours
+      let isSplit = false;
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const gapStart = toMinsLocal(String(sorted[i].endTime));
+        const gapEnd   = toMinsLocal(String(sorted[i + 1].startTime));
+        if (gapEnd - gapStart >= SPLIT_GAP_MINS) { isSplit = true; break; }
+      }
+      if (isSplit) {
+        // Mark as split shift — use earliest start / latest end for overall times,
+        // but store both segments so the UI can display them accurately.
+        const first = sorted[0];
+        const last  = sorted[sorted.length - 1];
+        result.push({
+          ...first,
+          startTime:     first.startTime,
+          endTime:       last.endTime,
+          isSplitShift:  true,
+          splitSegments: sorted.map(e => ({ startTime: e.startTime, endTime: e.endTime })),
         });
+      } else {
+        // Not a split shift — merge into one entry (earliest start, latest end)
+        const merged = sorted.reduce((acc, e) => ({
+          ...acc,
+          startTime: String(acc.startTime) <= String(e.startTime) ? acc.startTime : e.startTime,
+          endTime:   String(acc.endTime)   >= String(e.endTime)   ? acc.endTime   : e.endTime,
+        }));
+        result.push(merged);
       }
     }
-    return Array.from(byEmpId.values());
+    return result;
   } catch (err) {
     console.error('fetchRosters error:', err);
     return [];
