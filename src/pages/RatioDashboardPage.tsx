@@ -1075,6 +1075,29 @@ export default function RatioDashboardPage() {
       setChildren(childRows);
 
       // Separate rosters by type
+      // Timesheet fallback: inject staff who clocked in but have no roster entry.
+      // This catches Deputy API gaps (e.g. roster exists in Deputy UI but QUERY API omits it).
+      try {
+        const tsRes = await fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`);
+        if (tsRes.ok) {
+          const timesheets: Array<{ employeeId: number; employeeName: string; unitId: number; unitName: string; rosteredStart: string | null; rosteredEnd: string | null; actualStart: string | null }> = await tsRes.json();
+          const rosterEmpIds = new Set(rosters.map(r => r.employeeId));
+          for (const ts of timesheets) {
+            if (rosterEmpIds.has(ts.employeeId)) continue; // already in roster
+            if (!ts.actualStart) continue; // not clocked in
+            // Inject as synthetic roster entry using rostered or actual times
+            rosters.push({
+              employeeId:   ts.employeeId,
+              employeeName: ts.employeeName,
+              startTime:    ts.rosteredStart || ts.actualStart || '',
+              endTime:      ts.rosteredEnd   || '',
+              unitId:       ts.unitId,
+              unitName:     ts.unitName,
+            });
+          }
+        }
+      } catch { /* non-fatal */ }
+
       const leaveSet    = new Set(leaveUnitIds);
       const floatSet    = new Set(floatUnitIds);
       const nonRatioSet = new Set(nonRatioUnitIds);
