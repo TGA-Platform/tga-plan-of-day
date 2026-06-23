@@ -622,6 +622,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
     for (const slot of allSlots) {
       const slotMins = slotToMins(slot);
+      const seen = new Set<number>();
       map[slot] = rosters.filter(r => {
         // Use time override if set, otherwise fall back to raw roster times
         const override = sharedTimeOverrides[String(r.employeeId)];
@@ -630,7 +631,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         if (!startStr || !endStr) return false;
         const start = slotToMins(startStr);
         const end   = slotToMins(endStr);
-        return start <= slotMins && end > slotMins;
+        if (!(start <= slotMins && end > slotMins)) return false;
+        // Deduplicate: split shift staff have 2 roster entries — only show once per slot
+        if (seen.has(r.employeeId)) return false;
+        seen.add(r.employeeId);
+        return true;
       });
     }
     return map;
