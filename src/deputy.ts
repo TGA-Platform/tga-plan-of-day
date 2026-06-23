@@ -62,93 +62,28 @@ export async function fetchRosters(date: string, unitIds: number[], force = fals
     const employeeIds = rosters.map((r: any) => r.Employee).filter(Boolean);
     const names = await fetchEmployeeNames(employeeIds);
     
-    // Convert Deputy unix timestamp to HH:MM string in Sydney timezone
-    const unixToHHMM = (t: number | string | null | undefined): string => {
-      if (!t) return '';
-      const num = typeof t === 'string' ? parseInt(t, 10) : t;
-      if (isNaN(num) || num <= 100000) return String(t ?? '');
-      const d = new Date(num * 1000);
-      return d.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Australia/Sydney' }).slice(0, 5);
-    };
-
+    // API already converts timestamps to HH:MM and deduplicates split shifts
     const mapped: RosteredStaff[] = rosters
       .filter((r: any) => {
-        // Exclude open/unassigned shifts (Employee = 0) — these show as "Staff #0"
         if (!r.Employee || r.Employee === 0) return false;
         const uName = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
-        // Exclude non-ratio units: staff meetings, trainee study time
         if (uName.includes('staff meeting')) return false;
         if (uName.includes('study time')) return false;
         return true;
       })
       .map((r: any) => ({
-        employeeId: r.Employee,
-        // Prefer the display name already embedded in the roster response metadata
-        employeeName: r._DPMetaData?.EmployeeInfo?.DisplayName || names[r.Employee] || `Staff #${r.Employee}`,
-        startTime: unixToHHMM(r.StartTime),
-        endTime:   unixToHHMM(r.EndTime),
-        unitId: r.OperationalUnit,
-        // Deputy uses OperationalUnitInfo (not OperationalUnitObject) in _DPMetaData
-        unitName: r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '',
+        employeeId:    r.Employee,
+        employeeName:  r._DPMetaData?.EmployeeInfo?.DisplayName || names[r.Employee] || `Staff #${r.Employee}`,
+        startTime:     r.StartTime || '',
+        endTime:       r.EndTime   || '',
+        unitId:        r.OperationalUnit,
+        unitName:      r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '',
+        isSplitShift:  r.isSplitShift ?? false,
+        splitSegments: r.splitSegments ?? undefined,
       }));
 
-    // Deduplicate by employeeId: if an employee has multiple roster entries,
-    // detect whether it's a split shift (gap ≥ 2 hours between segments).
-    // Split shifts are kept as a single entry marked isSplitShift=true with
-    // splitSegments storing both times. Non-split duplicates are merged as before.
-    const SPLIT_GAP_MINS = 120; // 2 hours
-    const toMinsLocal = (t: string): number => {
-      if (!t) return 0;
-      const parts = String(t).split(':').map(Number);
-      return (parts[0] ?? 0) * 60 + (parts[1] ?? 0);
-    };
-
-    // Group all entries by employeeId first
-    const groupedByEmp = new Map<number, RosteredStaff[]>();
-    for (const entry of mapped) {
-      const group = groupedByEmp.get(entry.employeeId) ?? [];
-      group.push(entry);
-      groupedByEmp.set(entry.employeeId, group);
-    }
-
-    const result: RosteredStaff[] = [];
-    for (const [, entries] of groupedByEmp) {
-      if (entries.length === 1) {
-        result.push(entries[0]);
-        continue;
-      }
-      // Sort by startTime
-      const sorted = [...entries].sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)));
-      // Check if any consecutive pair has a gap ≥ 2 hours
-      let isSplit = false;
-      for (let i = 0; i < sorted.length - 1; i++) {
-        const gapStart = toMinsLocal(String(sorted[i].endTime));
-        const gapEnd   = toMinsLocal(String(sorted[i + 1].startTime));
-        if (gapEnd - gapStart >= SPLIT_GAP_MINS) { isSplit = true; break; }
-      }
-      if (isSplit) {
-        // Mark as split shift — use earliest start / latest end for overall times,
-        // but store both segments so the UI can display them accurately.
-        const first = sorted[0];
-        const last  = sorted[sorted.length - 1];
-        result.push({
-          ...first,
-          startTime:     first.startTime,
-          endTime:       last.endTime,
-          isSplitShift:  true,
-          splitSegments: sorted.map(e => ({ startTime: e.startTime, endTime: e.endTime })),
-        });
-      } else {
-        // Not a split shift — merge into one entry (earliest start, latest end)
-        const merged = sorted.reduce((acc, e) => ({
-          ...acc,
-          startTime: String(acc.startTime) <= String(e.startTime) ? acc.startTime : e.startTime,
-          endTime:   String(acc.endTime)   >= String(e.endTime)   ? acc.endTime   : e.endTime,
-        }));
-        result.push(merged);
-      }
-    }
-    return result;
+    // Dedup and time conversion is handled server-side in api/deputy-rosters.js
+    return mapped;
   } catch (err) {
     console.error('fetchRosters error:', err);
     return [];

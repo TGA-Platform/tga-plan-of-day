@@ -100,5 +100,63 @@ export default async function handler(req, res) {
     ? allRosters.filter(r => unitSet.has(r.OperationalUnit))
     : allRosters;
 
-  res.status(200).json(filtered);
+  // ── 4. Convert unix timestamps to HH:MM (Sydney) and dedup split shifts ──
+  const unixToHHMM = (t) => {
+    if (!t) return '';
+    const num = typeof t === 'string' ? parseInt(t, 10) : t;
+    if (isNaN(num) || num <= 100000) return String(t ?? '');
+    const d = new Date(num * 1000);
+    return d.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Australia/Sydney' }).slice(0, 5);
+  };
+  const toMins = (hhmm) => {
+    if (!hhmm) return 0;
+    const [h, m] = String(hhmm).split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+  };
+
+  const SPLIT_GAP_MINS = 120; // 2 hours
+
+  // Map to clean objects with HH:MM times
+  const mapped = filtered
+    .filter(r => r.Employee && r.Employee !== 0)
+    .map(r => ({
+      Employee:         r.Employee,
+      OperationalUnit:  r.OperationalUnit,
+      StartTime:        unixToHHMM(r.StartTime),
+      EndTime:          unixToHHMM(r.EndTime),
+      _DPMetaData:      r._DPMetaData,
+      Comment:          r.Comment,
+      Open:             r.Open,
+    }));
+
+  // Group by employee and detect split shifts
+  const groupedByEmp = new Map();
+  for (const entry of mapped) {
+    const group = groupedByEmp.get(entry.Employee) ?? [];
+    group.push(entry);
+    groupedByEmp.set(entry.Employee, group);
+  }
+
+  const deduped = [];
+  for (const [, entries] of groupedByEmp) {
+    if (entries.length === 1) { deduped.push(entries[0]); continue; }
+    const sorted = [...entries].sort((a, b) => String(a.StartTime).localeCompare(String(b.StartTime)));
+    let isSplit = false;
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const gap = toMins(sorted[i + 1].StartTime) - toMins(sorted[i].EndTime);
+      if (gap >= SPLIT_GAP_MINS) { isSplit = true; break; }
+    }
+    if (isSplit) {
+      // Keep as separate entries so ratio check shows each segment correctly
+      // but mark each with isSplitShift so the dashboard routes them to Support
+      for (const e of sorted) deduped.push({ ...e, isSplitShift: true, splitSegments: sorted.map(s => ({ StartTime: s.StartTime, EndTime: s.EndTime })) });
+    } else {
+      // Not split — merge into one (earliest start, latest end)
+      const first = sorted[0];
+      const last  = sorted[sorted.length - 1];
+      deduped.push({ ...first, StartTime: first.StartTime, EndTime: last.EndTime });
+    }
+  }
+
+  res.status(200).json(deduped);
 }
