@@ -62,6 +62,15 @@ export async function fetchRosters(date: string, unitIds: number[], force = fals
     const employeeIds = rosters.map((r: any) => r.Employee).filter(Boolean);
     const names = await fetchEmployeeNames(employeeIds);
     
+    // Convert Deputy unix timestamp to HH:MM string in Sydney timezone
+    const unixToHHMM = (t: number | string | null | undefined): string => {
+      if (!t) return '';
+      const num = typeof t === 'string' ? parseInt(t, 10) : t;
+      if (isNaN(num) || num <= 100000) return String(t ?? '');
+      const d = new Date(num * 1000);
+      return d.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Australia/Sydney' }).slice(0, 5);
+    };
+
     const mapped: RosteredStaff[] = rosters
       .filter((r: any) => {
         // Exclude open/unassigned shifts (Employee = 0) — these show as "Staff #0"
@@ -76,8 +85,8 @@ export async function fetchRosters(date: string, unitIds: number[], force = fals
         employeeId: r.Employee,
         // Prefer the display name already embedded in the roster response metadata
         employeeName: r._DPMetaData?.EmployeeInfo?.DisplayName || names[r.Employee] || `Staff #${r.Employee}`,
-        startTime: r.StartTime || '',
-        endTime: r.EndTime || '',
+        startTime: unixToHHMM(r.StartTime),
+        endTime:   unixToHHMM(r.EndTime),
         unitId: r.OperationalUnit,
         // Deputy uses OperationalUnitInfo (not OperationalUnitObject) in _DPMetaData
         unitName: r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '',
