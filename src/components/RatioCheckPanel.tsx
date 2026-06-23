@@ -218,6 +218,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [morningData,   setMorningData]   = useState<RatioCheckSession>(EMPTY_SESSION);
   const [middayData,    setMiddayData]    = useState<RatioCheckSession>(EMPTY_SESSION);
   const [afternoonData, setAfternoonData] = useState<RatioCheckSession>(EMPTY_SESSION);
+  // Guard: don't let Deputy polling save until initial data load has completed.
+  // Without this, the poll fires immediately on mount and overwrites saved FGs with empty state.
+  const initialLoadDone = useRef(false);
   const [floatScheds,         setFloatScheds]         = useState<any[]>([]);
   const [lunchScheds,         setLunchScheds]         = useState<Array<{ employeeId: number; lunchStart: string; lunchEnd: string }>>([]);
   const [dayAllocations,      setDayAllocations]      = useState<Record<number,string>>({});
@@ -308,6 +311,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     if (date > today) return;
 
     async function fetchActuals() {
+      // Don't save until initial data load is complete — avoids overwriting FGs with empty state
+      if (!initialLoadDone.current) return;
       try {
         const r = await fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`);
         if (!r.ok) return;
@@ -465,6 +470,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           if (row.session === 'afternoon') setAfternoonData(d);
         }
       } catch { /* offline */ }
+      // Mark initial load complete — Deputy polling may now safely call save()
+      if (!cancelled) initialLoadDone.current = true;
       try {
         const fr = await fetch(`/api/float-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
         if (!cancelled && fr.ok) setFloatScheds(await fr.json());
