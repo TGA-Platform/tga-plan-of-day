@@ -221,6 +221,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // Guard: don't let Deputy polling save until initial data load has completed.
   // Without this, the poll fires immediately on mount and overwrites saved FGs with empty state.
   const initialLoadDone = useRef(false);
+  // Callback ref: initial load sets this to trigger an immediate Deputy poll once load is done.
+  const wakeDeputyPoll  = useRef<(() => void) | null>(null);
   const [floatScheds,         setFloatScheds]         = useState<any[]>([]);
   const [lunchScheds,         setLunchScheds]         = useState<Array<{ employeeId: number; lunchStart: string; lunchEnd: string }>>([]);
   const [dayAllocations,      setDayAllocations]      = useState<Record<number,string>>({});
@@ -395,7 +397,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       } catch { /* network error - fail silently */ }
     }
 
-    fetchActuals(); // immediate first fetch
+    // Register wake callback so initial load can trigger an immediate poll
+    wakeDeputyPoll.current = fetchActuals;
+    fetchActuals(); // immediate first fetch (may return early if initialLoadDone not yet set)
     if (!isToday) return; // past dates: single fetch only (approved timesheets don't change)
     const interval = setInterval(fetchActuals, 5 * 60 * 1000); // today: poll every 5 min for live clock-ins
     return () => clearInterval(interval);
@@ -471,7 +475,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         }
       } catch { /* offline */ }
       // Mark initial load complete - Deputy polling may now safely call save()
-      if (!cancelled) initialLoadDone.current = true;
+      // Also wake the Deputy poll immediately so actuals appear on first load
+      // rather than waiting up to 5 minutes for the interval to fire.
+      if (!cancelled) {
+        initialLoadDone.current = true;
+        wakeDeputyPoll.current?.();
+      }
       try {
         const fr = await fetch(`/api/float-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
         if (!cancelled && fr.ok) setFloatScheds(await fr.json());
