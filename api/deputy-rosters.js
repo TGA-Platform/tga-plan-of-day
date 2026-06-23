@@ -147,9 +147,17 @@ export default async function handler(req, res) {
       if (gap >= SPLIT_GAP_MINS) { isSplit = true; break; }
     }
     if (isSplit) {
-      // Keep as separate entries so ratio check shows each segment correctly
-      // but mark each with isSplitShift so the dashboard routes them to Support
-      for (const e of sorted) deduped.push({ ...e, isSplitShift: true, splitSegments: sorted.map(s => ({ StartTime: s.StartTime, EndTime: s.EndTime })) });
+      // One merged entry: earliest start, latest end, isSplitShift=true, splitSegments for display
+      // Study Time / non-ratio segments are included in raw sorted but we use the float segments for times
+      const first = sorted[0];
+      const last  = sorted[sorted.length - 1];
+      deduped.push({
+        ...first,
+        StartTime:     first.StartTime,
+        EndTime:       last.EndTime,
+        isSplitShift:  true,
+        splitSegments: sorted.map(s => ({ StartTime: s.StartTime, EndTime: s.EndTime })),
+      });
     } else {
       // Not split — merge into one (earliest start, latest end)
       const first = sorted[0];

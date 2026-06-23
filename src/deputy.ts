@@ -79,7 +79,7 @@ export async function fetchRosters(date: string, unitIds: number[], force = fals
         unitId:        r.OperationalUnit,
         unitName:      r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '',
         isSplitShift:  r.isSplitShift ?? false,
-        splitSegments: r.splitSegments ?? undefined,
+        splitSegments: r.splitSegments?.map((s: any) => ({ startTime: s.StartTime, endTime: s.EndTime })) ?? undefined,
       }));
 
     // Dedup and time conversion is handled server-side in api/deputy-rosters.js
