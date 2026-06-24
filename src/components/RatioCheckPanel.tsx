@@ -2084,8 +2084,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                               {fgStaffMembers.length > 0 && (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
                                   {fgStaffMembers.map((s, ni) => {
-                                    const isAdditional = sessionData.staffMoves[`${s.employeeId}:${slot}`] === '__additional__';
-                                    const hasOv = sessionData.staffMoves[`${s.employeeId}:${slot}`] !== undefined;
+                                    const move = sessionData.staffMoves[`${s.employeeId}:${slot}`];
+                                    const isAdditional = move === '__additional__';
                                     return (
                                       <div key={`${s.employeeId}-${ni}`}
                                         draggable
@@ -2101,7 +2101,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                           userSelect: 'none',
                                         }}
                                       >
-                                        <span>{shortName(s.employeeName)}{hasOv && !isAdditional && ' ?'}</span>
+                                        <span>{shortName(s.employeeName)}</span>
                                         {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
                                         {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                         {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
