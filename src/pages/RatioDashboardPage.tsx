@@ -343,7 +343,6 @@ function FloatPoolSection({
   onFloatClick,
   savedFloatIds,
   adStaff = [],
-  externalCasuals = [],
 }: {
   floats: FloatStaff[];
   onLeave: RosteredStaff[];
@@ -358,7 +357,6 @@ function FloatPoolSection({
   onFloatClick?: (f: FloatStaff) => void;
   savedFloatIds?: Set<number>;
   adStaff?: RosteredStaff[];
-  externalCasuals?: RosteredStaff[];
 }) {
   // -- Step 1: Identify short and surplus rooms ---------------------------
   const shortageRooms = [...roomStatuses]
@@ -670,36 +668,6 @@ function FloatPoolSection({
           <div className="text-sm italic py-1" style={{ color: '#596570' }}>No floats rostered today</div>
         )}
 
-        {/* Z Staffing External Casuals (EC) */}
-        {externalCasuals.length > 0 && (
-          <div className="mt-3 pt-3 border-t" style={{ borderColor: '#fed7aa' }}>
-            <div className="flex items-center gap-2 mb-2">
-              <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#c2410c' }}>External Casuals</div>
-              <span className="text-xs px-1.5 py-0.5 rounded-full font-bold" style={{ backgroundColor: '#fed7aa', color: '#c2410c' }}>EC</span>
-              <span className="text-xs" style={{ color: '#78350f' }}>via Z Staffing</span>
-            </div>
-            <div className="space-y-0">
-              {externalCasuals.map(ec => (
-                <div
-                  key={ec.externalCasualMeta?.zJobId ?? ec.employeeId}
-                  className="flex items-center justify-between"
-                >
-                  <StaffChip staff={ec} />
-                </div>
-              ))}
-            </div>
-            {/* Total cost summary */}
-            {(() => {
-              const totalCents = externalCasuals.reduce((s, ec) => s + (ec.externalCasualMeta?.costCents ?? 0), 0);
-              return totalCents > 0 ? (
-                <div className="mt-2 text-xs font-semibold text-right" style={{ color: '#c2410c' }}>
-                  EC total: ${(totalCents / 100).toFixed(2)}
-                </div>
-              ) : null;
-            })()}
-          </div>
-        )}
-
         {/* AD staff — shown when centre has <100 approved places */}
         {adStaff.length > 0 && (
           <div className="mt-3 pt-3 border-t" style={{ borderColor: '#fde68a' }}>
@@ -959,6 +927,8 @@ export default function RatioDashboardPage() {
     floats.forEach(f => staffOrigin.set(f.employeeId, { staff: f, roomId: 'float' }));
     supportStaff.forEach(s => staffOrigin.set(s.employeeId, { staff: s, roomId: 'support' }));
     issStaff.forEach(s => staffOrigin.set(s.employeeId, { staff: s, roomId: 'iss' }));
+    // EC staff start in the float pool — trackable via staffMoves like any other float
+    externalCasuals.forEach(ec => staffOrigin.set(ec.employeeId, { staff: ec, roomId: 'float' }));
 
     return roomStatuses.map(rs => {
       const staying = rs.rosteredStaff.filter(s => {
@@ -975,7 +945,7 @@ export default function RatioDashboardPage() {
       );
       return buildRoomStatus(rs.room, children as any, tagCasual([...staying, ...movedIn, ...issMovedHere]), showCurrentOnly, nowM);
     });
-  }, [roomStatuses, floats, issStaff, supportStaff, staffMoves, children, showCurrentOnly, hasOverrides, tagCasual]);
+  }, [roomStatuses, floats, issStaff, supportStaff, externalCasuals, staffMoves, children, showCurrentOnly, hasOverrides, tagCasual]);
 
   // ISS staff: split into unassigned, moved-to-room, moved-to-float
   const effectiveIssStaff = useMemo((): FloatStaff[] => {
@@ -1015,12 +985,16 @@ export default function RatioDashboardPage() {
     const roomStaffAsFloats = roomStatuses
       .flatMap(rs => rs.rosteredStaff)
       .filter(s => staffMoves[s.employeeId] === 'float') as FloatStaff[];
+    // EC staff not yet moved to a room stay in float pool
+    const ecAsFloats = externalCasuals
+      .filter(ec => !staffMoves[ec.employeeId] || staffMoves[ec.employeeId] === 'float') as FloatStaff[];
     const result = !hasOverrides
-      ? [...floats, ...supportAsFloats]
+      ? [...floats, ...supportAsFloats, ...ecAsFloats]
       : [
           ...floats.filter(f => !staffMoves[f.employeeId] || staffMoves[f.employeeId] === 'float'),
           ...supportAsFloats,
           ...roomStaffAsFloats,
+          ...ecAsFloats,
         ];
     // Split shift rule: only count staff in the float pool if their shift overlaps
     // the 10am–2pm core window. Staff who only work morning (e.g. 7am–11am) or
@@ -1045,7 +1019,7 @@ export default function RatioDashboardPage() {
       return e > WINDOW_START && s < USEFUL_START_CUTOFF;
     });
     return filtered as FloatStaff[];
-  }, [floats, supportStaff, adStaff, roomStatuses, staffMoves, hasOverrides, tagCasual]);
+  }, [floats, supportStaff, adStaff, externalCasuals, roomStatuses, staffMoves, hasOverrides, tagCasual]);
 
   // Effective support staff: those not dragged into a room
   const effectiveSupportStaff = useMemo((): RosteredStaff[] => {
@@ -1739,7 +1713,6 @@ export default function RatioDashboardPage() {
               onFloatClick={f => setScheduledFloat(f)}
               savedFloatIds={savedFloatIds}
               adStaff={adStaff}
-              externalCasuals={externalCasuals}
             />
         )}
 
