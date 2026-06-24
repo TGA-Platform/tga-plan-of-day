@@ -778,7 +778,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   /** Get actual Room objects for a FG config (empty roomIds = all rooms) */
   function getFGRoomsForConfig(fg: FamilyGroupingConfig): Room[] {
-    if (fg.roomIds.length === 0) return rooms;
+    // An FG with no rooms configured is uncomplete — return empty so it doesn't
+    // accidentally include all rooms and cause staff to appear multiple times.
+    if (fg.roomIds.length === 0) return [];
     return rooms.filter(r => fg.roomIds.includes(r.id));
   }
 
