@@ -22,7 +22,7 @@ import FloatBreakPanel from '../components/FloatBreakPanel';
 import RatioCheckPanel, { type LunchAlert } from '../components/RatioCheckPanel';
 import PredictedCoveragePanel from '../components/PredictedCoveragePanel';
 import SummaryTab from '../components/SummaryTab';
-import type { AttendanceChild, RoomRatioStatus, RosteredStaff, FloatStaff } from '../types';
+import type { AttendanceChild, RoomRatioStatus, RosteredStaff, FloatStaff, ExternalCasualMeta } from '../types';
 import type { FloatSchedule } from '../components/FloatSchedulePanel';
 
 // --- Helpers -----------------------------------------------------------------
@@ -102,11 +102,20 @@ function StaffChip({ staff }: { staff: RosteredStaff }) {
   const timeStr = staff.isSplitShift && staff.splitSegments?.length
     ? staff.splitSegments.map(seg => `${formatTime(seg.startTime)}–${formatTime(seg.endTime)}`).join(' / ')
     : start && end ? `${start}–${end}` : start || end || '';
+  const meta = staff.externalCasualMeta;
+  // Format cost e.g. 38250 → $382.50
+  const costStr = meta?.costCents ? `$${(meta.costCents / 100).toFixed(2)}` : null;
+  // Format cert e.g. CERT3 → Cert III, DIPLOMA → Diploma, ECT → ECT, NONE → ''
+  const certLabel = meta?.certLevel && meta.certLevel !== 'NONE'
+    ? meta.certLevel === 'CERT3' ? 'Cert III'
+    : meta.certLevel === 'DIPLOMA' ? 'Diploma'
+    : meta.certLevel
+    : null;
   return (
     <div className="flex items-center gap-2 py-1">
       <div
         className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
-        style={{ backgroundColor: '#2d5c18' }}
+        style={{ backgroundColor: staff.isExternalCasual ? '#c2410c' : '#2d5c18' }}
         title={staff.employeeName}
       >
         {getInitials(staff.employeeName)}
@@ -117,12 +126,19 @@ function StaffChip({ staff }: { staff: RosteredStaff }) {
           {staff.isInternalCasual && (
             <span className="flex-shrink-0 text-xs font-semibold px-1 py-0 rounded" style={{ backgroundColor: '#fef3c7', color: '#92400e', fontSize: '9px', lineHeight: '14px' }}>IC</span>
           )}
+          {staff.isExternalCasual && (
+            <span className="flex-shrink-0 text-xs font-semibold px-1 py-0 rounded" style={{ backgroundColor: '#fed7aa', color: '#c2410c', fontSize: '9px', lineHeight: '14px' }}>EC</span>
+          )}
+          {certLabel && (
+            <span className="flex-shrink-0 text-xs px-1 py-0 rounded" style={{ backgroundColor: '#e0e7ff', color: '#3730a3', fontSize: '9px', lineHeight: '14px' }}>{certLabel}</span>
+          )}
           {staff.isSplitShift && (
             <span className="flex-shrink-0 text-xs font-semibold px-1 py-0 rounded" style={{ backgroundColor: '#e0e7ff', color: '#3730a3', fontSize: '9px', lineHeight: '14px' }}>SPLIT</span>
           )}
         </div>
         <div className="text-xs" style={{ color: '#596570' }}>
           {timeStr || 'Time not set'}
+          {costStr && <span className="ml-1 font-medium" style={{ color: '#c2410c' }}>{costStr}</span>}
         </div>
       </div>
     </div>
@@ -327,6 +343,7 @@ function FloatPoolSection({
   onFloatClick,
   savedFloatIds,
   adStaff = [],
+  externalCasuals = [],
 }: {
   floats: FloatStaff[];
   onLeave: RosteredStaff[];
@@ -341,6 +358,7 @@ function FloatPoolSection({
   onFloatClick?: (f: FloatStaff) => void;
   savedFloatIds?: Set<number>;
   adStaff?: RosteredStaff[];
+  externalCasuals?: RosteredStaff[];
 }) {
   // -- Step 1: Identify short and surplus rooms ---------------------------
   const shortageRooms = [...roomStatuses]
@@ -652,6 +670,36 @@ function FloatPoolSection({
           <div className="text-sm italic py-1" style={{ color: '#596570' }}>No floats rostered today</div>
         )}
 
+        {/* Z Staffing External Casuals (EC) */}
+        {externalCasuals.length > 0 && (
+          <div className="mt-3 pt-3 border-t" style={{ borderColor: '#fed7aa' }}>
+            <div className="flex items-center gap-2 mb-2">
+              <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#c2410c' }}>External Casuals</div>
+              <span className="text-xs px-1.5 py-0.5 rounded-full font-bold" style={{ backgroundColor: '#fed7aa', color: '#c2410c' }}>EC</span>
+              <span className="text-xs" style={{ color: '#78350f' }}>via Z Staffing</span>
+            </div>
+            <div className="space-y-0">
+              {externalCasuals.map(ec => (
+                <div
+                  key={ec.externalCasualMeta?.zJobId ?? ec.employeeId}
+                  className="flex items-center justify-between"
+                >
+                  <StaffChip staff={ec} />
+                </div>
+              ))}
+            </div>
+            {/* Total cost summary */}
+            {(() => {
+              const totalCents = externalCasuals.reduce((s, ec) => s + (ec.externalCasualMeta?.costCents ?? 0), 0);
+              return totalCents > 0 ? (
+                <div className="mt-2 text-xs font-semibold text-right" style={{ color: '#c2410c' }}>
+                  EC total: ${(totalCents / 100).toFixed(2)}
+                </div>
+              ) : null;
+            })()}
+          </div>
+        )}
+
         {/* AD staff — shown when centre has <100 approved places */}
         {adStaff.length > 0 && (
           <div className="mt-3 pt-3 border-t" style={{ borderColor: '#fde68a' }}>
@@ -753,6 +801,8 @@ export default function RatioDashboardPage() {
   const [allRosters, setAllRosters]   = useState<RosteredStaff[]>([]);
   // Set of normalised names who are internal casuals (from staff_wwcc table)
   const [internalCasualSet, setInternalCasualSet] = useState<Set<string>>(new Set());
+  // External casuals from Z Staffing (converted to RosteredStaff)
+  const [externalCasuals, setExternalCasuals] = useState<RosteredStaff[]>([]);
   const [activeView, setActiveView]   = useState<'plan-of-day' | 'ratio-check' | 'summary'>('plan-of-day');
   const [planSubView, setPlanSubView] = useState<'live' | 'plan'>('live');
 
@@ -1173,6 +1223,52 @@ export default function RatioDashboardPage() {
           setInternalCasualSet(casualSet);
         })
         .catch(() => {});
+
+      // Fetch external casuals from Z Staffing (best-effort, non-blocking)
+      // Use the centre name from config (strip leading 'The Grove Academy' prefix for API)
+      const centreName = (() => {
+        const c = CENTRES.find(c => c.id === selectedCentreId);
+        if (!c) return null;
+        // Strip common prefix so it matches TGA_WORKSPACE_MAP keys in the API
+        return c.name
+          .replace(/^The Grove Academy\s*[-–]?\s*/i, '')
+          .replace(/^The Grove Academy$/i, 'Wollongong') // fallback
+          .trim();
+      })();
+      if (centreName) {
+        fetch(`/api/z-casuals?centre=${encodeURIComponent(centreName)}&date=${date}`)
+          .then(r => r.ok ? r.json() : [])
+          .then((records: {
+            zJobId: string; name: string; start: string; end: string;
+            status: string; certLevel: string; costCents: number; workspaceId: string;
+          }[]) => {
+            // Convert Z Staffing records to synthetic RosteredStaff
+            // Use negative IDs derived from job ID hash to avoid Deputy collisions
+            const toNegId = (s: string) => {
+              let h = 0;
+              for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+              return h < 0 ? h : -h;
+            };
+            const ecStaff: RosteredStaff[] = records.map(r => ({
+              employeeId:   toNegId(r.zJobId),
+              employeeName: r.name,
+              startTime:    r.start,
+              endTime:      r.end,
+              unitId:       0,
+              unitName:     'Z Casual',
+              isExternalCasual: true,
+              externalCasualMeta: {
+                zJobId:      r.zJobId,
+                certLevel:   r.certLevel,
+                costCents:   r.costCents,
+                status:      r.status,
+                workspaceId: r.workspaceId,
+              } as ExternalCasualMeta,
+            }));
+            setExternalCasuals(ecStaff);
+          })
+          .catch(() => {});
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data');
     } finally {
@@ -1643,6 +1739,7 @@ export default function RatioDashboardPage() {
               onFloatClick={f => setScheduledFloat(f)}
               savedFloatIds={savedFloatIds}
               adStaff={adStaff}
+              externalCasuals={externalCasuals}
             />
         )}
 

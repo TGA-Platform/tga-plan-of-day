@@ -36,8 +36,19 @@ export interface RosteredStaff {
   unitId: number;
   unitName: string;
   isInternalCasual?: boolean;
+  isExternalCasual?: boolean;  // Z Staffing casual — shown as EC badge
+  externalCasualMeta?: ExternalCasualMeta; // extra data only on EC staff
   isSplitShift?: boolean;  // true when employee has 2 roster entries with a gap ≥ 2 hours
   splitSegments?: { startTime: string; endTime: string }[]; // both segments for display
+}
+
+/** Metadata stored alongside an EC (External Casual) roster entry */
+export interface ExternalCasualMeta {
+  zJobId: string;        // Z Staffing job UUID
+  certLevel: string;     // 'CERT3' | 'DIPLOMA' | 'ECT' | 'NONE'
+  costCents: number;     // total shift cost in cents (hourlyRateUsed × hours)
+  status: string;        // 'Filled' | 'Completed' | 'GroupCompleted'
+  workspaceId: string;   // Z Staffing workspace UUID
 }
 
 export interface AbsentStaff {

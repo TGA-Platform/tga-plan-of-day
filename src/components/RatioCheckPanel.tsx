@@ -2101,6 +2101,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                       >
                                         <span>{shortName(s.employeeName)}{hasOv && !isAdditional && ' ?'}</span>
                                         {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                         {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                                         {sessionData.staffTimeOverrides[String(s.employeeId)]?.isOvertime && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fee2e2', color: '#dc2626', flexShrink: 0, lineHeight: '13px' }}>OT</span>}
                                         {sessionData.staffTimeOverrides[String(s.employeeId)]?.comment && <span title={sessionData.staffTimeOverrides[String(s.employeeId)]?.comment} style={{ fontSize: '9px', color: '#6366f1', cursor: 'help', flexShrink: 0, lineHeight: 1 }}>✎</span>}
@@ -2146,6 +2147,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                             }}>
                                               {shortName(s.employeeName)}{hasOv && ' →'}
                                               {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                               {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                                             </span>
                                             <span style={{ fontSize: '9px', color: '#9ca3af' }}>{s.inRoomName}</span>
@@ -2181,6 +2183,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                         <div key={s.employeeId} style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '3px', flexWrap: 'wrap' }}>
                                           <span style={{ fontSize: '10px', color: '#374151', flex: 1 }}>{shortName(s.employeeName)}</span>
                                           {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                           {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                                           <select
                                             value=""
@@ -2294,6 +2297,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '2px', width: '100%' }}>
                                         <span>{shortName(s.employeeName)}{hasOverride && ' →'}</span>
                                         {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                         {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                                         <button
                                           className="no-print"
@@ -2413,6 +2417,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                         <div key={s.employeeId} style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '3px' }}>
                                           <span style={{ fontSize: '10px', color: '#374151', flex: 1 }}>{shortName(s.employeeName)}</span>
                                           {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                           {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                                           <button
                                             onClick={() => { moveStaff(s.employeeId, slot, room.id); setEditingCell(null); }}
@@ -2525,6 +2530,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                               <div style={{ display: 'flex', alignItems: 'center', gap: '2px', width: '100%' }}>
                                 <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{shortName(s.employeeName)}</span>
                                 {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                 {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                                 <button className="no-print" onClick={e => { e.stopPropagation(); const t = getStaffTime(s); setTimeEditorStart(t.start); setTimeEditorEnd(t.end); setTimeEditorLunchStart(t.lunchStart ?? ''); setTimeEditorLunchEnd(t.lunchEnd ?? ''); setTimeEditorOvertime(sessionData.staffTimeOverrides[s.employeeId]?.isOvertime ?? false); setTimeEditorComment(sessionData.staffTimeOverrides[s.employeeId]?.comment ?? ''); setTimeEditorModal({ empId: s.employeeId, name: s.employeeName, rosterStart: formatRosterTime(s.startTime) || '', rosterEnd: formatRosterTime(s.endTime) || '' }); }}
                                   title="Edit time" style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '8px', color: hasTimeOverride ? '#6366f1' : '#9ca3af', padding: '0 1px', lineHeight: 1 }}>⏱</button>
@@ -2564,6 +2570,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#dbeafe', color: '#1e40af', border: '1px solid #93c5fd', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
                             {shortName(s.employeeName)} <span style={{ fontSize: '9px', opacity: 0.7 }}>✓</span>
                             {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                             {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
@@ -2575,6 +2582,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#dbeafe', color: '#1e40af', border: '1px dashed #93c5fd', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
                             {shortName(s.employeeName)}
                             {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                             {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
@@ -2603,6 +2611,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#ccfbf1', color: '#0f766e', border: '1px solid #5eead4', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
                             {shortName(s.employeeName)} <span style={{ fontSize: '9px', opacity: 0.7 }}>✓</span>
                             {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                             {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
@@ -2614,6 +2623,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#ccfbf1', color: '#0f766e', border: '1px dashed #5eead4', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
                             {shortName(s.employeeName)}
                             {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                             {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
@@ -2641,6 +2651,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#7e22ce', border: '1px solid #c4b5fd', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
                             {shortName(s.employeeName)} <span style={{ fontSize: '9px', opacity: 0.7 }}>✓</span>
                             {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                             {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
@@ -2652,6 +2663,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#7e22ce', border: '1px dashed #c4b5fd', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none', touchAction: 'none', outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined }}>
                             {shortName(s.employeeName)}
                             {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
+                                        {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                             {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
                           </div>
                         ))}
