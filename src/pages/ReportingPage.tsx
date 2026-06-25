@@ -1058,28 +1058,48 @@ export default function ReportingPage() {
           }
         }
 
+        // Build a map of empId → own-lunch float schedule block (planned own break times)
+        const ownLunchByEmpId: Record<number, { startTime: string; endTime: string }> = {};
+        for (const fsRow of (floatScheds as any[])) {
+          const floatEmpId = fsRow.employee_id as number;
+          for (const block of (fsRow.schedule ?? [])) {
+            if (String(block.coverType ?? '').toLowerCase() === 'own-lunch') {
+              ownLunchByEmpId[floatEmpId] = { startTime: String(block.startTime ?? ''), endTime: String(block.endTime ?? '') };
+            }
+          }
+        }
+
         // Inject actual lunch break rows from Ratio Check overrides (Deputy actuals or manual)
-        // For each staff member with actual break times, insert a dedicated Lunch row
-        // Track which employeeIds already have a lunch_break positional entry (from Ratio Check moves)
+        // Also fall back to planned own-lunch times from the float schedule when Deputy hasn't
+        // clocked the break yet. Label clearly as "Own lunch break" for floats.
         const lunchEntriesToAdd: typeof entries = [];
         const seenLunchEmpIds = new Set<number>();
         for (const entry of entries) {
           if (entry.blockType === 'lunch_break') continue;
           if (seenLunchEmpIds.has(entry.employeeId)) continue;
           const override = ratioTimeOverrides[String(entry.employeeId)];
-          if (!override?.lunchStart) continue;
+          const plannedOwnLunch = ownLunchByEmpId[entry.employeeId];
+          // Use Deputy actual times if available, fall back to planned own-lunch from float schedule
+          const lunchStart = override?.lunchStart ?? plannedOwnLunch?.startTime;
+          const lunchEnd   = override?.lunchEnd   ?? plannedOwnLunch?.endTime;
+          if (!lunchStart) continue;
           seenLunchEmpIds.add(entry.employeeId);
+          const isOwnLunchFloat = !!plannedOwnLunch;
+          const hasActual = !!override?.lunchStart;
+          const noteText = isOwnLunchFloat
+            ? (hasActual ? 'Own lunch break' : 'Own lunch break (planned)')
+            : (lunchEnd ? 'Deputy actual' : 'In progress');
           // Remove any existing positional lunch_break entry for this employee (will be replaced)
-          // Add a clean lunch row with actual times
+          // Add a clean lunch row with actual or planned times
           lunchEntriesToAdd.push({
             employeeId: entry.employeeId,
             name:       entry.name,
             room:       'Lunch Break',
-            inTime:     override.lunchStart,
-            outTime:    override.lunchEnd ?? '',
+            inTime:     lunchStart,
+            outTime:    lunchEnd ?? '',
             blockType:  'lunch_break',
             staffType:  entry.staffType,
-            note:       override.lunchEnd ? 'Deputy actual' : 'In progress',
+            note:       noteText,
           });
         }
         // Remove old positional lunch entries that will be replaced with actual times
