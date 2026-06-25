@@ -1855,16 +1855,14 @@ export default function RatioDashboardPage() {
                     >
                       <StaffChip staff={s} />
                       <div className="flex items-center gap-1 ml-2 flex-shrink-0">
-                        {/* Split-shift staff get a Plan Day button so directors can schedule their day */}
-                        {s.isSplitShift && (
-                          <button
-                            onClick={() => setScheduledFloat(s as FloatStaff)}
-                            className="text-xs px-2 py-0.5 rounded-full font-medium hover:opacity-80"
-                            style={{ backgroundColor: savedFloatIds.has(s.employeeId) ? '#bbf7d0' : '#E2F1DA', color: '#2d5c18' }}
-                          >
-                            {savedFloatIds.has(s.employeeId) ? '✅ Day Planned' : '📋 Plan day'}
-                          </button>
-                        )}
+                        {/* Plan Day available for all support staff (directors, ed leaders etc may cover lunches) */}
+                        <button
+                          onClick={() => setScheduledFloat(s as FloatStaff)}
+                          className="text-xs px-2 py-0.5 rounded-full font-medium hover:opacity-80"
+                          style={{ backgroundColor: savedFloatIds.has(s.employeeId) ? '#bbf7d0' : '#E2F1DA', color: '#2d5c18' }}
+                        >
+                          {savedFloatIds.has(s.employeeId) ? '✅ Day Planned' : '📋 Plan day'}
+                        </button>
                         <span
                           className="text-xs px-2 py-0.5 rounded-full font-medium"
                           style={{ backgroundColor: '#F5FAF3', color: '#2d5c18' }}
