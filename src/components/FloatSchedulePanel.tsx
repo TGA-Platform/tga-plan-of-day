@@ -473,8 +473,8 @@ function BlockRow({
           </>
         )}
 
-        {/* Cover type — required for Reg 151 reporting; hidden for own-lunch (fixed type) */}
-        {block.type === 'break' && !isOwnLunch && (
+        {/* Cover type — required for Reg 151 reporting */}
+        {block.type === 'break' && (
           <div>
             <label className="text-xs mb-1 block font-medium" style={{ color: '#596570' }}>Cover type</label>
             <select
@@ -486,6 +486,7 @@ function BlockRow({
               <option value="programming">📚 Programming cover</option>
               <option value="ratio">🔢 Ratio cover</option>
               <option value="cleaning">🧹 Cleaning duties</option>
+              <option value="own-lunch">😋 Own lunch break</option>
             </select>
           </div>
         )}
