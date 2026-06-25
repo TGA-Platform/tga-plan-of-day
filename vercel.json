@@ -1,7 +1,10 @@
 {
+  "redirects": [
+    { "source": "/guide", "destination": "/guide.html", "permanent": false }
+  ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },
-    { "source": "/((?!api/|guide|guide-img/).*)", "destination": "/index.html" }
+    { "source": "/((?!api/|guide).*)", "destination": "/index.html" }
   ],
   "crons": [
     {
