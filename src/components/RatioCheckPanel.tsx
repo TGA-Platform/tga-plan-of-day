@@ -778,9 +778,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   /** Get actual Room objects for a FG config (empty roomIds = all rooms) */
   function getFGRoomsForConfig(fg: FamilyGroupingConfig): Room[] {
-    // An FG with no rooms configured is uncomplete — return empty so it doesn't
-    // accidentally include all rooms and cause staff to appear multiple times.
-    if (fg.roomIds.length === 0) return [];
+    // roomIds: [] means "All rooms" (matches getFGForRoomAtSlot behaviour)
+    if (fg.roomIds.length === 0) return rooms;
     return rooms.filter(r => fg.roomIds.includes(r.id));
   }
 
@@ -2021,7 +2020,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     return rooms.map(room => {
                       const fg = getFGForRoomAtSlot(slot, room.id);
 
-                      // FG match: only use it if the FG has rooms configured
+                      // FG match: only render as merged cell if rooms resolved (empty roomIds = all rooms)
                       const fgRoomsForSlot = fg ? getFGRoomsForConfig(fg).filter(r => rooms.some(rm => rm.id === r.id)) : [];
                       if (fg && fgRoomsForSlot.length > 0) {
                         // This room belongs to a FG at this slot
