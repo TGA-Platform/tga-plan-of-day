@@ -53,6 +53,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <span style={{ color: '#D0E8B8' }}>|</span>
                 </>
               )}
+              <a href="/guide" target="_blank" rel="noopener noreferrer" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Guide</a>
+              <span style={{ color: '#D0E8B8' }}>|</span>
               <span style={{ color: '#596570' }}>{user.name}</span>
             </nav>
           )}
