@@ -927,10 +927,27 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       const moveKey = `${r.employeeId}:${slot}`;
       const move = sessionData.staffMoves[moveKey];
       if (move !== undefined) return !roomIds.has(move) && !activityMoves.has(move);
-      // Native float unit staff belong in float pool, not additional duties
+      // Native float unit staff: hide from Additional Duties only when they have
+      // an active schedule block (covering a room, on lunch, programming etc).
+      // If they're on shift but have NO active block (e.g. plan day didn't cover
+      // the full shift), show them here so they're visible and assignable.
       const centreConfig2 = CENTRES.find(c => c.id === centreId);
       const floatUnitIds2 = new Set(centreConfig2?.floatUnitIds ?? []);
-      if (floatUnitIds2.has(r.unitId)) return false;
+      if (floatUnitIds2.has(r.unitId)) {
+        const slotMins2 = slotToMins(slot);
+        const hasActiveBlock = floatScheds.some(fsRow =>
+          fsRow.employee_id === r.employeeId &&
+          (fsRow.schedule ?? []).some((b: any) => {
+            const bS = slotToMins(String(b.startTime ?? '00:00'));
+            const bE = slotToMins(String(b.endTime   ?? '00:00'));
+            return slotMins2 >= bS && slotMins2 < bE;
+          })
+        );
+        // Also check if they're covering a room via floatCoveringRoomBySlot
+        const coveringRoom = Object.values(floatCoveringRoomBySlot[slot] ?? {}).some(ids => (ids as number[]).includes(r.employeeId));
+        if (hasActiveBlock || coveringRoom) return false; // has a scheduled block — don't show here
+        // No active block — fall through and show in Additional Duties
+      }
       return !roomUnitIds.has(r.unitId);
     });
   }
