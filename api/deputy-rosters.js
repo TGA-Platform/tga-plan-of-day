@@ -161,10 +161,19 @@ export default async function handler(req, res) {
         deduped.push({ ...seg, isSplitShift: true, splitSegments: allSegments });
       }
     } else {
-      // Not split — merge into one (earliest start, latest end)
-      const first = sorted[0];
-      const last  = sorted[sorted.length - 1];
-      deduped.push({ ...first, StartTime: first.StartTime, EndTime: last.EndTime });
+      // Not split — merge into one (earliest start, latest end).
+      // Prefer a room/ratio unit as the primary entry over study-time/non-ratio
+      // units so the staff member appears in the correct room on the plan of day.
+      // e.g. Trainee Study Time 07:30-08:30 + 4-5 Achievers 08:30-16:30
+      //   → should show as 4-5 Achievers 07:30-16:30, not Study Time.
+      const isNonRatio = (e) => {
+        const uName = (e._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
+        return uName.includes('study time') || uName.includes('staff meeting');
+      };
+      const primary = sorted.find(e => !isNonRatio(e)) ?? sorted[0];
+      const first   = sorted[0];
+      const last    = sorted[sorted.length - 1];
+      deduped.push({ ...primary, StartTime: first.StartTime, EndTime: last.EndTime });
     }
   }
 
