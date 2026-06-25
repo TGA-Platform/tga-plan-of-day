@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan of Day — Director Guide | The Grove Academy</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --green: #2d5c18;
+    --green-light: #bbf7d0;
+    --amber: #92400e;
+    --amber-light: #fef3c7;
+    --orange: #c2410c;
+    --orange-light: #fed7aa;
+    --red: #991b1b;
+    --red-light: #fecaca;
+    --blue: #1d4ed8;
+    --blue-light: #bfdbfe;
+    --purple: #7c3aed;
+    --purple-light: #ede9fe;
+    --grey: #596570;
+    --border: #e5e7eb;
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --text: #1a1a2e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 15px; line-height: 1.7; color: var(--text); background: var(--bg); }
+
+  /* ── Top nav ── */
+  .topnav {
+    background: var(--green);
+    color: white;
+    padding: 12px 40px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 14px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  }
+  .topnav a { color: rgba(255,255,255,0.75); text-decoration: none; }
+  .topnav a:hover { color: white; }
+  .topnav .logo { font-weight: 800; font-size: 16px; color: white; margin-right: 8px; }
+  .topnav .sep { opacity: 0.4; }
+  .topnav .back { margin-left: auto; background: rgba(255,255,255,0.15); padding: 6px 14px; border-radius: 6px; color: white; font-weight: 600; }
+  .topnav .back:hover { background: rgba(255,255,255,0.25); }
+
+  /* ── Cover ── */
+  .cover {
+    background: linear-gradient(135deg, #2d5c18 0%, #1a3a0a 100%);
+    color: white;
+    padding: 56px 48px 48px;
+  }
+  .cover-logo { font-size: 44px; margin-bottom: 10px; }
+  .cover h1 { font-size: 34px; font-weight: 800; line-height: 1.2; }
+  .cover .subtitle { font-size: 17px; opacity: 0.85; margin-top: 6px; }
+  .cover .meta { margin-top: 28px; opacity: 0.65; font-size: 13px; }
+
+  /* ── Layout ── */
+  .toc-wrapper { background: white; border-bottom: 1px solid var(--border); padding: 28px 40px; }
+  .toc-inner { max-width: 900px; margin: 0 auto; }
+  .toc h2 { font-size: 17px; font-weight: 700; color: var(--green); margin-bottom: 14px; }
+  .toc ol { list-style: none; counter-reset: toc; padding: 0; columns: 2; column-gap: 40px; }
+  @media (max-width: 640px) { .toc ol { columns: 1; } }
+  .toc ol > li { counter-increment: toc; break-inside: avoid; }
+  .toc-entry { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-bottom: 1px dotted var(--border); font-size: 13px; }
+  .toc-entry::before { content: counter(toc) "."; font-weight: 700; color: var(--green); min-width: 20px; flex-shrink: 0; }
+  .toc-entry a { color: var(--text); text-decoration: none; }
+  .toc-entry a:hover { color: var(--green); text-decoration: underline; }
+
+  .content { max-width: 900px; margin: 0 auto; padding: 0 40px 100px; }
+  section { margin-top: 60px; scroll-margin-top: 60px; }
+
+  h2.section-title {
+    font-size: 22px; font-weight: 800; color: var(--green);
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 10px; border-bottom: 3px solid var(--green-light); margin-bottom: 24px;
+  }
+  h2.section-title .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; background: var(--green); color: white;
+    border-radius: 50%; font-size: 15px; flex-shrink: 0;
+  }
+  h3 { font-size: 16px; font-weight: 700; color: var(--green); margin: 28px 0 10px; }
+  p { margin-bottom: 12px; }
+  ul, ol { padding-left: 22px; margin-bottom: 12px; }
+  li { margin-bottom: 5px; }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 13px; font-family: monospace; }
+
+  /* ── Screenshots ── */
+  .screenshot { margin: 20px 0; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.15); border: 1px solid var(--border); }
+  .screenshot img { width: 100%; display: block; }
+  .screenshot .caption { background: #1e293b; color: #94a3b8; font-size: 12px; padding: 8px 14px; font-style: italic; }
+
+  /* ── Callouts ── */
+  .callout { border-left: 4px solid; border-radius: 6px; padding: 13px 16px; margin: 16px 0; font-size: 14px; line-height: 1.6; }
+  .callout-green  { border-color: var(--green); background: var(--green-light);  color: #14532d; }
+  .callout-amber  { border-color: var(--amber); background: var(--amber-light);  color: var(--amber); }
+  .callout-red    { border-color: var(--red);   background: var(--red-light);    color: var(--red); }
+  .callout-blue   { border-color: var(--blue);  background: var(--blue-light);   color: #1e3a8a; }
+  .callout p:last-child { margin-bottom: 0; }
+
+  /* ── Card ── */
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; margin: 14px 0; }
+
+  /* ── Badges ── */
+  .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; vertical-align: middle; }
+  .badge-green  { background: var(--green-light);  color: #14532d; }
+  .badge-red    { background: var(--red-light);    color: var(--red); }
+  .badge-blue   { background: var(--blue-light);   color: #1e3a8a; }
+  .badge-amber  { background: var(--amber-light);  color: var(--amber); }
+  .badge-orange { background: var(--orange-light); color: var(--orange); }
+  .badge-indigo { background: #e0e7ff;             color: #3730a3; }
+
+  /* ── Table ── */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 12px 0; }
+  th { background: var(--green); color: white; padding: 8px 14px; text-align: left; font-weight: 600; }
+  td { padding: 8px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:nth-child(even) td { background: #f8fafc; }
+
+  /* ── Steps ── */
+  .steps { list-style: none; padding: 0; counter-reset: step; }
+  .steps li { counter-increment: step; display: flex; gap: 13px; margin-bottom: 12px; align-items: flex-start; }
+  .steps li::before { content: counter(step); display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; background: var(--green); color: white; border-radius: 50%; font-size: 12px; font-weight: 700; flex-shrink: 0; margin-top: 3px; }
+
+  kbd { display: inline-block; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px; padding: 1px 6px; font-size: 12px; font-family: monospace; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  .footer { margin-top: 80px; padding: 24px 40px; border-top: 2px solid var(--green-light); font-size: 12px; color: var(--grey); text-align: center; }
+
+  @media print {
+    .topnav { display: none; }
+    .cover { page-break-after: always; }
+    section { page-break-inside: avoid; }
+  }
+  @media (max-width: 600px) {
+    .cover { padding: 36px 24px 32px; }
+    .content { padding: 0 20px 60px; }
+    .toc-wrapper { padding: 20px 24px; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <span class="logo">🌳 The Grove Academy</span>
+  <span class="sep">|</span>
+  <span>Plan of Day — Director Guide</span>
+  <a href="/ratio" class="back">← Back to Plan of Day</a>
+</nav>
+
+<div class="cover">
+  <div class="cover-logo">📖</div>
+  <h1>Plan of Day<br>Director Guide</h1>
+  <div class="subtitle">How to use plan.tga.edu.au — for centre directors</div>
+  <div class="meta">Version 1.0 · June 2026 · The Grove Academy · Internal use only</div>
+</div>
+
+<div class="toc-wrapper">
+  <div class="toc-inner">
+    <nav class="toc">
+      <h2>Contents</h2>
+      <ol>
+        <li><div class="toc-entry"><a href="#s1">Logging In &amp; Selecting Your Centre</a></div></li>
+        <li><div class="toc-entry"><a href="#s2">The Dashboard — Daily Overview</a></div></li>
+        <li><div class="toc-entry"><a href="#s3">The Ratio Check Grid</a></div></li>
+        <li><div class="toc-entry"><a href="#s4">Moving Staff Between Rooms</a></div></li>
+        <li><div class="toc-entry"><a href="#s5">Float &amp; ISS — Plan Day Schedules</a></div></li>
+        <li><div class="toc-entry"><a href="#s6">Lunch Break Planner</a></div></li>
+        <li><div class="toc-entry"><a href="#s7">Staff Time Overrides &amp; Overtime</a></div></li>
+        <li><div class="toc-entry"><a href="#s8">Family Groupings</a></div></li>
+        <li><div class="toc-entry"><a href="#s9">Visitor Log, Comments &amp; Other Features</a></div></li>
+        <li><div class="toc-entry"><a href="#s10">Status Badges Reference</a></div></li>
+        <li><div class="toc-entry"><a href="#s11">NSW Ratio Rules Reference</a></div></li>
+        <li><div class="toc-entry"><a href="#s12">Troubleshooting &amp; FAQ</a></div></li>
+      </ol>
+    </nav>
+  </div>
+</div>
+
+<div class="content">
+
+<!-- ── 1 ── -->
+<section id="s1">
+  <h2 class="section-title"><span class="num">1</span> Logging In &amp; Selecting Your Centre</h2>
+  <p>Open your browser and go to <strong>plan.tga.edu.au</strong>.</p>
+
+  <div class="screenshot">
+    <img src="/guide-img/01-login.png" alt="TGA Plan of Day login screen">
+    <div class="caption">The login screen at plan.tga.edu.au</div>
+  </div>
+
+  <ol class="steps">
+    <li>Enter your TGA email address (e.g. <code>wollongong@tga.edu.au</code>).</li>
+    <li>Enter your password and click <strong>Sign in</strong>.</li>
+    <li>You will land on the Ratio Dashboard for your centre.</li>
+  </ol>
+
+  <div class="callout callout-amber">
+    <strong>⚠️ Forgotten password?</strong> Contact your Area Manager or TGA support. Do not share login credentials with staff.
+  </div>
+
+  <h3>Selecting Date</h3>
+  <p>The date defaults to today. Use the <strong>date picker</strong> at the top of the page to view any past or future date. Data loads automatically — roster data comes from Deputy, attendance from Owna.</p>
+
+  <div class="callout callout-blue">
+    <strong>💡 Tip:</strong> You will see a line like <em>"Owna data as of 9:15 AM"</em> showing when attendance last refreshed. Hit <strong>🔄 Refresh</strong> any time to pull the latest data.
+  </div>
+</section>
+
+<!-- ── 2 ── -->
+<section id="s2">
+  <h2 class="section-title"><span class="num">2</span> The Dashboard — Daily Overview</h2>
+  <p>The <strong>Plan of the Day</strong> tab gives you a live snapshot of every room's ratio status. This is your main working view throughout the day.</p>
+
+  <div class="screenshot">
+    <img src="/guide-img/02-dashboard.jpg" alt="Plan of Day dashboard">
+    <div class="caption">Dashboard — room cards, float pool, lunch break plan, and day timeline</div>
+  </div>
+
+  <h3>Summary Banner (dark green bar at top)</h3>
+  <ul>
+    <li><strong>Currently present</strong> — children signed in right now</li>
+    <li><strong>Booked</strong> — total booked for today</li>
+    <li><strong>Currently on shift</strong> — staff on the floor right now</li>
+    <li><strong>Rooms at risk</strong> — rooms below ratio right now</li>
+    <li><strong>Overall status</strong> — Compliant or Action needed</li>
+  </ul>
+
+  <h3>Room Cards</h3>
+  <p>Each room shows its current child count, staff required vs. available, individual staff chips, and a green/red/blue compliance badge. Staff chips can be dragged between rooms — see <a href="#s4">Section 4</a>.</p>
+
+  <h3>View Toggles</h3>
+  <ul>
+    <li><strong>All Day</strong> — full day forecast based on booked attendance</li>
+    <li><strong>Currently Present</strong> — live view of who is actually signed in</li>
+    <li><strong>Snapshot — right now</strong> — locks to the current minute for a fixed check</li>
+  </ul>
+</section>
+
+<!-- ── 3 ── -->
+<section id="s3">
+  <h2 class="section-title"><span class="num">3</span> The Ratio Check Grid</h2>
+  <p>Click the <strong>Ratio Check</strong> tab to see a detailed time-slot grid — every room across the top, every time slot down the left. This is where you plan your day and check compliance at each slot.</p>
+
+  <div class="screenshot">
+    <img src="/guide-img/03-ratio-grid.png" alt="Ratio Check grid">
+    <div class="caption">Ratio Check grid — Morning session. Red spare values mean staff shortage; green means surplus.</div>
+  </div>
+
+  <h3>Reading the Grid</h3>
+  <ul>
+    <li><strong>Children count</strong> — auto-populated from Owna. Tap any number to override if needed.</li>
+    <li><strong>Required</strong> — staff needed based on the age breakdown and NSW ratios</li>
+    <li><strong>Staff chips</strong> — who is assigned to that room at that time</li>
+    <li><strong>Spare column</strong> — positive = surplus (blue); negative = short (red)</li>
+  </ul>
+
+  <h3>Three Sessions</h3>
+  <table>
+    <thead><tr><th>Session</th><th>Time range</th><th>Slot size</th></tr></thead>
+    <tbody>
+      <tr><td>Morning</td><td>7:00am – 9:45am</td><td>15 minutes</td></tr>
+      <tr><td>Midday</td><td>10:00am – 1:30pm</td><td>30 minutes</td></tr>
+      <tr><td>Afternoon</td><td>2:00pm – 6:00pm</td><td>30 / 15 minutes</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-green">
+    <strong>✅ Auto-save:</strong> Every change saves automatically within 2 seconds. No Save button needed (one exists for manual saves if you prefer).
+  </div>
+</section>
+
+<!-- ── 4 ── -->
+<section id="s4">
+  <h2 class="section-title"><span class="num">4</span> Moving Staff Between Rooms</h2>
+  <p>You can reassign any staff member to a different room by tapping their chip. This is a planning overlay only — nothing changes in Deputy.</p>
+
+  <div class="screenshot">
+    <img src="/guide-img/05-moving-staff.png" alt="Moving a staff member between rooms">
+    <div class="caption">After tapping a chip, a yellow banner appears — tap any room to place the staff member there, or Cancel.</div>
+  </div>
+
+  <ol class="steps">
+    <li>Tap the staff member's chip (e.g. "Jasmine R.").</li>
+    <li>A yellow banner appears: <em>"Moving [Name] — tap a room or zone to place"</em>.</li>
+    <li>Tap the destination room. The chip moves and ratio recalculates instantly.</li>
+    <li>Changed your mind? Tap <strong>Cancel</strong> in the yellow banner.</li>
+  </ol>
+
+  <h3>Undoing a Move</h3>
+  <p>Tap the staff member's chip in their new location and click the <strong>✕</strong> button next to their name to remove the override and return them to their Deputy-rostered room.</p>
+
+  <div class="callout callout-amber">
+    <strong>⚠️ Planning only:</strong> Moving staff in the Plan of Day does not affect Deputy, payroll, or rostering — it is a visual planning tool for your day.
+  </div>
+</section>
+
+<!-- ── 5 ── -->
+<section id="s5">
+  <h2 class="section-title"><span class="num">5</span> Float &amp; ISS Staff — Plan Day Schedules</h2>
+  <p>Floats and ISS staff have a dedicated scheduling tool — the <strong>Plan Day drawer</strong> — so you can plan exactly where they'll be across the day, who they're covering for lunch, and when they take their own break.</p>
+
+  <div class="screenshot">
+    <img src="/guide-img/06-float-plan-day.png" alt="Float Plan Day drawer">
+    <div class="caption">The Plan Day drawer for a float — showing ratio cover blocks and lunch cover blocks</div>
+  </div>
+
+  <h3>Opening the Plan Day</h3>
+  <ol class="steps">
+    <li>On the Plan of the Day tab, scroll down to the <strong>Float Pool</strong> section.</li>
+    <li>Click <strong>📋 Plan day</strong> next to the float's name.</li>
+    <li>A drawer slides in from the right showing their shift and existing plan blocks.</li>
+  </ol>
+
+  <h3>Block Types</h3>
+  <table>
+    <thead><tr><th>Block</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td>Ratio Cover</td><td>Float moves to a room that is below ratio</td></tr>
+      <tr><td>Lunch Cover</td><td>Float covers a room while a staff member takes their meal break</td></tr>
+      <tr><td>Programming Cover</td><td>Float covers so a staff member can do off-floor planning time</td></tr>
+      <tr><td>Own Lunch</td><td>The float's own meal break</td></tr>
+      <tr><td>Cleaning Cover</td><td>Float covers while a staff member does cleaning duties</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-green">
+    <strong>✅ Auto-suggestions:</strong> The system suggests where to place a float based on which rooms have the biggest ratio gaps. Accept or override as needed.
+  </div>
+
+  <p>When you assign a float to cover a lunch in the Plan Day, it automatically appears in the <strong>Lunch Break Panel</strong> — no double entry needed.</p>
+</section>
+
+<!-- ── 6 ── -->
+<section id="s6">
+  <h2 class="section-title"><span class="num">6</span> Lunch Break Planner</h2>
+  <p>Scroll down on the Plan of the Day tab to find the <strong>Lunch Break Plan</strong>. It auto-generates a staggered lunch schedule for all room staff based on your centre's break rules and available floats.</p>
+
+  <div class="screenshot">
+    <img src="/guide-img/07-lunch.png" alt="Lunch Break Plan panel">
+    <div class="caption">Lunch Break Plan — staff, scheduled break times, and who is covering them</div>
+  </div>
+
+  <h3>Overriding a Lunch Time</h3>
+  <ol class="steps">
+    <li>Click the time shown next to a staff member's name.</li>
+    <li>Type the new start time (e.g. <kbd>11:30</kbd>). End time adjusts automatically.</li>
+    <li>Click <strong>Save</strong> to persist to the Reg 151 compliance record.</li>
+  </ol>
+
+  <h3>Lunch Alerts</h3>
+  <p>If a staff member's planned lunch time passes without a break being recorded, a <strong>lunch alert</strong> banner appears at the top of the screen with their name and how many minutes overdue.</p>
+
+  <div class="callout callout-amber">
+    <strong>⚠️ Regulation 151:</strong> Staff must take their break within their shift. The system warns you if a break is outside the allowed window. The lunch schedule supports your Reg 151 compliance records.
+  </div>
+</section>
+
+<!-- ── 7 ── -->
+<section id="s7">
+  <h2 class="section-title"><span class="num">7</span> Staff Time Overrides &amp; Overtime</h2>
+  <p>When actual start/finish times differ from the Deputy roster — early arrival, running late, actual lunch break recorded — you can override them directly in the Plan of Day.</p>
+
+  <div class="screenshot">
+    <img src="/guide-img/08-time-editor.png" alt="Staff time editor">
+    <div class="caption">Time editor — adjust start/finish, record actual lunch break, flag overtime, add a note</div>
+  </div>
+
+  <ol class="steps">
+    <li>In the Ratio Check grid, click the <strong>⏱</strong> icon next to a staff member's chip.</li>
+    <li>Adjust <strong>Start</strong> and/or <strong>Finish</strong> times.</li>
+    <li>Optionally record their actual <strong>Break start</strong> and <strong>Break end</strong>.</li>
+    <li>Tick <strong>Overtime</strong> if they are staying beyond their rostered end time.</li>
+    <li>Add a <strong>Note</strong> if useful (e.g. "Covering absent staff").</li>
+    <li>Click <strong>Save</strong>.</li>
+  </ol>
+
+  <div class="callout callout-blue">
+    <strong>ℹ️ Deputy sync:</strong> Break times auto-populate from Deputy when staff clock their break via the Deputy kiosk. Manual overrides always take priority and will not be overwritten by Deputy data refreshes.
+  </div>
+</section>
+
+<!-- ── 8 ── -->
+<section id="s8">
+  <h2 class="section-title"><span class="num">8</span> Family Groupings</h2>
+  <p>Family Groupings combine two or more rooms for a specific time period. Children and staff from all grouped rooms are pooled together for ratio calculation.</p>
+
+  <h3>Common Uses</h3>
+  <ul>
+    <li>Early morning / late afternoon when rooms combine due to low numbers</li>
+    <li>Formal Family Grouping programs (Regulation 168B)</li>
+    <li>Any planned session where multiple age groups share a space</li>
+  </ul>
+
+  <h3>Adding a Family Grouping</h3>
+  <ol class="steps">
+    <li>On the Ratio Check tab, click <strong>🏠 Family Groupings</strong>.</li>
+    <li>Click <strong>+ Add Family Grouping</strong>.</li>
+    <li>Give it a label (e.g. "Early morning FG").</li>
+    <li>Select the <strong>rooms</strong> to include (leave all unchecked to span the whole centre).</li>
+    <li>Select the <strong>time slots</strong> when the grouping applies.</li>
+    <li>Optionally set <strong>Held in room</strong> — where children are physically gathered.</li>
+    <li>Click <strong>Save</strong>. A coloured band appears across the selected slots in the grid.</li>
+  </ol>
+
+  <div class="callout callout-red">
+    <strong>🚨 Legal document:</strong> Family groupings are recorded under Regulation 168B and saved to the TGA database. Do not delete them retrospectively unless there was a genuine data entry error — contact your Area Manager if unsure.
+  </div>
+
+  <p>Each grouping is shown in a distinct colour (purple, blue, green, brown, or red) so multiple groupings on the same day are easy to tell apart.</p>
+</section>
+
+<!-- ── 9 ── -->
+<section id="s9">
+  <h2 class="section-title"><span class="num">9</span> Visitor Log, Comments &amp; Other Features</h2>
+
+  <h3>Visitor Log</h3>
+  <p>Record anyone entering a room who is not a rostered staff member — observers, placement students, contractors, area managers.</p>
+  <ol class="steps">
+    <li>Hover over a room cell in the Ratio Check grid and click the <strong>👁 visitor icon</strong>.</li>
+    <li>Enter the visitor's name and entry time, then click <strong>Add Visitor</strong>.</li>
+    <li>When they leave, open the visitor log again and click <strong>Record Exit</strong>.</li>
+  </ol>
+  <div class="callout callout-amber">
+    <strong>⚠️ Note:</strong> Visitors do not count toward ratio. WWCC compliance is managed separately — the visitor log is an operational record only.
+  </div>
+
+  <h3>Slot Comments</h3>
+  <p>Add a timestamped note to any time slot — useful for documenting ratio incidents, late pickups, or anything that should be on the record.</p>
+  <ol class="steps">
+    <li>Click the <strong>💬 comment icon</strong> at the left of any time slot row.</li>
+    <li>Type your note and click outside or press <kbd>Enter</kbd>.</li>
+  </ol>
+
+  <h3>Day Timeline Chart</h3>
+  <p>At the bottom of the Plan of the Day tab, the <strong>Day Timeline</strong> chart shows total children vs. staff required vs. rostered across the whole day in 15-minute intervals. The red shaded area shows any ratio gap — use it to spot pinch points before they happen.</p>
+
+  <h3>External Casuals (Z Staffing)</h3>
+  <p>Staff booked through Z Staffing appear with an orange <span class="badge badge-orange">EC</span> badge. Their estimated shift cost is shown on their chip. ISS and support staff appear in the float pool alongside regular floats.</p>
+</section>
+
+<!-- ── 10 ── -->
+<section id="s10">
+  <h2 class="section-title"><span class="num">10</span> Status Badges Reference</h2>
+
+  <h3>Room / Ratio Status</h3>
+  <table>
+    <thead><tr><th>Badge</th><th>Meaning</th><th>Action?</th></tr></thead>
+    <tbody>
+      <tr><td><span class="badge badge-green">✓ Compliant</span></td><td>Room meets ratio</td><td>No</td></tr>
+      <tr><td><span class="badge badge-red">⚠ Short N</span></td><td>Room needs N more staff — act immediately</td><td><strong>Yes</strong></td></tr>
+      <tr><td><span class="badge badge-blue">+ Surplus N</span></td><td>Room has N extra staff — can redeploy</td><td>Optional</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Staff Type Badges</h3>
+  <table>
+    <thead><tr><th>Badge</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><span class="badge badge-amber">IC</span></td><td>Internal Casual — TGA casual booked via Deputy</td></tr>
+      <tr><td><span class="badge badge-orange">EC</span></td><td>External Casual — booked through Z Staffing</td></tr>
+      <tr><td><span class="badge badge-indigo">SPLIT</span></td><td>Split Shift — two separate segments in one day</td></tr>
+      <tr><td><span class="badge badge-indigo">Cert III</span></td><td>External casual — Certificate III qualified</td></tr>
+      <tr><td><span class="badge badge-indigo">Diploma</span></td><td>External casual — Diploma qualified</td></tr>
+      <tr><td><span class="badge badge-indigo">ECT</span></td><td>External casual — Early Childhood Teacher</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Staff Chip Colours</h3>
+  <ul>
+    <li><strong>Dark green</strong> — permanent or contracted staff (Deputy)</li>
+    <li><strong>Orange</strong> — external casual (Z Staffing)</li>
+  </ul>
+</section>
+
+<!-- ── 11 ── -->
+<section id="s11">
+  <h2 class="section-title"><span class="num">11</span> NSW Ratio Rules Reference</h2>
+
+  <table>
+    <thead><tr><th>Age Group</th><th>Ratio</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td>0 – 24 months (under 2s)</td><td>1 : 4</td><td>8 babies = 2 staff minimum</td></tr>
+      <tr><td>24 – 36 months (2–3s)</td><td>1 : 5</td><td>10 toddlers = 2 staff minimum</td></tr>
+      <tr><td>36 months – 6 years (3–6s)</td><td>1 : 10</td><td>20 kindy = 2 staff minimum</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Cascade Rule (Mixed Age Rooms)</h3>
+  <p>The younger age group's ratio applies first. Any spare capacity carries over to the older group.</p>
+  <div class="card" style="font-size:14px; line-height:1.8;">
+    <strong>Example:</strong> A room with 4 under-2s and 8 two-to-threes.<br>
+    Step 1: 4 ÷ 4 = 1 staff covers all 4 under-2s (no leftover capacity).<br>
+    Step 2: 8 ÷ 5 = 2 staff (rounded up).<br>
+    <strong>Total: 3 staff required.</strong>
+  </div>
+
+  <h3>What Counts as "On Ratio"</h3>
+  <ul>
+    <li>Staff must be <strong>physically present in the room</strong></li>
+    <li>Float staff count only when their Plan Day block has them in that room</li>
+    <li>Staff on <strong>meal break</strong> do not count</li>
+    <li>Staff doing <strong>off-floor programming</strong> do not count</li>
+    <li>Visitors, students on placement, and ISS/inclusion support do not count</li>
+  </ul>
+
+  <div class="callout callout-red">
+    <strong>🚨 If a room shows Short:</strong> Act immediately — move a surplus staff member in, recall someone from break (give it to them later), or move children to another room. Record the incident in the slot comment.
+  </div>
+</section>
+
+<!-- ── 12 ── -->
+<section id="s12">
+  <h2 class="section-title"><span class="num">12</span> Troubleshooting &amp; FAQ</h2>
+
+  <h3>A staff member isn't on the roster</h3>
+  <p>Check their shift is in <strong>Deputy</strong> today and in the correct unit for your centre. If it looks correct, click <strong>🔄 Refresh</strong> — roster data caches for up to 5 minutes. Still missing? Contact TGA support.</p>
+
+  <h3>Children counts are wrong</h3>
+  <p>Attendance comes from <strong>Owna</strong>. Sign the child in via Owna, then hit Refresh. You can also manually override any cell count by clicking the number.</p>
+
+  <h3>Family groupings disappeared</h3>
+  <p>Check the correct centre and date are selected. If they are genuinely missing, contact TGA support — they can be recovered from the database.</p>
+
+  <h3>Page won't load or shows an error</h3>
+  <ul>
+    <li>Check your internet connection</li>
+    <li>Hard refresh: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> (Windows) or <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> (Mac)</li>
+    <li>Try Chrome or Edge if using another browser</li>
+    <li>Contact TGA support with a screenshot of the error</li>
+  </ul>
+
+  <h3>My changes aren't saving</h3>
+  <p>If you see "Save failed", your connection may have dropped. The system retries automatically when connection returns. Don't close the tab until you see "Saved" confirmation.</p>
+
+  <h3>Can I use this on a phone or tablet?</h3>
+  <p>Yes. Tablet in landscape mode works best. On a phone you may need to scroll horizontally to see all room columns in the Ratio Check grid.</p>
+
+  <hr>
+
+  <h3>Who to Contact</h3>
+  <table>
+    <thead><tr><th>Issue</th><th>Contact</th></tr></thead>
+    <tbody>
+      <tr><td>Staff missing from roster</td><td>Your rostering team / Area Manager</td></tr>
+      <tr><td>Children not in attendance</td><td>Your Owna administrator</td></tr>
+      <tr><td>Platform bug or data issue</td><td>TGA Support via your Area Manager</td></tr>
+      <tr><td>Password reset</td><td>TGA Support via your Area Manager</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</div>
+
+<div class="footer">
+  TGA Plan of Day — Director Guide v1.0 · June 2026 · The Grove Academy · plan.tga.edu.au<br>
+  Internal document — not for distribution outside TGA
+</div>
+
+</body>
+</html>
