@@ -2021,23 +2021,19 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     return rooms.map(room => {
                       const fg = getFGForRoomAtSlot(slot, room.id);
 
-                      if (fg) {
+                      // FG match: only use it if the FG has rooms configured
+                      const fgRoomsForSlot = fg ? getFGRoomsForConfig(fg).filter(r => rooms.some(rm => rm.id === r.id)) : [];
+                      if (fg && fgRoomsForSlot.length > 0) {
                         // This room belongs to a FG at this slot
                         if (renderedFGIds.has(fg.id)) {
-                          // Already rendered this FG - skip
+                          // Already rendered this FG — skip (subsequent rooms in the same FG)
                           return null;
                         }
 
-                        // First room of this FG - render merged cell
+                        // First room of this FG — render merged cell
                         renderedFGIds.add(fg.id);
-                        const fgRooms = getFGRoomsForConfig(fg).filter(r => rooms.some(rm => rm.id === r.id));
+                        const fgRooms = fgRoomsForSlot;
                         const fgColSpan = fgRooms.length * 3;
-
-                        // FG has no rooms configured — fall through to normal per-room rendering
-                        if (fgColSpan === 0) {
-                          renderedFGIds.delete(fg.id);
-                          // fall through by not returning — render as normal room cell below
-                        } else {
                         const fgReq = getFGRequiredForConfig(slot, fg);
                         const fgChildren = fgRooms.reduce((sum, r) => sum + getChildCount(slot, r.id), 0);
                         const fgStaffMembers = fgRooms.flatMap(r =>
@@ -2214,10 +2210,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                             )}
                           </td>
                         );
-                        } // end else (fgColSpan > 0)
                       }
 
-                      // Normal room rendering (not in any FG)
+                      // Normal room rendering (not in any FG, or FG has no rooms configured)
                       const key = cellKey(slot, room.id);
                       const cell = sessionData.cells[key];
                       const childCount = cell?.children ?? autoChildCounts[key] ?? 0;
