@@ -127,7 +127,7 @@ function DocPreviewModal({ doc, onClose }: { doc: { label: string; url: string }
           </div>
         </div>
         <div className="flex-1 overflow-hidden rounded-b-2xl">
-          {isPdf && <iframe src={doc.url} className="w-full h-full border-0" title={doc.label} />}
+          {isPdf && <iframe src={`https://docs.google.com/viewer?url=${encodeURIComponent(doc.url)}&embedded=true`} className="w-full h-full border-0" title={doc.label} />}
           {isImage && (
             <div className="w-full h-full flex items-center justify-center bg-gray-50 p-4">
               <img src={doc.url} alt={doc.label} className="max-w-full max-h-full object-contain rounded-lg" />
