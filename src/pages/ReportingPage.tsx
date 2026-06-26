@@ -736,7 +736,10 @@ export default function ReportingPage() {
                 const ct = String(block.coverType ?? '').toLowerCase();
                 const floatName: string = fsRow.employee_name ?? '';
                 const exactIn  = String(block.startTime ?? '');
-                const exactOut = String(block.endTime   ?? '');
+                // Only stamp exactOut on the last slot of this block so consecutive
+                // slots within the same block are not split by the merge-stop guard.
+                const isLastSlotInBlock = sm151(slot) + 15 >= bE;
+                const exactOut = isLastSlotInBlock ? String(block.endTime ?? '') : undefined;
                 if (ct === 'programming') return { room: 'Programming', blockType: 'shift', note: floatName ? `Programming - covered by ${floatName}` : 'Programming - covered by float', exactIn, exactOut };
                 if (ct === 'cleaning')    return { room: 'Cleaning',    blockType: 'shift', note: floatName ? `Cleaning - covered by ${floatName}` : 'Cleaning - covered by float', exactIn, exactOut };
                 return { room: 'Lunch Break', blockType: 'lunch_break', note: floatName ? `Meal break - covered by ${floatName}` : 'Meal break', exactIn, exactOut };
@@ -762,7 +765,9 @@ export default function ReportingPage() {
                     if (sm151(slot) < bS || sm151(slot) >= bE) continue;
                     const ct = String(block.coverType ?? '').toLowerCase();
                     exactIn  = String(block.startTime ?? '');
-                    exactOut = String(block.endTime   ?? '');
+                    // Only stamp exactOut on the last slot of this block so consecutive
+                    // slots within the same block are not split by the merge-stop guard.
+                    exactOut = sm151(slot) + 15 >= bE ? String(block.endTime ?? '') : undefined;
                     if (ct === 'lunch' && block.coveringEmployeeName) {
                       coverNote = `Covering lunch break for ${block.coveringEmployeeName}`;
                     } else if (ct === 'programming' && block.coveringEmployeeName) {
