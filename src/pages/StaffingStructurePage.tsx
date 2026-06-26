@@ -707,7 +707,7 @@ export default function StaffingStructurePage() {
         if (search.trim()) { const q=search.toLowerCase(); if(!s.name.toLowerCase().includes(q)&&!s.position?.toLowerCase().includes(q)) return false; }
         return true;
       })}))
-      .filter(g=>g.staff.length>0||roomFilter===g.id)
+      .filter(g=>g.staff.length>0||roomFilter==='all'||roomFilter===g.id)
   , [activeGroups, roomFilter, qualFilter, statusFilter, search]);
 
   const centreName = CENTRES.find(c=>c.id===centreId)?.name??'';
