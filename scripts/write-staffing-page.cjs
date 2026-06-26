@@ -1,4 +1,13 @@
-import { useState, useEffect, useMemo } from 'react';
+/**
+ * Writes StaffingStructurePage.tsx with no emoji characters.
+ * Run: node scripts/write-staffing-page.cjs
+ */
+const fs = require('fs');
+const path = require('path');
+
+const out = path.join(__dirname, '..', 'src', 'pages', 'StaffingStructurePage.tsx');
+
+const content = `import { useState, useEffect, useMemo } from 'react';
 import type { StaffMember } from '../types';
 import { CENTRES } from '../config';
 import { getUser } from '../auth';
@@ -95,7 +104,7 @@ function ComplianceDot({ staff }: { staff: StaffMember }) {
   const colours: Record<string, string> = { expired: '#ef4444', warning: '#f59e0b', ok: '#22c55e' };
   if (level === 'missing') return null;
   return (
-    <span title={`Compliance ${level}`}
+    <span title={\`Compliance \${level}\`}
       style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', backgroundColor: colours[level] || '#e5e7eb', flexShrink: 0 }} />
   );
 }
@@ -104,7 +113,7 @@ function ComplianceDot({ staff }: { staff: StaffMember }) {
 
 function DocPreviewModal({ doc, onClose }: { doc: { label: string; url: string }; onClose: () => void }) {
   const isPdf  = doc.url.toLowerCase().includes('.pdf');
-  const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(doc.url);
+  const isImage = /\\.(jpg|jpeg|png|gif|webp)$/i.test(doc.url);
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
@@ -321,7 +330,7 @@ function StaffCard({ staff, onEdit, onClose }: {
       <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
         <div className="absolute inset-0 bg-black/30" />
         <div className="relative w-full max-w-md bg-white h-full overflow-y-auto shadow-2xl flex flex-col"
-          style={{ borderLeft: `1px solid ${BRAND.border}` }}
+          style={{ borderLeft: \`1px solid \${BRAND.border}\` }}
           onClick={e => e.stopPropagation()}>
 
           <div className="sticky top-0 z-10 bg-white px-5 pt-5 pb-4 border-b" style={{ borderColor: BRAND.border }}>
@@ -332,7 +341,7 @@ function StaffCard({ staff, onEdit, onClose }: {
                   <QualBadge qual={staff.qualification} />
                   {staff.position && (
                     <span className="text-xs px-2 py-0.5 rounded-full"
-                      style={{ backgroundColor: BRAND.bg, color: BRAND.textMuted, border: `1px solid ${BRAND.border}` }}>
+                      style={{ backgroundColor: BRAND.bg, color: BRAND.textMuted, border: \`1px solid \${BRAND.border}\` }}>
                       {staff.position}
                     </span>
                   )}
@@ -373,12 +382,12 @@ function StaffCard({ staff, onEdit, onClose }: {
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Contact</h3>
                 <div className="space-y-1.5">
                   {staff.email && (
-                    <a href={`mailto:${staff.email}`} className="flex items-center gap-2 text-sm hover:underline" style={{ color: BRAND.greenLight }}>
+                    <a href={\`mailto:\${staff.email}\`} className="flex items-center gap-2 text-sm hover:underline" style={{ color: BRAND.greenLight }}>
                       {staff.email}
                     </a>
                   )}
                   {staff.mobile && (
-                    <a href={`tel:0${staff.mobile}`} className="flex items-center gap-2 text-sm hover:underline" style={{ color: BRAND.greenLight }}>
+                    <a href={\`tel:0\${staff.mobile}\`} className="flex items-center gap-2 text-sm hover:underline" style={{ color: BRAND.greenLight }}>
                       0{staff.mobile}
                     </a>
                   )}
@@ -394,10 +403,10 @@ function StaffCard({ staff, onEdit, onClose }: {
                   const level = complianceLevel(days);
                   const dotColor = level === 'expired' ? '#ef4444' : level === 'warning' ? '#f59e0b' : level === 'ok' ? '#22c55e' : '#d1d5db';
                   const dateStr = item.expiry ? fmtDate(item.expiry) : null;
-                  const dayStr  = days !== null ? (days < 0 ? `Expired ${Math.abs(days)}d ago` : days <= 90 ? `${days}d remaining` : '') : '';
+                  const dayStr  = days !== null ? (days < 0 ? \`Expired \${Math.abs(days)}d ago\` : days <= 90 ? \`\${days}d remaining\` : '') : '';
                   return (
                     <div key={item.label}
-                      className={`flex items-start gap-3 px-3 py-2.5 text-sm ${i < compItems.length - 1 ? 'border-b' : ''}`}
+                      className={\`flex items-start gap-3 px-3 py-2.5 text-sm \${i < compItems.length - 1 ? 'border-b' : ''}\`}
                       style={{ borderColor: BRAND.border, backgroundColor: level === 'expired' ? '#fff5f5' : level === 'warning' ? '#fffbeb' : BRAND.white }}>
                       <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', backgroundColor: dotColor, flexShrink: 0, marginTop: 4 }} />
                       <div className="flex-1 min-w-0">
@@ -405,7 +414,7 @@ function StaffCard({ staff, onEdit, onClose }: {
                         {item.code && <div className="text-xs" style={{ color: BRAND.textMuted }}>{item.code}</div>}
                         {dateStr
                           ? <div className="text-xs font-medium" style={{ color: level === 'expired' ? '#991b1b' : level === 'warning' ? '#92400e' : BRAND.green }}>
-                              {dateStr}{dayStr ? ` · ${dayStr}` : ''}
+                              {dateStr}{dayStr ? \` · \${dayStr}\` : ''}
                             </div>
                           : <div className="text-xs text-gray-400">Not recorded</div>
                         }
@@ -472,7 +481,7 @@ function DashboardStats({ groups }: { groups: StaffGroup[] }) {
 
   function StatCard({ value, label, bg, textCol, accent }: { value: string | number; label: string; bg: string; textCol: string; accent?: string }) {
     return (
-      <div className="rounded-2xl p-4 flex flex-col gap-1" style={{ backgroundColor: bg, border: `1px solid ${BRAND.border}` }}>
+      <div className="rounded-2xl p-4 flex flex-col gap-1" style={{ backgroundColor: bg, border: \`1px solid \${BRAND.border}\` }}>
         <div className="text-2xl font-bold leading-tight" style={{ color: accent || textCol }}>{value}</div>
         <div className="text-xs font-medium" style={{ color: textCol, opacity: 0.75 }}>{label}</div>
       </div>
@@ -491,7 +500,7 @@ function DashboardStats({ groups }: { groups: StaffGroup[] }) {
         <StatCard value={floatCount}    label="Float Staff"          bg={BRAND.bg}    textCol={BRAND.text} />
         <StatCard value={casualCount}   label="Internal Casuals"     bg={BRAND.bg}    textCol={BRAND.text} />
         <StatCard value={newCount}      label="New / Onboarding"     bg={BRAND.bg}    textCol={BRAND.text} />
-        <div className="rounded-2xl p-4" style={{ backgroundColor: BRAND.white, border: `1px solid ${BRAND.border}` }}>
+        <div className="rounded-2xl p-4" style={{ backgroundColor: BRAND.white, border: \`1px solid \${BRAND.border}\` }}>
           <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Qualifications</div>
           <div className="space-y-1">
             {QUAL_OPTIONS.filter(q => byQual[q]).map(q => (
@@ -513,11 +522,11 @@ function RoomGroup({ group, onSelect }: { group: StaffGroup; onSelect: (s: Staff
   return (
     <div className="rounded-2xl overflow-hidden border" style={{ borderColor: BRAND.border, backgroundColor: BRAND.white }}>
       <div className="px-4 py-3 flex items-center gap-2"
-        style={{ backgroundColor: group.color + '22', borderBottom: `1px solid ${BRAND.border}` }}>
+        style={{ backgroundColor: group.color + '22', borderBottom: \`1px solid \${BRAND.border}\` }}>
         <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: group.color }} />
         <h3 className="font-bold text-sm flex-1 truncate" style={{ color: BRAND.text }}>{group.title}</h3>
         <span className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0"
-          style={{ backgroundColor: BRAND.white, color: BRAND.textMuted, border: `1px solid ${BRAND.border}` }}>
+          style={{ backgroundColor: BRAND.white, color: BRAND.textMuted, border: \`1px solid \${BRAND.border}\` }}>
           {group.staff.length}
         </span>
       </div>
@@ -577,7 +586,7 @@ export default function StaffingStructurePage() {
 
   function loadData(id: string) {
     setLoading(true); setError(null); setData(null);
-    fetch(`/api/staffing-structure?centreId=${id}`)
+    fetch(\`/api/staffing-structure?centreId=\${id}\`)
       .then(r => r.ok ? r.json() : r.json().then((j: { error?: string }) => { throw new Error(j.error || r.statusText); }))
       .then((d: BoardData) => { setData(d); setLoading(false); })
       .catch((e: Error) => { setError(e.message); setLoading(false); });
@@ -589,12 +598,12 @@ export default function StaffingStructurePage() {
     if (!editingStaff) return;
     for (const u of updates) {
       if (u.groupId) {
-        await fetch(`/api/staffing-structure?centreId=${centreId}`, {
+        await fetch(\`/api/staffing-structure?centreId=\${centreId}\`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'move_item', itemId: editingStaff.mondayId, groupId: u.groupId }),
         });
       } else if (u.columnId) {
-        await fetch(`/api/staffing-structure?centreId=${centreId}`, {
+        await fetch(\`/api/staffing-structure?centreId=\${centreId}\`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'update_item', itemId: editingStaff.mondayId, columnId: u.columnId, value: u.value }),
         });
@@ -715,7 +724,7 @@ export default function StaffingStructurePage() {
                         <div className="text-xs" style={{ color: BRAND.textMuted }}>{s.position || '—'}</div>
                       </div>
                       <span className="text-xs px-2 py-0.5 rounded-full"
-                        style={{ backgroundColor: BRAND.bg, color: BRAND.textMuted, border: `1px solid ${BRAND.border}` }}>
+                        style={{ backgroundColor: BRAND.bg, color: BRAND.textMuted, border: \`1px solid \${BRAND.border}\` }}>
                         {g.title}
                       </span>
                       <span style={{ color: BRAND.divider }}>›</span>
@@ -743,7 +752,7 @@ export default function StaffingStructurePage() {
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium truncate" style={{ color: BRAND.textMuted }}>{s.name}</div>
                           <div className="text-xs" style={{ color: BRAND.textMuted }}>
-                            {[s.position, s.endDate && s.endDate !== 'Not Applicable' ? `ended ${s.endDate}` : undefined].filter(Boolean).join(' · ')}
+                            {[s.position, s.endDate && s.endDate !== 'Not Applicable' ? \`ended \${s.endDate}\` : undefined].filter(Boolean).join(' · ')}
                           </div>
                         </div>
                         <span style={{ color: BRAND.divider }}>›</span>
@@ -777,3 +786,7 @@ export default function StaffingStructurePage() {
     </div>
   );
 }
+`;
+
+fs.writeFileSync(out, content, 'utf8');
+console.log('Written:', out);
