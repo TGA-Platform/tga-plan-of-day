@@ -75,6 +75,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'spring-farm', name: 'Spring Farm',
+    approvedPlaces: 68,
     rooms: [
       { id: 'sf_0_1', name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 265, ownaRoomName: '0-1' },
       { id: 'sf_1_2', name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 266, ownaRoomName: '1-2' },

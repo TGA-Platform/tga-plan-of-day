@@ -1550,12 +1550,27 @@ export default function RatioDashboardPage() {
             </div>
           </div>
 
-          {/* Booked */}
+          {/* Booked + occupancy % */}
           {forecast?.booked != null && (
             <div className="flex-1 rounded-xl p-2" style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}>
               <div className="text-base mb-0.5">📋</div>
-              {loading ? (<SkeletonPulse className="h-6 w-10 bg-white/20 mb-1" />) : (<div className="text-lg font-bold text-white leading-tight">{forecast.booked}</div>)}
-              <div className="text-xs" style={{ color: '#E2F1DA' }}>Booked</div>
+              {loading ? (<SkeletonPulse className="h-6 w-10 bg-white/20 mb-1" />) : (
+                <div className="flex items-baseline gap-1.5 leading-tight">
+                  <div className="text-lg font-bold text-white">{forecast.booked}</div>
+                  {centre.approvedPlaces && (
+                    <div className="text-xs font-semibold" style={{
+                      color: (forecast.booked / centre.approvedPlaces) >= 0.95 ? '#fca5a5'
+                           : (forecast.booked / centre.approvedPlaces) >= 0.85 ? '#fde68a'
+                           : '#86efac'
+                    }}>
+                      {Math.round((forecast.booked / centre.approvedPlaces) * 100)}%
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="text-xs" style={{ color: '#E2F1DA' }}>
+                Booked{centre.approvedPlaces ? ` / ${centre.approvedPlaces}` : ''}
+              </div>
             </div>
           )}
           {/* Total staff */}
