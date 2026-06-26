@@ -1100,20 +1100,6 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   function moveStaff(empId: number, slot: string, targetRoomId: string) {
     setSessionData(prev => {
       const newMoves = { ...prev.staffMoves, [`${empId}:${slot}`]: targetRoomId };
-
-      // Propagate to subsequent slots in this session where staff is present and no override exists
-      const slotIdx = slots.indexOf(slot);
-      if (slotIdx !== -1) {
-        for (let i = slotIdx + 1; i < slots.length; i++) {
-          const futureSlot = slots[i];
-          const futureKey = `${empId}:${futureSlot}`;
-          const staffPresent = (staffAtSlotMap[futureSlot] ?? []).some(s => s.employeeId === empId);
-          if (staffPresent && newMoves[futureKey] === undefined) {
-            newMoves[futureKey] = targetRoomId;
-          }
-        }
-      }
-
       const next = { ...prev, staffMoves: newMoves };
       scheduleAutoSave(next);
       return next;
