@@ -425,8 +425,9 @@ function CreateStaffModal({ centreId, groups, onSave, onClose }: {
 }
 
 // ── Room Group Card ────────────────────────────────────────────────────────
-function RoomGroup({ group, centreId, onSelect, onRoomUpdated }: {
+function RoomGroup({ group, centreId, onSelect, onRoomUpdated, onDrop }: {
   group: StaffGroup; centreId: string; onSelect: (s: StaffMember) => void; onRoomUpdated: () => void;
+  onDrop: (staffId: string, fromGroupId: string, toGroupId: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(group.title);
@@ -452,8 +453,21 @@ function RoomGroup({ group, centreId, onSelect, onRoomUpdated }: {
     onRoomUpdated();
   }
 
+  const [dragOver, setDragOver] = useState(false);
+
   return (
-    <div className="rounded-2xl overflow-hidden border" style={{ borderColor: B.border, backgroundColor: B.white }}>
+    <div
+      className="rounded-2xl overflow-hidden border"
+      style={{ borderColor: dragOver ? B.green : B.border, backgroundColor: B.white, transition: 'border-color 0.15s' }}
+      onDragOver={e=>{ e.preventDefault(); setDragOver(true); }}
+      onDragLeave={()=>setDragOver(false)}
+      onDrop={e=>{
+        e.preventDefault(); setDragOver(false);
+        const staffId = e.dataTransfer.getData('staffId');
+        const fromGroupId = e.dataTransfer.getData('fromGroupId');
+        if (staffId && fromGroupId && fromGroupId !== group.id) onDrop(staffId, fromGroupId, group.id);
+      }}
+    >
       <div className="px-4 py-3 flex items-center gap-2" style={{ backgroundColor: group.color+'22', borderBottom: `1px solid ${B.border}` }}>
         <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: group.color }} />
         {editing ? (
@@ -478,7 +492,9 @@ function RoomGroup({ group, centreId, onSelect, onRoomUpdated }: {
           ? <div className="px-4 py-3 text-xs" style={{ color: B.muted }}>No staff.</div>
           : group.staff.map(s => (
             <button key={s.mondayId || s.id} onClick={()=>onSelect(s)}
-              className="w-full flex items-center gap-3 px-4 py-2.5 hover:opacity-80 text-left group">
+              draggable
+              onDragStart={e=>{ e.dataTransfer.setData('staffId', s.id || s.mondayId || ''); e.dataTransfer.setData('fromGroupId', group.id); e.dataTransfer.effectAllowed='move'; }}
+              className="w-full flex items-center gap-3 px-4 py-2.5 hover:opacity-80 text-left group cursor-grab active:cursor-grabbing">
               <div className="flex-shrink-0">
                 <StatusBadge value={s.qualification} options={QUALIFICATION_OPTIONS} size="xs" />
               </div>
@@ -765,7 +781,15 @@ export default function StaffingStructurePage() {
                 {/* Rooms grid */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredGroups.map(g=>(
-                    <RoomGroup key={g.id} group={g} centreId={centreId} onSelect={setSelectedStaff} onRoomUpdated={()=>loadData(centreId)} />
+                    <RoomGroup key={g.id} group={g} centreId={centreId} onSelect={setSelectedStaff} onRoomUpdated={()=>loadData(centreId)}
+                      onDrop={async (staffId, _fromGroupId, toGroupId)=>{
+                        await fetch(`/api/staffing-structure?centreId=${centreId}`, {
+                          method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ action: 'move_staff', staffId, groupId: toGroupId, centreId }),
+                        });
+                        loadData(centreId);
+                      }}
+                    />
                   ))}
                 </div>
 
