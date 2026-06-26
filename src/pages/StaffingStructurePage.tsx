@@ -145,6 +145,8 @@ function ComplianceDot({ staff }: { staff: StaffMember }) {
 function DocPreviewModal({ doc, onClose }: { doc: { label: string; url: string }; onClose: () => void }) {
   const isPdf   = doc.url.toLowerCase().includes('.pdf');
   const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(doc.url);
+  // Proxy through our API so Monday auth cookies aren't needed client-side
+  const proxyUrl = `/api/staffing-file?url=${encodeURIComponent(doc.url)}`;
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/60" />
@@ -162,8 +164,8 @@ function DocPreviewModal({ doc, onClose }: { doc: { label: string; url: string }
           </div>
         </div>
         <div className="flex-1 overflow-hidden rounded-b-2xl">
-          {isPdf   && <iframe src={`https://docs.google.com/viewer?url=${encodeURIComponent(doc.url)}&embedded=true`} className="w-full h-full border-0" title={doc.label} />}
-          {isImage && <div className="w-full h-full flex items-center justify-center bg-gray-50 p-4"><img src={doc.url} alt={doc.label} className="max-w-full max-h-full object-contain rounded-lg" /></div>}
+          {isPdf   && <iframe src={proxyUrl} className="w-full h-full border-0" title={doc.label} />}
+          {isImage && <div className="w-full h-full flex items-center justify-center bg-gray-50 p-4"><img src={proxyUrl} alt={doc.label} className="max-w-full max-h-full object-contain rounded-lg" /></div>}
           {!isPdf && !isImage && (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-400">
               <p className="text-sm">Preview not available for this file type.</p>
