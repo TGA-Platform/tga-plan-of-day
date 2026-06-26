@@ -1,288 +1,292 @@
 /**
  * /api/staffing-structure
- * GET  ?centreId=bexley               → full board (groups + staff)
- * POST ?centreId=bexley               → update a staff item or move between groups
  *
- * POST body:
- *   { action: 'update_item', itemId, columnId, value }   → update a column value
- *   { action: 'move_item',   itemId, groupId }            → move to different group (room)
+ * GET  ?centreId=bexley                     → all groups + staff for a centre
+ * POST body { action, ...params }           → CRUD operations
  *
- * 5-min in-memory cache per centre (GET only). POST clears cache.
+ * Actions:
+ *   create_staff    { centreId, groupId, name, ...fields }
+ *   update_staff    { staffId, fields: { col: val, ... } }
+ *   delete_staff    { staffId }
+ *   move_staff      { staffId, groupId }
+ *   create_room     { centreId, title, color }
+ *   update_room     { centreId, groupId, title?, color?, isActive? }
+ *   delete_room     { centreId, groupId }  -- only if no staff
  */
 
-const MONDAY_API_KEY = process.env.MONDAY_API_KEY;
-const MONDAY_API_URL = 'https://api.monday.com/v2';
+const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
+const SERVICE_KEY  = proces…KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
 
-const BOARD_IDS = {
-  'oatley':           1419063930,
-  'wollongong':       983834623,
-  'mount-annan':      980348329,
-  'spring-farm':      6513027863,
-  'denham-court':     6247438158,
-  'ed-park-1':        983840576,
-  'ed-park-2':        3448154419,
-  'wilton':           8719103624,
-  'dapto-1':          1841109563,
-  'dapto-2':          3349576958,
-  'north-wollongong': 6248473627,
-  'shell-cove':       8347556299,
-  'bexley':           983830380,
-  'belfield':         9133300009,
-  'bankstown':        9133302478,
-  'glendale':         18406250043,
-  'edgeworth':        9060612097,
+const SB = `${SUPABASE_URL}/rest/v1`;
+const HEADERS = {
+  'Authorization': `Bearer ${SERVICE_KEY}`,
+  'apikey': SERVICE_KEY,
+  'Content-Type': 'application/json',
+  'Prefer': 'return=representation',
 };
 
-// Groups that are NOT active rooms — staff in these are excluded from active view
-const INACTIVE_GROUP_PATTERNS = [
-  /^open positions?$/i,
-  /^on hold$/i,
-  /^offered$/i,
-  /^new$/i,
-  /^exited staff$/i,
-  /^resigned$/i,
-];
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-function isInactiveGroup(title) {
-  return INACTIVE_GROUP_PATTERNS.some(p => p.test(title.trim()));
+async function sbGet(path) {
+  const r = await fetch(`${SB}${path}`, { headers: HEADERS });
+  if (!r.ok) { const t = await r.text(); throw new Error(`Supabase GET ${r.status}: ${t}`); }
+  return r.json();
 }
 
-// 5-min in-memory cache
-const cache = new Map();
-const CACHE_TTL_MS = 5 * 60 * 1000;
-
-// File column IDs on the main item
-const MAIN_FILE_COLS = [
-  { id: 'files0',              label: 'Qualification Certificate' },
-  { id: 'files20',             label: 'Transcripts' },
-  { id: 'certifications20',    label: 'Additional Certifications' },
-  { id: 'files4',              label: 'Induction Checklist' },
-  { id: 'files7__1',           label: 'Policy Kit' },
-  { id: 'files4__1',           label: 'Employment Kit' },
-  { id: 'dup__of_files121__1', label: 'Staff Record' },
-  { id: 'resp',                label: 'Key Responsibilities' },
-];
-
-// Subitem file column IDs
-const SUBITEM_FILE_COLS = [
-  { id: 'files__1',       label: 'Staff Record' },
-  { id: 'files5__1',      label: 'RP/NS/EL Consent' },
-  { id: 'files0__1',      label: 'Fire Warden' },
-  { id: 'files3__1',      label: 'WWC' },
-  { id: 'files04__1',     label: 'Qualifications' },
-  { id: 'files34__1',     label: 'Transcript & CP' },
-  { id: 'files8__1',      label: 'First Aid' },
-  { id: 'files9__1',      label: 'CPR' },
-  { id: 'files02__1',     label: 'Anaphylaxis' },
-  { id: 'file_mm3xjn0z',  label: 'Child Safety' },
-  { id: 'files7__1',      label: 'Child Protection Refresher' },
-  { id: 'files1__1',      label: 'Food Handling Certificate' },
-  { id: 'files93__1',     label: 'Position Description' },
-  { id: 'files14__1',     label: 'Additional Responsibilities' },
-  { id: 'files2__1',      label: 'Client Report' },
-  { id: 'files30__1',     label: 'Training Contract' },
-  { id: 'files29__1',     label: 'Training Plan' },
-  { id: 'files77__1',     label: 'Working Towards ECT' },
-];
-
-// Editable column IDs and their Monday column types
-const EDITABLE_COLUMNS = [
-  { id: 'dropdown',                  label: 'Position',                type: 'dropdown' },
-  { id: 'text_mm2xj3x9',            label: 'Position Category',       type: 'text' },
-  { id: 'date',                      label: 'Start Date',              type: 'date' },
-  { id: 'text9',                     label: 'End Date',                type: 'text' },
-  { id: 'email20',                   label: 'Email',                   type: 'text' },
-  { id: 'mobile20',                  label: 'Mobile',                  type: 'text' },
-  { id: 'text',                      label: 'Days Per Week',           type: 'text' },
-  { id: 'dup__of_days_per_week__1',  label: 'Min Hours Per Week',      type: 'text' },
-  { id: 'wwccnum20',                 label: 'WWCC Number',             type: 'text' },
-  { id: 'wwccexp20',                 label: 'WWCC Expiry',             type: 'date' },
-  { id: 'first_aid_code',            label: 'First Aid Code',          type: 'text' },
-  { id: 'date92',                    label: 'First Aid Expiry',        type: 'date' },
-  { id: 'cpr_code',                  label: 'CPR Code',                type: 'text' },
-  { id: 'dup__of_cpr_code',          label: 'CPR Expiry',             type: 'date' },
-  { id: 'anaphylaxis_code',          label: 'Anaphylaxis Code',        type: 'text' },
-  { id: 'date35',                    label: 'Anaphylaxis Expiry',      type: 'date' },
-  { id: 'date__1',                   label: 'Child Protection Renewal',type: 'date' },
-];
-
-function colVal(columnValues, id) {
-  return (columnValues.find(c => c.id === id)?.text || '').trim() || undefined;
+async function sbPost(path, body) {
+  const r = await fetch(`${SB}${path}`, { method: 'POST', headers: HEADERS, body: JSON.stringify(body) });
+  if (!r.ok) { const t = await r.text(); throw new Error(`Supabase POST ${r.status}: ${t}`); }
+  return r.json();
 }
 
-function parseDate(val) {
-  if (!val) return undefined;
-  return val.length === 10 ? val : undefined;
+async function sbPatch(path, body) {
+  const r = await fetch(`${SB}${path}`, { method: 'PATCH', headers: { ...HEADERS, Prefer: 'return=representation' }, body: JSON.stringify(body) });
+  if (!r.ok) { const t = await r.text(); throw new Error(`Supabase PATCH ${r.status}: ${t}`); }
+  return r.json();
 }
 
-function mapItem(item) {
-  const cv = item.column_values;
+async function sbDelete(path) {
+  const r = await fetch(`${SB}${path}`, { method: 'DELETE', headers: HEADERS });
+  if (!r.ok) { const t = await r.text(); throw new Error(`Supabase DELETE ${r.status}: ${t}`); }
+  return r.status === 204 ? null : r.json();
+}
 
-  const docs = MAIN_FILE_COLS
-    .map(col => { const url = colVal(cv, col.id); return url ? { label: col.label, url } : null; })
-    .filter(Boolean);
-
-  const certDocs = [];
-  for (const sub of (item.subitems || [])) {
-    for (const col of SUBITEM_FILE_COLS) {
-      const url = (sub.column_values?.find(c => c.id === col.id)?.text || '').trim();
-      if (url) certDocs.push({ label: col.label, url });
-    }
-  }
-
+// Map staff_member row → frontend StaffMember shape
+function mapRow(row, docs) {
+  const rowDocs = docs.filter(d => d.staff_id === row.id);
   return {
-    mondayId: String(item.id),
-    name: item.name,
-    qualification: colVal(cv, 'status') || '',
-    ratio50: colVal(cv, 'status2'),
-    position: colVal(cv, 'dropdown'),
-    positionCategory: colVal(cv, 'text_mm2xj3x9'),
-    campus: colVal(cv, 'status8'),
-    startDate: parseDate(colVal(cv, 'date')),
-    endDate: colVal(cv, 'text9'),
-    dob: parseDate(colVal(cv, 'dob20')),
-    daysPerWeek: colVal(cv, 'text'),
-    minHoursPerWeek: colVal(cv, 'dup__of_days_per_week__1'),
-    probationaryDate: parseDate(colVal(cv, 'date40')),
-    email: colVal(cv, 'email20'),
-    mobile: colVal(cv, 'mobile20'),
-    seekUrl: colVal(cv, 'text_mm2xjkez'),
-    action: colVal(cv, 'color_mkv9yjjd'),
+    id: row.id,
+    mondayId: row.monday_id,
+    name: row.name,
+    qualification: row.qualification || '',
+    ratio50: row.ratio_50,
+    position: row.position,
+    positionCategory: row.position_category,
+    campus: row.centre_id,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    dob: row.dob,
+    daysPerWeek: row.days_per_week,
+    minHoursPerWeek: row.min_hours_pw,
+    probationaryDate: row.probationary_date,
+    email: row.email,
+    mobile: row.mobile,
+    seekUrl: row.seek_url,
+    action: row.action,
     compliance: {
-      wwccNumber: colVal(cv, 'wwccnum20'),
-      wwccExpiry: parseDate(colVal(cv, 'wwccexp20')),
-      firstAidCode: colVal(cv, 'first_aid_code'),
-      firstAidExpiry: parseDate(colVal(cv, 'date92')),
-      cprCode: colVal(cv, 'cpr_code'),
-      cprExpiry: parseDate(colVal(cv, 'dup__of_cpr_code')),
-      anaphylaxisCode: colVal(cv, 'anaphylaxis_code'),
-      anaphylaxisExpiry: parseDate(colVal(cv, 'date35')),
-      childProtectionRenewal: parseDate(colVal(cv, 'date__1')),
+      wwccNumber: row.wwcc_number,
+      wwccExpiry: row.wwcc_expiry,
+      firstAidCode: row.first_aid_code,
+      firstAidExpiry: row.first_aid_expiry,
+      cprCode: row.cpr_code,
+      cprExpiry: row.cpr_expiry,
+      anaphylaxisCode: row.anaphylaxis_code,
+      anaphylaxisExpiry: row.anaphylaxis_expiry,
+      childProtectionRenewal: row.child_protection_renewal,
     },
-    docs,
-    certDocs,
+    docs:     rowDocs.filter(d => d.doc_type === 'main').map(d => ({ id: d.id, label: d.label, url: d.storage_path ? `/api/staffing-file?path=${encodeURIComponent(d.storage_path)}` : d.monday_url || '' })),
+    certDocs: rowDocs.filter(d => d.doc_type === 'subitem').map(d => ({ id: d.id, label: d.label, url: d.storage_path ? `/api/staffing-file?path=${encodeURIComponent(d.storage_path)}` : d.monday_url || '' })),
   };
 }
 
-async function mondayQuery(query) {
-  const res = await fetch(MONDAY_API_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: MONDAY_API_KEY,
-      'Content-Type': 'application/json',
-      'API-Version': '2024-01',
-    },
-    body: JSON.stringify({ query }),
-  });
-  if (!res.ok) throw new Error(`Monday API ${res.status}`);
-  const json = await res.json();
-  if (json.errors) throw new Error(json.errors[0]?.message || 'Monday API error');
-  return json.data;
-}
+// Editable columns exposed to frontend
+const EDITABLE_COLUMNS = [
+  { id: 'position',          label: 'Position',                 type: 'text' },
+  { id: 'position_category', label: 'Position Category',        type: 'text' },
+  { id: 'start_date',        label: 'Start Date',               type: 'date' },
+  { id: 'end_date',          label: 'End Date',                 type: 'text' },
+  { id: 'email',             label: 'Email',                    type: 'text' },
+  { id: 'mobile',            label: 'Mobile',                   type: 'text' },
+  { id: 'days_per_week',     label: 'Days Per Week',            type: 'text' },
+  { id: 'min_hours_pw',      label: 'Min Hours Per Week',       type: 'text' },
+  { id: 'wwcc_number',       label: 'WWCC Number',              type: 'text' },
+  { id: 'wwcc_expiry',       label: 'WWCC Expiry',              type: 'date' },
+  { id: 'first_aid_code',    label: 'First Aid Code',           type: 'text' },
+  { id: 'first_aid_expiry',  label: 'First Aid Expiry',         type: 'date' },
+  { id: 'cpr_code',          label: 'CPR Code',                 type: 'text' },
+  { id: 'cpr_expiry',        label: 'CPR Expiry',               type: 'date' },
+  { id: 'anaphylaxis_code',  label: 'Anaphylaxis Code',         type: 'text' },
+  { id: 'anaphylaxis_expiry',label: 'Anaphylaxis Expiry',       type: 'date' },
+  { id: 'child_protection_renewal', label: 'Child Protection Renewal', type: 'date' },
+];
 
-async function fetchBoard(boardId) {
-  // Fetch groups with their items (paginated within each group up to 500)
-  const data = await mondayQuery(`{
-    boards(ids: [${boardId}]) {
-      groups {
-        id title color
-        items_page(limit: 500) {
-          items {
-            id name
-            column_values { id text }
-            subitems { id name column_values { id text } }
-          }
-        }
-      }
-    }
-  }`);
-
-  const board = data?.boards?.[0];
-  if (!board) throw new Error('Board not found');
-
-  const groups = board.groups.map(g => ({
-    id: g.id,
-    title: g.title,
-    color: g.color,
-    isActive: !isInactiveGroup(g.title),
-    staff: g.items_page.items.map(mapItem),
-  }));
-
-  return groups;
-}
+// ── Main handler ───────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { centreId } = req.query;
-  if (!centreId) return res.status(400).json({ error: 'centreId required' });
-
-  const boardId = BOARD_IDS[centreId];
-  if (!boardId) return res.status(404).json({ error: `No staffing board for: ${centreId}` });
-
-  if (!MONDAY_API_KEY) return res.status(500).json({ error: 'MONDAY_API_KEY not configured' });
-
-  // ── POST: update item or move between groups ────────────────────────────
-  if (req.method === 'POST') {
-    const { action, itemId, groupId, columnId, value } = req.body || {};
+  // ── GET ──────────────────────────────────────────────────────────────────
+  if (req.method === 'GET') {
+    const { centreId } = req.query;
+    if (!centreId) return res.status(400).json({ error: 'centreId required' });
 
     try {
-      if (action === 'move_item') {
-        await mondayQuery(`mutation {
-          move_item_to_group(item_id: ${itemId}, group_id: "${groupId}") { id }
-        }`);
-        cache.delete(centreId);
-        return res.json({ ok: true });
+      // Fetch rooms
+      const rooms = await sbGet(`/staff_rooms?centre_id=eq.${centreId}&order=sort_order.asc,title.asc`);
+
+      // Fetch staff
+      const staff = await sbGet(`/staff_members?centre_id=eq.${centreId}&order=sort_order.asc,name.asc`);
+
+      // Fetch docs for all staff
+      const staffIds = staff.map(s => s.id);
+      let docs = [];
+      if (staffIds.length > 0) {
+        docs = await sbGet(`/staff_documents?staff_id=in.(${staffIds.join(',')})&order=uploaded_at.asc`);
       }
 
-      if (action === 'update_item') {
-        // value must be JSON string per Monday's column_values format
-        const valueJson = JSON.stringify(value);
-        await mondayQuery(`mutation {
-          change_column_value(
-            board_id: ${boardId},
-            item_id: ${itemId},
-            column_id: "${columnId}",
-            value: ${JSON.stringify(valueJson)}
-          ) { id }
-        }`);
-        cache.delete(centreId);
-        return res.json({ ok: true });
+      // If no rooms in DB yet, derive from staff (handles migrated data)
+      let roomList = rooms;
+      if (roomList.length === 0 && staff.length > 0) {
+        const seen = new Map();
+        for (const s of staff) {
+          if (!seen.has(s.group_id)) {
+            seen.set(s.group_id, {
+              id: s.group_id,
+              centre_id: s.centre_id,
+              group_id: s.group_id,
+              title: s.group_title,
+              color: s.group_color || '#808080',
+              is_active: s.is_active_group,
+              sort_order: 0,
+            });
+          }
+        }
+        roomList = Array.from(seen.values());
       }
 
-      return res.status(400).json({ error: `Unknown action: ${action}` });
+      // Build groups
+      const groups = roomList.map(room => ({
+        id: room.group_id,
+        title: room.title,
+        color: room.color || '#808080',
+        isActive: room.is_active,
+        staff: staff.filter(s => s.group_id === room.group_id).map(s => mapRow(s, docs)),
+      }));
+
+      return res.json({
+        centreId,
+        groups,
+        editableColumns: EDITABLE_COLUMNS,
+        fetchedAt: new Date().toISOString(),
+      });
     } catch (err) {
-      console.error('staffing-structure POST error:', err);
+      console.error('staffing GET error:', err);
       return res.status(500).json({ error: err.message });
     }
   }
 
-  // ── GET: fetch board ────────────────────────────────────────────────────
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  // ── POST ─────────────────────────────────────────────────────────────────
+  if (req.method === 'POST') {
+    const body = req.body || {};
+    const { action } = body;
 
-  const cached = cache.get(centreId);
-  if (cached && Date.now() < cached.expiresAt) {
-    res.setHeader('X-Cache', 'HIT');
-    return res.json(cached.data);
+    try {
+      switch (action) {
+
+        // Create staff member
+        case 'create_staff': {
+          const { centreId, groupId, name, qualification, ...rest } = body;
+          // Get room info
+          const rooms = await sbGet(`/staff_rooms?centre_id=eq.${centreId}&group_id=eq.${groupId}`);
+          const room = rooms[0];
+          const row = {
+            centre_id: centreId,
+            group_id: groupId,
+            group_title: room?.title || groupId,
+            group_color: room?.color || '#808080',
+            is_active_group: room?.is_active ?? true,
+            name,
+            qualification: qualification || null,
+            position: rest.position || null,
+            position_category: rest.positionCategory || null,
+            start_date: rest.startDate || null,
+            email: rest.email || null,
+            mobile: rest.mobile || null,
+          };
+          const [created] = await sbPost('/staff_members', row);
+          return res.json({ ok: true, staff: created });
+        }
+
+        // Update staff fields
+        case 'update_staff': {
+          const { staffId, fields } = body;
+          if (!staffId || !fields) return res.status(400).json({ error: 'staffId and fields required' });
+          const [updated] = await sbPatch(`/staff_members?id=eq.${staffId}`, fields);
+          return res.json({ ok: true, staff: updated });
+        }
+
+        // Delete staff member
+        case 'delete_staff': {
+          const { staffId } = body;
+          if (!staffId) return res.status(400).json({ error: 'staffId required' });
+          await sbDelete(`/staff_members?id=eq.${staffId}`);
+          return res.json({ ok: true });
+        }
+
+        // Move staff to different room
+        case 'move_staff': {
+          const { staffId, groupId, centreId } = body;
+          if (!staffId || !groupId) return res.status(400).json({ error: 'staffId and groupId required' });
+          const rooms = await sbGet(`/staff_rooms?centre_id=eq.${centreId}&group_id=eq.${groupId}`);
+          const room = rooms[0];
+          await sbPatch(`/staff_members?id=eq.${staffId}`, {
+            group_id: groupId,
+            group_title: room?.title || groupId,
+            group_color: room?.color || '#808080',
+            is_active_group: room?.is_active ?? true,
+          });
+          return res.json({ ok: true });
+        }
+
+        // Create room
+        case 'create_room': {
+          const { centreId, title, color } = body;
+          if (!centreId || !title) return res.status(400).json({ error: 'centreId and title required' });
+          const groupId = `room_${Date.now()}`;
+          const [room] = await sbPost('/staff_rooms', {
+            centre_id: centreId, group_id: groupId, title, color: color || '#808080', is_active: true,
+          });
+          return res.json({ ok: true, room });
+        }
+
+        // Update room (rename, recolor, toggle active)
+        case 'update_room': {
+          const { centreId, groupId, title, color, isActive } = body;
+          if (!centreId || !groupId) return res.status(400).json({ error: 'centreId and groupId required' });
+          const patch = {};
+          if (title    !== undefined) patch.title     = title;
+          if (color    !== undefined) patch.color     = color;
+          if (isActive !== undefined) patch.is_active = isActive;
+          // Update room record
+          await sbPatch(`/staff_rooms?centre_id=eq.${centreId}&group_id=eq.${groupId}`, patch);
+          // Sync group_title/color on all staff in this room
+          if (title !== undefined) await sbPatch(`/staff_members?centre_id=eq.${centreId}&group_id=eq.${groupId}`, { group_title: title });
+          if (color !== undefined) await sbPatch(`/staff_members?centre_id=eq.${centreId}&group_id=eq.${groupId}`, { group_color: color });
+          if (isActive !== undefined) await sbPatch(`/staff_members?centre_id=eq.${centreId}&group_id=eq.${groupId}`, { is_active_group: isActive });
+          return res.json({ ok: true });
+        }
+
+        // Delete room (only if empty)
+        case 'delete_room': {
+          const { centreId, groupId } = body;
+          if (!centreId || !groupId) return res.status(400).json({ error: 'centreId and groupId required' });
+          const staff = await sbGet(`/staff_members?centre_id=eq.${centreId}&group_id=eq.${groupId}&select=id&limit=1`);
+          if (staff.length > 0) return res.status(400).json({ error: 'Cannot delete room with staff. Move or delete staff first.' });
+          await sbDelete(`/staff_rooms?centre_id=eq.${centreId}&group_id=eq.${groupId}`);
+          return res.json({ ok: true });
+        }
+
+        default:
+          return res.status(400).json({ error: `Unknown action: ${action}` });
+      }
+    } catch (err) {
+      console.error('staffing POST error:', err);
+      return res.status(500).json({ error: err.message });
+    }
   }
 
-  try {
-    const groups = await fetchBoard(boardId);
-    const data = {
-      centreId,
-      boardId,
-      groups,
-      editableColumns: EDITABLE_COLUMNS,
-      fetchedAt: new Date().toISOString(),
-    };
-    cache.set(centreId, { data, expiresAt: Date.now() + CACHE_TTL_MS });
-    res.setHeader('X-Cache', 'MISS');
-    return res.json(data);
-  } catch (err) {
-    console.error('staffing-structure GET error:', err);
-    return res.status(500).json({ error: err.message });
-  }
+  return res.status(405).json({ error: 'Method not allowed' });
 }
