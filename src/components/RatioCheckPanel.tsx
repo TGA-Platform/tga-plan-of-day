@@ -868,6 +868,33 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return naturalRoomId;
   }
 
+  /**
+   * Per-slot set of employee IDs already claimed by a room via getEffectiveRoom.
+   * Prevents a staff member appearing in both their natural/moved room AND a float-cover room.
+   */
+  const rosterClaimedByRoomAtSlot = useMemo(() => {
+    const result: Record<string, Set<number>> = {};
+    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    for (const slot of allSlots) {
+      const available = staffAtSlotMap[slot] ?? [];
+      const offFloor  = offFloorBySlot[slot] ?? new Set<number>();
+      const claimed   = new Set<number>();
+      for (const s of available) {
+        if (offFloor.has(s.employeeId)) continue;
+        const mv = sessionData.staffMoves[`${s.employeeId}:${slot}`];
+        if (mv === '__programming__' || mv === '__lunch__' || mv === '__cleaning__' || mv === '__additional__') continue;
+        const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
+        const effective = getEffectiveRoom(s.employeeId, slot, naturalRoom?.id ?? '');
+        if (effective && effective !== '__removed__' && rooms.some(r => r.id === effective)) {
+          claimed.add(s.employeeId);
+        }
+      }
+      result[slot] = claimed;
+    }
+    return result;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staffAtSlotMap, offFloorBySlot, sessionData.staffMoves, rooms]);
+
   /** Staff for a specific room at a slot - dedup ensures no-one appears in multiple places */
   function getStaffForRoom(slot: string, room: Room): RosteredStaff[] {
     const available = staffAtSlotMap[slot] ?? [];
@@ -887,11 +914,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       const effective = getEffectiveRoom(s.employeeId, slot, naturalRoom?.id ?? '');
       return effective === room.id;
     });
+    // Global claimed set: anyone already placed in a room via roster/move cannot
+    // also appear as a float cover in a different room at the same slot.
+    const globalClaimed = rosterClaimedByRoomAtSlot[slot] ?? new Set<number>();
     const floatStaffInRoom = available.filter(s =>
       floatCovers.includes(s.employeeId) &&
       !offFloor.has(s.employeeId) &&
       !inActivity.has(s.employeeId) &&
-      !rosterInRoom.some(r => r.employeeId === s.employeeId)
+      !globalClaimed.has(s.employeeId)
     );
     return [...rosterInRoom, ...floatStaffInRoom];
   }
