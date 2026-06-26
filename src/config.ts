@@ -27,6 +27,27 @@ function room(id: string, name: string, ageGroup: string, ratio: number, deputyU
   return { id, name, ageGroup, ratio, deputyUnitId, ownaRoomName: ownaPrefix + ' Room' };
 }
 
+// Monday.com staffing structure board ID per centre
+export const STAFFING_BOARD_IDS: Record<string, number> = {
+  'oatley':           1419063930,
+  'wollongong':       983834623,
+  'mount-annan':      980348329,
+  'spring-farm':      6513027863,
+  'denham-court':     6247438158,
+  'ed-park-1':        983840576,
+  'ed-park-2':        3448154419,
+  'wilton':           8719103624,
+  'dapto-1':          1841109563,
+  'dapto-2':          3349576958,
+  'north-wollongong': 6248473627,
+  'shell-cove':       8347556299,
+  'bexley':           983830380,
+  'belfield':         9133300009,
+  'bankstown':        9133302478,
+  'glendale':         18406250043,
+  'edgeworth':        9060612097,
+};
+
 export const CENTRES: Centre[] = [
   {
     id: 'oatley',
