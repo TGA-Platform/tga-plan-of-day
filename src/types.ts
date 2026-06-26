@@ -115,6 +115,7 @@ export interface StaffCompliance {
 }
 
 export interface StaffMember {
+  id?: string;          // Supabase UUID (present after migration)
   mondayId: string;
   name: string;
   qualification: StaffQualification;
@@ -132,6 +133,7 @@ export interface StaffMember {
   mobile?: string;
   seekUrl?: string;
   action?: string;            // e.g. 'Send Onboarding Kit'
+  employmentStatus?: string;   // 'Active' | 'Inactive' | 'PPL' | 'Resigned' etc
   compliance: StaffCompliance;
   // File attachments on the main item
   docs: StaffDocument[];      // named docs (qual cert, transcripts, etc.)

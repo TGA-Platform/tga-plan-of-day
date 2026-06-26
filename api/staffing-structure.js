@@ -73,6 +73,7 @@ function mapRow(row, docs) {
     mobile: row.mobile,
     seekUrl: row.seek_url,
     action: row.action,
+    employmentStatus: row.employment_status || 'Active',
     compliance: {
       wwccNumber: row.wwcc_number,
       wwccExpiry: row.wwcc_expiry,
@@ -91,8 +92,12 @@ function mapRow(row, docs) {
 
 // Editable columns exposed to frontend
 const EDITABLE_COLUMNS = [
-  { id: 'position',          label: 'Position',                 type: 'text' },
-  { id: 'position_category', label: 'Position Category',        type: 'text' },
+  { id: 'employment_status', label: 'Employment Status',        type: 'status', options: ['Active','Inactive','PPL','Long Service','Probation','Casual','Resigned'] },
+  { id: 'position',          label: 'Position',                 type: 'status', options: ['Centre Director','Assistant Director','Educational Leader','Room Leader','Early Childhood Teacher','Early Childhood Teacher Room Leader','Educator','Mama Bear Educator','Mama Bear','Childcare Trainee','Trainee','Casual Educator','Internal Casual Educator','ISS Support Worker','Diploma Educator','Centre Support','Chef'] },
+  { id: 'position_category', label: 'Position Category',        type: 'status', options: ['Full Time','Part Time','Casual','As Required'] },
+  { id: 'qualification',     label: 'Qualification',            type: 'status', options: ['ECT','WT ECT','Diploma','Certificate 3','Trainee','ISS','Chef','PPL','WT Diploma','No Qualification','Resigned'] },
+  { id: 'ratio_50',          label: '50% Ratio',                type: 'status', options: ['Diploma & Above','Cert 3 & Below'] },
+  { id: 'action',            label: 'Action',                   type: 'status', options: ['','Send Onboarding Kit','Renew Contract','Follow Up'] },
   { id: 'start_date',        label: 'Start Date',               type: 'date' },
   { id: 'end_date',          label: 'End Date',                 type: 'text' },
   { id: 'email',             label: 'Email',                    type: 'text' },
