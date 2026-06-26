@@ -554,7 +554,7 @@ function DashboardStats({ groups }: { groups: StaffGroup[] }) {
 }
 
 // ── All Centres view ───────────────────────────────────────────────────────
-function AllCentresView({ centreIds }: { centreIds: string[] }) {
+function AllCentresView({ centreIds, onSelectCentre }: { centreIds: string[], onSelectCentre: (id: string) => void }) {
   const [summaries, setSummaries] = useState<CentreSummary[]>(() =>
     centreIds.map(id => ({ centreId:id, centreName: CENTRES.find(c=>c.id===id)?.name??id, status:'loading' as const, totalActive:0,rooms:0,floats:0,casuals:0,expiredCount:0,warningCount:0,byQual:{} }))
   );
@@ -603,7 +603,7 @@ function AllCentresView({ centreIds }: { centreIds: string[] }) {
         <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: B.muted }}>By Centre</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {summaries.map(s=>(
-            <div key={s.centreId} className="rounded-2xl border overflow-hidden" style={{ borderColor:B.border, backgroundColor:B.white }}>
+            <div key={s.centreId} className="rounded-2xl border overflow-hidden cursor-pointer hover:shadow-md transition-shadow" style={{ borderColor:B.border, backgroundColor:B.white }} onClick={()=>onSelectCentre(s.centreId)}>
               <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor:B.border, backgroundColor:B.bg }}>
                 <h3 className="font-bold text-sm" style={{ color:B.text }}>{s.centreName}</h3>
                 <div className="flex gap-1">
@@ -730,7 +730,7 @@ export default function StaffingStructurePage() {
       </div>
 
       <div className="max-w-6xl mx-auto px-4 py-5 space-y-5">
-        {centreId===ALL && <AllCentresView centreIds={accessible.map(c=>c.id)} />}
+        {centreId===ALL && <AllCentresView centreIds={accessible.map(c=>c.id)} onSelectCentre={id=>{setCentreId(id);setRoomFilter('all');setQualFilter('all');setStatusFilter('all');setSearch('');}} />}
 
         {centreId!==ALL && (
           <>
