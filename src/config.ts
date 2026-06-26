@@ -31,6 +31,7 @@ export const CENTRES: Centre[] = [
   {
     id: 'oatley',
     name: 'Oatley',
+    approvedPlaces: 132,
     deputyCompanyId: undefined,
     floatUnitIds:    [224],
     issUnitIds:      [230],      // Float Staff + ISS
@@ -49,6 +50,7 @@ export const CENTRES: Centre[] = [
   {
     id: 'wollongong',
     name: 'Wollongong',
+    approvedPlaces: 61,
     rooms: [
       { id: 'w_0_2', name: '0-2 Explorers', ageGroup: '0-2 yrs', ratio: 4,  deputyUnitId: 118, ownaRoomName: '0-2 Room' },
       { id: 'w_2_3', name: '2-3 Voyagers',  ageGroup: '2-3 yrs', ratio: 5,  deputyUnitId: 119, ownaRoomName: '2-3 Room' },
@@ -61,6 +63,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'mount-annan', name: 'Mount Annan',
+    approvedPlaces: 120,
     rooms: [
       room('ma_0_1', '0-1 Explorers',   '0-1 yrs', 4,  74,  '0-1'),
       room('ma_1_2', '1-2 Adventurers', '1-2 yrs', 4,  76,  '1-2'),
@@ -89,6 +92,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'denham-court', name: 'Denham Court',
+    approvedPlaces: 109,
     rooms: [
       { id: 'dc_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 247, ownaRoomName: '0-1' },
       { id: 'dc_1_2',  name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 248, ownaRoomName: '1-2' },
@@ -104,6 +108,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'ed-park-1', name: 'Edmondson Park 1', ownaName: 'Ed Park 1',
+    approvedPlaces: 89,
     rooms: [
       room('ep1_0_1', '0-1 Explorers',   '0-1 yrs', 4,  91,  '0-1'),
       room('ep1_1_2', '1-2 Adventurers', '1-2 yrs', 4,  92,  '1-2'),
@@ -118,6 +123,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'ed-park-2', name: 'Edmondson Park 2', ownaName: 'Ed Park 2',
+    approvedPlaces: 89,
     rooms: [
       room('ep2_0_1', '0-1 Explorers',   '0-1 yrs', 4,  174, '0-1'),
       room('ep2_1_2', '1-2 Adventurers', '1-2 yrs', 4,  175, '1-2'),
@@ -132,6 +138,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'wilton', name: 'Wilton',
+    approvedPlaces: 116,
     rooms: [
       { id: 'wil_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 366, ownaRoomName: 'Explorers 0-1' },
       { id: 'wil_1_2a', name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 367, ownaRoomName: 'Adventurers 1-2' },
@@ -148,6 +155,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'dapto-1', name: 'Dapto 1',
+    approvedPlaces: 88,
     rooms: [
       room('d1_0_1', '0-1 Explorers',   '0-1 yrs', 4,  137, '0-1'),
       room('d1_1_2', '1-2 Adventurers', '1-2 yrs', 4,  138, '1-2'),
@@ -162,6 +170,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'dapto-2', name: 'Dapto 2',
+    approvedPlaces: 90,
     rooms: [
       { id: 'd2_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 155, ownaRoomName: 'Explorers' },
       { id: 'd2_1_2',  name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 186, ownaRoomName: 'Adventurers' },
@@ -177,6 +186,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'north-wollongong', name: 'North Wollongong',
+    approvedPlaces: 100,
     rooms: [
       { id: 'nw_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 283, ownaRoomName: 'Explorers' },
       { id: 'nw_1_2',  name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 284, ownaRoomName: 'Adventurers' },
@@ -191,6 +201,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'shell-cove', name: 'Shell Cove',
+    approvedPlaces: 142,
     rooms: [
       { id: 'sc_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 349, ownaRoomName: 'Explorers 0-1' },
       { id: 'sc_1_2',  name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 350, ownaRoomName: 'Adventurers 1-2' },
@@ -208,6 +219,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'bexley', name: 'Bexley',
+    approvedPlaces: 92,
     rooms: [
       room('bx_0_2',  '0-2 Explorers',   '0-2 yrs', 4,  113, '0-2'),
       room('bx_2_3',  '2-3 Adventurers', '2-3 yrs', 5,  125, '2-3'),
@@ -222,6 +234,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'belfield', name: 'Belfield',
+    approvedPlaces: 120,
     rooms: [
       { id: 'bf_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 383, ownaRoomName: '0-1 Explorers' },
       { id: 'bf_1_2',  name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 384, ownaRoomName: '1-2 Adventurers' },
@@ -238,6 +251,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'bankstown', name: 'Bankstown',
+    approvedPlaces: 58,
     rooms: [
       { id: 'bk_0_2', name: '0-2 Explorers', ageGroup: '0-2 yrs', ratio: 4,  deputyUnitId: 417, ownaRoomName: '0-2 Explorers' },
       { id: 'bk_2_3', name: '2-3 Voyagers',  ageGroup: '2-3 yrs', ratio: 5,  deputyUnitId: 420, ownaRoomName: '2-3 Voyagers' },
@@ -250,6 +264,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'glendale', name: 'Glendale',
+    approvedPlaces: 90,
     rooms: [
       { id: 'gl_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 466, ownaRoomName: 'Explorers' },
       { id: 'gl_1_2',  name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 467, ownaRoomName: 'Adventurers' },
@@ -265,6 +280,7 @@ export const CENTRES: Centre[] = [
   },
   {
     id: 'edgeworth', name: 'Edgeworth',
+    approvedPlaces: 144,
     rooms: [
       { id: 'ew_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 400, ownaRoomName: '0-1 Explorers' },
       { id: 'ew_1_2',  name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 401, ownaRoomName: '1-2 Adventurers' },
