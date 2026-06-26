@@ -150,10 +150,34 @@ async function uploadToStorage(storagePath, buffer, mimeType) {
   return storagePath;
 }
 
-// Download a Monday file server-side
-async function downloadFile(url) {
-  const r = await fetch(url, { headers: { Authorization: MONDAY_TOKEN } });
-  if (!r.ok) throw new Error(`Download failed ${r.status}: ${url}`);
+// Extract Monday asset ID from a protected_static URL
+// e.g. https://tga450770.monday.com/protected_static/7852578/resources/3035796718/IMG_6915.jpeg -> 3035796718
+function extractAssetId(url) {
+  const m = url.match(/\/resources\/(\d+)\//); 
+  return m ? m[1] : null;
+}
+
+// Get public_url for a list of asset IDs via Monday API
+const assetUrlCache = new Map();
+async function getAssetPublicUrl(assetId) {
+  if (assetUrlCache.has(assetId)) return assetUrlCache.get(assetId);
+  const data = await mondayQuery(`{ assets(ids: [${assetId}]) { id public_url } }`);
+  const url = data?.assets?.[0]?.public_url || null;
+  assetUrlCache.set(assetId, url);
+  return url;
+}
+
+// Download a Monday file server-side using public_url (signed S3)
+async function downloadFile(mondayUrl) {
+  // Extract asset ID and get fresh signed S3 URL
+  const assetId = extractAssetId(mondayUrl);
+  let downloadUrl = mondayUrl;
+  if (assetId) {
+    const publicUrl = await getAssetPublicUrl(assetId);
+    if (publicUrl) downloadUrl = publicUrl;
+  }
+  const r = await fetch(downloadUrl);
+  if (!r.ok) throw new Error(`Download failed ${r.status}: ${downloadUrl}`);
   const buffer = await r.arrayBuffer();
   const mime = r.headers.get('content-type') || 'application/octet-stream';
   return { buffer: Buffer.from(buffer), mime };
@@ -165,7 +189,7 @@ function safeName(str) {
 
 // ── Migration ──────────────────────────────────────────────────────────────
 
-async function migrateCentre(centreId) {
+async function migrateCentre(centreId, skipFiles = false) {
   const boardId = BOARD_IDS[centreId];
   if (!boardId) { console.log(`  No board for ${centreId}, skipping`); return; }
 
@@ -229,6 +253,8 @@ async function migrateCentre(centreId) {
       const staffId = upserted?.id;
       if (!staffId) { errors++; continue; }
       staffMigrated++;
+
+      if (skipFiles) continue;
 
       // Collect all document URLs for this staff member
       const docEntries = [];
@@ -307,8 +333,12 @@ async function migrateCentre(centreId) {
 }
 
 async function main() {
-  const targetCentre = process.argv[2];
+  const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
+  const flags = process.argv.slice(2).filter(a => a.startsWith('--'));
+  const skipFiles = flags.includes('--staff-only');
+  const targetCentre = args[0];
   const centres = targetCentre ? [targetCentre] : Object.keys(BOARD_IDS);
+  if (skipFiles) console.log('Mode: staff + rooms only (skipping file downloads)');
 
   console.log(`Migrating ${centres.length} centre(s): ${centres.join(', ')}`);
   console.log('Storage bucket: staff-documents');
@@ -316,7 +346,7 @@ async function main() {
 
   for (const centreId of centres) {
     try {
-      await migrateCentre(centreId);
+      await migrateCentre(centreId, skipFiles);
     } catch (e) {
       console.error(`[${centreId}] FAILED:`, e.message);
     }
