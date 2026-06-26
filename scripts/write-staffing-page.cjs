@@ -1,18 +1,13 @@
-/**
- * Writes StaffingStructurePage.tsx with no emoji characters.
- * Run: node scripts/write-staffing-page.cjs
- */
 const fs = require('fs');
 const path = require('path');
-
 const out = path.join(__dirname, '..', 'src', 'pages', 'StaffingStructurePage.tsx');
 
 const content = `import { useState, useEffect, useMemo } from 'react';
 import type { StaffMember } from '../types';
-import { CENTRES } from '../config';
+import { CENTRES, STAFFING_BOARD_IDS } from '../config';
 import { getUser } from '../auth';
 
-// ── Types ─────────────────────────────────────────────────────────────────
+// ── Types ──────────────────────────────────────────────────────────────────
 
 interface StaffGroup {
   id: string;
@@ -30,7 +25,21 @@ interface BoardData {
   fetchedAt: string;
 }
 
-// ── Brand colours (matches plan of day) ───────────────────────────────────
+interface CentreSummary {
+  centreId: string;
+  centreName: string;
+  status: 'loading' | 'ok' | 'error';
+  error?: string;
+  totalActive: number;
+  rooms: number;
+  floats: number;
+  casuals: number;
+  expiredCount: number;
+  warningCount: number;
+  byQual: Record<string, number>;
+}
+
+// ── Brand ──────────────────────────────────────────────────────────────────
 
 const BRAND = {
   green:      '#2d5c18',
@@ -42,8 +51,6 @@ const BRAND = {
   textMuted:  '#596570',
   divider:    '#D0E8B8',
 };
-
-// ── Qualification badge meta ───────────────────────────────────────────────
 
 const QUAL_META: Record<string, { bg: string; text: string; short: string }> = {
   'ECT':           { bg: '#dbeafe', text: '#1e40af', short: 'ECT' },
@@ -59,7 +66,7 @@ const QUAL_META: Record<string, { bg: string; text: string; short: string }> = {
 
 const QUAL_OPTIONS = ['ECT', 'WT ECT', 'Diploma', 'Certificate 3', 'Trainee', 'ISS', 'Chef', 'PPL'];
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 function daysUntil(iso?: string): number | null {
   if (!iso) return null;
@@ -91,6 +98,33 @@ function fmtDate(iso?: string) {
   return isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function summariseBoard(centreId: string, data: BoardData): CentreSummary {
+  const centre = CENTRES.find(c => c.id === centreId);
+  const activeGroups = data.groups.filter(g => g.isActive);
+  const allActive    = activeGroups.flatMap(g => g.staff);
+  const byQual: Record<string, number> = {};
+  let expiredCount = 0, warningCount = 0;
+  for (const s of allActive) {
+    const q = s.qualification || 'Unknown';
+    byQual[q] = (byQual[q] || 0) + 1;
+    const level = worstCompliance(s);
+    if (level === 'expired') expiredCount++;
+    else if (level === 'warning') warningCount++;
+  }
+  return {
+    centreId,
+    centreName: centre?.name ?? centreId,
+    status: 'ok',
+    totalActive: allActive.length,
+    rooms:   activeGroups.filter(g => !/(float|casual|hero|mat leave)/i.test(g.title)).length,
+    floats:  activeGroups.filter(g => /float/i.test(g.title)).flatMap(g => g.staff).length,
+    casuals: activeGroups.filter(g => /casual/i.test(g.title)).flatMap(g => g.staff).length,
+    expiredCount,
+    warningCount,
+    byQual,
+  };
+}
+
 function QualBadge({ qual }: { qual: string }) {
   const m = QUAL_META[qual] ?? { bg: '#f1f5f9', text: '#64748b', short: (qual || '?').slice(0, 6) };
   return (
@@ -105,16 +139,16 @@ function ComplianceDot({ staff }: { staff: StaffMember }) {
   if (level === 'missing') return null;
   return (
     <span title={\`Compliance \${level}\`}
-      style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', backgroundColor: colours[level] || '#e5e7eb', flexShrink: 0 }} />
+      style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%',
+               backgroundColor: colours[level] || '#e5e7eb', flexShrink: 0 }} />
   );
 }
 
-// ── Document Preview Modal ─────────────────────────────────────────────────
+// ── Document Preview ───────────────────────────────────────────────────────
 
 function DocPreviewModal({ doc, onClose }: { doc: { label: string; url: string }; onClose: () => void }) {
-  const isPdf  = doc.url.toLowerCase().includes('.pdf');
+  const isPdf   = doc.url.toLowerCase().includes('.pdf');
   const isImage = /\\.(jpg|jpeg|png|gif|webp)$/i.test(doc.url);
-
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/60" />
@@ -125,31 +159,21 @@ function DocPreviewModal({ doc, onClose }: { doc: { label: string; url: string }
           <span className="font-semibold text-sm" style={{ color: BRAND.text }}>{doc.label}</span>
           <div className="flex items-center gap-2">
             <a href={doc.url} target="_blank" rel="noopener noreferrer"
-              className="text-xs px-3 py-1.5 rounded-lg font-medium border hover:opacity-80 transition-opacity"
-              style={{ borderColor: BRAND.border, color: BRAND.textMuted }}>
-              Open in new tab
-            </a>
+              className="text-xs px-3 py-1.5 rounded-lg font-medium border hover:opacity-80"
+              style={{ borderColor: BRAND.border, color: BRAND.textMuted }}>Open in new tab</a>
             <button onClick={onClose}
-              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 font-bold">
-              x
-            </button>
+              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 font-bold">x</button>
           </div>
         </div>
         <div className="flex-1 overflow-hidden rounded-b-2xl">
-          {isPdf && <iframe src={doc.url} className="w-full h-full border-0" title={doc.label} />}
-          {isImage && (
-            <div className="w-full h-full flex items-center justify-center bg-gray-50 p-4">
-              <img src={doc.url} alt={doc.label} className="max-w-full max-h-full object-contain rounded-lg" />
-            </div>
-          )}
+          {isPdf   && <iframe src={\`https://docs.google.com/viewer?url=\${encodeURIComponent(doc.url)}&embedded=true\`} className="w-full h-full border-0" title={doc.label} />}
+          {isImage && <div className="w-full h-full flex items-center justify-center bg-gray-50 p-4"><img src={doc.url} alt={doc.label} className="max-w-full max-h-full object-contain rounded-lg" /></div>}
           {!isPdf && !isImage && (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-400">
               <p className="text-sm">Preview not available for this file type.</p>
               <a href={doc.url} target="_blank" rel="noopener noreferrer"
                 className="text-sm px-4 py-2 rounded-xl font-medium text-white"
-                style={{ backgroundColor: BRAND.green }}>
-                Download / Open
-              </a>
+                style={{ backgroundColor: BRAND.green }}>Download / Open</a>
             </div>
           )}
         </div>
@@ -160,9 +184,7 @@ function DocPreviewModal({ doc, onClose }: { doc: { label: string; url: string }
 
 // ── Edit Staff Modal ───────────────────────────────────────────────────────
 
-function EditStaffModal({
-  staff, editableColumns, groups, onSave, onClose,
-}: {
+function EditStaffModal({ staff, editableColumns, groups, onSave, onClose }: {
   staff: StaffMember;
   editableColumns: { id: string; label: string; type: string }[];
   groups: StaffGroup[];
@@ -188,33 +210,27 @@ function EditStaffModal({
     date35:                     staff.compliance.anaphylaxisExpiry || '',
     'date__1':                  staff.compliance.childProtectionRenewal || '',
   };
-
-  const [form, setForm] = useState<Record<string, string>>(initial);
-  const [targetGroupId, setTargetGroupId] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
+  const [form, setForm]           = useState<Record<string, string>>(initial);
+  const [targetGroupId, setTGId]  = useState('');
+  const [saving, setSaving]       = useState(false);
+  const [error, setError]         = useState<string | null>(null);
   const activeGroups = groups.filter(g => g.isActive);
+  const empCols     = ['dropdown','text_mm2xj3x9','date','text9','text','dup__of_days_per_week__1'];
+  const contactCols = ['email20','mobile20'];
 
   async function handleSave() {
     setSaving(true); setError(null);
     try {
       const updates: { columnId?: string; value?: string; groupId?: string }[] = [];
       for (const col of editableColumns) {
-        const nv = (form[col.id] || '').trim();
-        const ov = (initial[col.id] || '').trim();
+        const nv = (form[col.id] || '').trim(), ov = (initial[col.id] || '').trim();
         if (nv !== ov) updates.push({ columnId: col.id, value: nv });
       }
       if (targetGroupId) updates.push({ groupId: targetGroupId });
-      await onSave(updates);
-      onClose();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Save failed');
-    } finally { setSaving(false); }
+      await onSave(updates); onClose();
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Save failed'); }
+    finally { setSaving(false); }
   }
-
-  const empCols = ['dropdown','text_mm2xj3x9','date','text9','text','dup__of_days_per_week__1'];
-  const contactCols = ['email20','mobile20'];
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
@@ -227,37 +243,30 @@ function EditStaffModal({
             <h2 className="font-bold text-base" style={{ color: BRAND.text }}>Edit Staff Profile</h2>
             <p className="text-xs mt-0.5" style={{ color: BRAND.textMuted }}>{staff.name}</p>
           </div>
-          <button onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 font-bold">x</button>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 font-bold">x</button>
         </div>
-
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
           <section>
             <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Move to Room / Group</h3>
-            <select value={targetGroupId} onChange={e => setTargetGroupId(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
-              style={{ borderColor: BRAND.border }}>
+            <select value={targetGroupId} onChange={e => setTGId(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: BRAND.border }}>
               <option value="">— Keep in current room —</option>
               {activeGroups.map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
             </select>
           </section>
-
           <section>
             <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Employment</h3>
             <div className="grid grid-cols-2 gap-3">
               {editableColumns.filter(c => empCols.includes(c.id)).map(col => (
                 <div key={col.id} className={col.id === 'text' || col.id === 'dup__of_days_per_week__1' ? 'col-span-2' : ''}>
                   <label className="block text-xs font-medium mb-1" style={{ color: BRAND.textMuted }}>{col.label}</label>
-                  <input type={col.type === 'date' ? 'date' : 'text'}
-                    value={form[col.id] || ''}
+                  <input type={col.type === 'date' ? 'date' : 'text'} value={form[col.id] || ''}
                     onChange={e => setForm(f => ({ ...f, [col.id]: e.target.value }))}
-                    className="w-full border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2"
-                    style={{ borderColor: BRAND.border }} />
+                    className="w-full border rounded-lg px-3 py-1.5 text-sm focus:outline-none" style={{ borderColor: BRAND.border }} />
                 </div>
               ))}
             </div>
           </section>
-
           <section>
             <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Contact</h3>
             <div className="grid grid-cols-2 gap-3">
@@ -266,35 +275,28 @@ function EditStaffModal({
                   <label className="block text-xs font-medium mb-1" style={{ color: BRAND.textMuted }}>{col.label}</label>
                   <input type="text" value={form[col.id] || ''}
                     onChange={e => setForm(f => ({ ...f, [col.id]: e.target.value }))}
-                    className="w-full border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2"
-                    style={{ borderColor: BRAND.border }} />
+                    className="w-full border rounded-lg px-3 py-1.5 text-sm focus:outline-none" style={{ borderColor: BRAND.border }} />
                 </div>
               ))}
             </div>
           </section>
-
           <section>
             <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Compliance</h3>
             <div className="grid grid-cols-2 gap-3">
               {editableColumns.filter(c => !empCols.includes(c.id) && !contactCols.includes(c.id)).map(col => (
                 <div key={col.id}>
                   <label className="block text-xs font-medium mb-1" style={{ color: BRAND.textMuted }}>{col.label}</label>
-                  <input type={col.type === 'date' ? 'date' : 'text'}
-                    value={form[col.id] || ''}
+                  <input type={col.type === 'date' ? 'date' : 'text'} value={form[col.id] || ''}
                     onChange={e => setForm(f => ({ ...f, [col.id]: e.target.value }))}
-                    className="w-full border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2"
-                    style={{ borderColor: BRAND.border }} />
+                    className="w-full border rounded-lg px-3 py-1.5 text-sm focus:outline-none" style={{ borderColor: BRAND.border }} />
                 </div>
               ))}
             </div>
           </section>
-
           {error && <div className="px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>{error}</div>}
         </div>
-
         <div className="px-5 py-4 border-t flex justify-end gap-2" style={{ borderColor: BRAND.border }}>
-          <button onClick={onClose}
-            className="px-4 py-2 rounded-xl text-sm font-medium border hover:opacity-80"
+          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm font-medium border hover:opacity-80"
             style={{ borderColor: BRAND.border, color: BRAND.textMuted }}>Cancel</button>
           <button onClick={handleSave} disabled={saving}
             className="px-4 py-2 rounded-xl text-sm font-semibold text-white hover:opacity-90"
@@ -309,22 +311,16 @@ function EditStaffModal({
 
 // ── Staff Card ─────────────────────────────────────────────────────────────
 
-function StaffCard({ staff, onEdit, onClose }: {
-  staff: StaffMember;
-  onEdit: () => void;
-  onClose: () => void;
-}) {
+function StaffCard({ staff, onEdit, onClose }: { staff: StaffMember; onEdit: () => void; onClose: () => void }) {
   const [previewDoc, setPreviewDoc] = useState<{ label: string; url: string } | null>(null);
   const comp = staff.compliance;
-
   const compItems = [
-    { label: 'WWCC',             expiry: comp.wwccExpiry,           code: comp.wwccNumber },
-    { label: 'First Aid',        expiry: comp.firstAidExpiry,       code: comp.firstAidCode },
-    { label: 'CPR',              expiry: comp.cprExpiry,            code: comp.cprCode },
-    { label: 'Anaphylaxis',      expiry: comp.anaphylaxisExpiry,    code: comp.anaphylaxisCode },
+    { label: 'WWCC',             expiry: comp.wwccExpiry,            code: comp.wwccNumber },
+    { label: 'First Aid',        expiry: comp.firstAidExpiry,        code: comp.firstAidCode },
+    { label: 'CPR',              expiry: comp.cprExpiry,             code: comp.cprCode },
+    { label: 'Anaphylaxis',      expiry: comp.anaphylaxisExpiry,     code: comp.anaphylaxisCode },
     { label: 'Child Protection', expiry: comp.childProtectionRenewal },
   ];
-
   return (
     <>
       <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
@@ -332,69 +328,44 @@ function StaffCard({ staff, onEdit, onClose }: {
         <div className="relative w-full max-w-md bg-white h-full overflow-y-auto shadow-2xl flex flex-col"
           style={{ borderLeft: \`1px solid \${BRAND.border}\` }}
           onClick={e => e.stopPropagation()}>
-
           <div className="sticky top-0 z-10 bg-white px-5 pt-5 pb-4 border-b" style={{ borderColor: BRAND.border }}>
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
                 <h2 className="text-lg font-bold leading-tight" style={{ color: BRAND.text }}>{staff.name}</h2>
                 <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                   <QualBadge qual={staff.qualification} />
-                  {staff.position && (
-                    <span className="text-xs px-2 py-0.5 rounded-full"
-                      style={{ backgroundColor: BRAND.bg, color: BRAND.textMuted, border: \`1px solid \${BRAND.border}\` }}>
-                      {staff.position}
-                    </span>
-                  )}
-                  {staff.positionCategory && (
-                    <span className="text-xs px-2 py-0.5 rounded-full"
-                      style={{ backgroundColor: '#f8fafc', color: '#64748b', border: '1px solid #e2e8f0' }}>
-                      {staff.positionCategory}
-                    </span>
-                  )}
+                  {staff.position && <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: BRAND.bg, color: BRAND.textMuted, border: \`1px solid \${BRAND.border}\` }}>{staff.position}</span>}
+                  {staff.positionCategory && <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#f8fafc', color: '#64748b', border: '1px solid #e2e8f0' }}>{staff.positionCategory}</span>}
                 </div>
               </div>
               <div className="flex items-center gap-1 flex-shrink-0">
-                <button onClick={onEdit}
-                  className="px-3 py-1.5 rounded-xl text-xs font-semibold text-white hover:opacity-90"
-                  style={{ backgroundColor: BRAND.green }}>Edit</button>
-                <button onClick={onClose}
-                  className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 font-bold">x</button>
+                <button onClick={onEdit} className="px-3 py-1.5 rounded-xl text-xs font-semibold text-white hover:opacity-90" style={{ backgroundColor: BRAND.green }}>Edit</button>
+                <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 font-bold">x</button>
               </div>
             </div>
           </div>
-
           <div className="flex-1 px-5 py-4 space-y-5">
             <section>
               <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Employment</h3>
               <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                {staff.startDate && <><span style={{ color: BRAND.textMuted }}>Start</span><span className="font-medium">{fmtDate(staff.startDate)}</span></>}
+                {staff.startDate    && <><span style={{ color: BRAND.textMuted }}>Start</span><span className="font-medium">{fmtDate(staff.startDate)}</span></>}
                 {staff.endDate && staff.endDate !== 'Not Applicable' && <><span style={{ color: BRAND.textMuted }}>End</span><span className="font-medium">{staff.endDate}</span></>}
-                {staff.daysPerWeek && <><span style={{ color: BRAND.textMuted }}>Days/hours</span><span className="font-medium text-xs">{staff.daysPerWeek}</span></>}
+                {staff.daysPerWeek  && <><span style={{ color: BRAND.textMuted }}>Days/hours</span><span className="font-medium text-xs">{staff.daysPerWeek}</span></>}
                 {staff.minHoursPerWeek && <><span style={{ color: BRAND.textMuted }}>Min hrs/wk</span><span className="font-medium">{staff.minHoursPerWeek}</span></>}
                 {staff.probationaryDate && <><span style={{ color: BRAND.textMuted }}>Probation end</span><span className="font-medium">{fmtDate(staff.probationaryDate)}</span></>}
-                {staff.dob && <><span style={{ color: BRAND.textMuted }}>DOB</span><span className="font-medium">{fmtDate(staff.dob)}</span></>}
-                {staff.ratio50 && <><span style={{ color: BRAND.textMuted }}>50% ratio</span><span className="font-medium">{staff.ratio50}</span></>}
+                {staff.dob          && <><span style={{ color: BRAND.textMuted }}>DOB</span><span className="font-medium">{fmtDate(staff.dob)}</span></>}
+                {staff.ratio50      && <><span style={{ color: BRAND.textMuted }}>50% ratio</span><span className="font-medium">{staff.ratio50}</span></>}
               </div>
             </section>
-
             {(staff.email || staff.mobile) && (
               <section>
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Contact</h3>
                 <div className="space-y-1.5">
-                  {staff.email && (
-                    <a href={\`mailto:\${staff.email}\`} className="flex items-center gap-2 text-sm hover:underline" style={{ color: BRAND.greenLight }}>
-                      {staff.email}
-                    </a>
-                  )}
-                  {staff.mobile && (
-                    <a href={\`tel:0\${staff.mobile}\`} className="flex items-center gap-2 text-sm hover:underline" style={{ color: BRAND.greenLight }}>
-                      0{staff.mobile}
-                    </a>
-                  )}
+                  {staff.email  && <a href={\`mailto:\${staff.email}\`}  className="flex items-center gap-2 text-sm hover:underline" style={{ color: BRAND.greenLight }}>{staff.email}</a>}
+                  {staff.mobile && <a href={\`tel:0\${staff.mobile}\`} className="flex items-center gap-2 text-sm hover:underline" style={{ color: BRAND.greenLight }}>0{staff.mobile}</a>}
                 </div>
               </section>
             )}
-
             <section>
               <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Compliance</h3>
               <div className="rounded-xl overflow-hidden border" style={{ borderColor: BRAND.border }}>
@@ -413,27 +384,21 @@ function StaffCard({ staff, onEdit, onClose }: {
                         <div className="font-semibold text-xs" style={{ color: BRAND.text }}>{item.label}</div>
                         {item.code && <div className="text-xs" style={{ color: BRAND.textMuted }}>{item.code}</div>}
                         {dateStr
-                          ? <div className="text-xs font-medium" style={{ color: level === 'expired' ? '#991b1b' : level === 'warning' ? '#92400e' : BRAND.green }}>
-                              {dateStr}{dayStr ? \` · \${dayStr}\` : ''}
-                            </div>
-                          : <div className="text-xs text-gray-400">Not recorded</div>
-                        }
+                          ? <div className="text-xs font-medium" style={{ color: level === 'expired' ? '#991b1b' : level === 'warning' ? '#92400e' : BRAND.green }}>{dateStr}{dayStr ? \` · \${dayStr}\` : ''}</div>
+                          : <div className="text-xs text-gray-400">Not recorded</div>}
                       </div>
                     </div>
                   );
                 })}
               </div>
             </section>
-
             {(staff.docs.length > 0 || staff.certDocs.length > 0) && (
               <section>
-                <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>
-                  Documents ({staff.docs.length + staff.certDocs.length})
-                </h3>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Documents ({staff.docs.length + staff.certDocs.length})</h3>
                 <div className="grid grid-cols-1 gap-1.5">
                   {[...staff.docs, ...staff.certDocs].map((doc, i) => (
                     <button key={i} onClick={() => setPreviewDoc(doc)}
-                      className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium border text-left hover:opacity-80 transition-opacity"
+                      className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium border text-left hover:opacity-80"
                       style={{ borderColor: BRAND.border, backgroundColor: BRAND.bg }}>
                       <span className="flex-1 truncate" style={{ color: BRAND.text }}>{doc.label}</span>
                       <span className="text-xs" style={{ color: BRAND.textMuted }}>Preview</span>
@@ -442,13 +407,7 @@ function StaffCard({ staff, onEdit, onClose }: {
                 </div>
               </section>
             )}
-
-            {staff.action && (
-              <div className="px-3 py-2 rounded-xl text-sm font-semibold"
-                style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
-                Action: {staff.action}
-              </div>
-            )}
+            {staff.action && <div className="px-3 py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>Action: {staff.action}</div>}
           </div>
         </div>
       </div>
@@ -457,24 +416,21 @@ function StaffCard({ staff, onEdit, onClose }: {
   );
 }
 
-// ── Dashboard Stats ────────────────────────────────────────────────────────
+// ── Per-centre Dashboard Stats ─────────────────────────────────────────────
 
 function DashboardStats({ groups }: { groups: StaffGroup[] }) {
   const activeGroups = groups.filter(g => g.isActive);
-  const allActive = activeGroups.flatMap(g => g.staff);
-  const total = allActive.length;
-
+  const allActive    = activeGroups.flatMap(g => g.staff);
+  const total        = allActive.length;
   const byQual: Record<string, number> = {};
   for (const s of allActive) { const q = s.qualification || 'Unknown'; byQual[q] = (byQual[q] || 0) + 1; }
-
   let expiredCount = 0, warningCount = 0;
   for (const s of allActive) {
     const level = worstCompliance(s);
     if (level === 'expired') expiredCount++;
     else if (level === 'warning') warningCount++;
   }
-
-  const roomGroups  = activeGroups.filter(g => !/(float|internal casual|casual|hero|mat leave)/i.test(g.title));
+  const roomGroups  = activeGroups.filter(g => !/(float|casual|hero|mat leave)/i.test(g.title));
   const floatCount  = activeGroups.filter(g => /float/i.test(g.title)).flatMap(g => g.staff).length;
   const casualCount = activeGroups.filter(g => /casual/i.test(g.title)).flatMap(g => g.staff).length;
   const newCount    = groups.filter(g => /^new$/i.test(g.title)).flatMap(g => g.staff).length;
@@ -491,15 +447,15 @@ function DashboardStats({ groups }: { groups: StaffGroup[] }) {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard value={total}         label="Active Staff"         bg={BRAND.white} textCol={BRAND.text} accent={BRAND.green} />
-        <StatCard value={roomGroups.length} label="Rooms"            bg={BRAND.bg}    textCol={BRAND.text} />
-        <StatCard value={expiredCount}  label="Expired Compliance"   bg={expiredCount > 0 ? '#fee2e2' : BRAND.bg} textCol={expiredCount > 0 ? '#991b1b' : BRAND.textMuted} />
-        <StatCard value={warningCount}  label="Expiring within 90d"  bg={warningCount > 0 ? '#fef9c3' : BRAND.bg} textCol={warningCount > 0 ? '#92400e' : BRAND.textMuted} />
+        <StatCard value={total}         label="Active Staff"        bg={BRAND.white} textCol={BRAND.text} accent={BRAND.green} />
+        <StatCard value={roomGroups.length} label="Rooms"           bg={BRAND.bg}    textCol={BRAND.text} />
+        <StatCard value={expiredCount}  label="Expired Compliance"  bg={expiredCount > 0 ? '#fee2e2' : BRAND.bg} textCol={expiredCount > 0 ? '#991b1b' : BRAND.textMuted} />
+        <StatCard value={warningCount}  label="Expiring within 90d" bg={warningCount > 0 ? '#fef9c3' : BRAND.bg} textCol={warningCount > 0 ? '#92400e' : BRAND.textMuted} />
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard value={floatCount}    label="Float Staff"          bg={BRAND.bg}    textCol={BRAND.text} />
-        <StatCard value={casualCount}   label="Internal Casuals"     bg={BRAND.bg}    textCol={BRAND.text} />
-        <StatCard value={newCount}      label="New / Onboarding"     bg={BRAND.bg}    textCol={BRAND.text} />
+        <StatCard value={floatCount}    label="Float Staff"         bg={BRAND.bg} textCol={BRAND.text} />
+        <StatCard value={casualCount}   label="Internal Casuals"    bg={BRAND.bg} textCol={BRAND.text} />
+        <StatCard value={newCount}      label="New / Onboarding"    bg={BRAND.bg} textCol={BRAND.text} />
         <div className="rounded-2xl p-4" style={{ backgroundColor: BRAND.white, border: \`1px solid \${BRAND.border}\` }}>
           <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: BRAND.textMuted }}>Qualifications</div>
           <div className="space-y-1">
@@ -510,6 +466,154 @@ function DashboardStats({ groups }: { groups: StaffGroup[] }) {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── All-Centres Summary View ───────────────────────────────────────────────
+
+function AllCentresView({ centreIds }: { centreIds: string[] }) {
+  const [summaries, setSummaries] = useState<CentreSummary[]>(() =>
+    centreIds.map(id => ({
+      centreId: id,
+      centreName: CENTRES.find(c => c.id === id)?.name ?? id,
+      status: 'loading' as const,
+      totalActive: 0, rooms: 0, floats: 0, casuals: 0,
+      expiredCount: 0, warningCount: 0, byQual: {},
+    }))
+  );
+
+  useEffect(() => {
+    // Fetch all centres in parallel
+    centreIds.forEach(id => {
+      fetch(\`/api/staffing-structure?centreId=\${id}\`)
+        .then(r => r.ok ? r.json() : r.json().then((j: { error?: string }) => { throw new Error(j.error || 'Error'); }))
+        .then((data: BoardData) => {
+          const summary = summariseBoard(id, data);
+          setSummaries(prev => prev.map(s => s.centreId === id ? summary : s));
+        })
+        .catch((e: Error) => {
+          setSummaries(prev => prev.map(s => s.centreId === id
+            ? { ...s, status: 'error' as const, error: e.message } : s));
+        });
+    });
+  }, [centreIds.join(',')]);
+
+  // Aggregate totals (loaded centres only)
+  const loaded = summaries.filter(s => s.status === 'ok');
+  const totals = {
+    centres:     loaded.length,
+    staff:       loaded.reduce((n, s) => n + s.totalActive, 0),
+    expired:     loaded.reduce((n, s) => n + s.expiredCount, 0),
+    warning:     loaded.reduce((n, s) => n + s.warningCount, 0),
+    floats:      loaded.reduce((n, s) => n + s.floats, 0),
+    casuals:     loaded.reduce((n, s) => n + s.casuals, 0),
+  };
+  const loadingCount = summaries.filter(s => s.status === 'loading').length;
+
+  function TotalsCard({ value, label, bg, accent }: { value: string | number; label: string; bg: string; accent?: string }) {
+    return (
+      <div className="rounded-2xl p-4 flex flex-col gap-1" style={{ backgroundColor: bg, border: \`1px solid \${BRAND.border}\` }}>
+        <div className="text-3xl font-bold leading-tight" style={{ color: accent || BRAND.text }}>{value}</div>
+        <div className="text-xs font-medium" style={{ color: BRAND.textMuted }}>{label}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Loading indicator */}
+      {loadingCount > 0 && (
+        <div className="text-xs px-3 py-2 rounded-xl" style={{ backgroundColor: BRAND.bg, color: BRAND.textMuted }}>
+          Loading {loadingCount} of {centreIds.length} centres...
+        </div>
+      )}
+
+      {/* Network-wide totals */}
+      <div>
+        <h2 className="text-sm font-bold uppercase tracking-wider mb-3" style={{ color: BRAND.textMuted }}>Network Total</h2>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <TotalsCard value={totals.centres} label="Centres Loaded"       bg={BRAND.white} accent={BRAND.green} />
+          <TotalsCard value={totals.staff}   label="Total Active Staff"   bg={BRAND.white} accent={BRAND.green} />
+          <TotalsCard value={totals.expired} label="Expired Compliance"   bg={totals.expired > 0 ? '#fee2e2' : BRAND.bg} accent={totals.expired > 0 ? '#991b1b' : undefined} />
+          <TotalsCard value={totals.warning} label="Expiring within 90d"  bg={totals.warning > 0 ? '#fef9c3' : BRAND.bg} accent={totals.warning > 0 ? '#92400e' : undefined} />
+          <TotalsCard value={totals.floats}  label="Float Staff"          bg={BRAND.bg} />
+          <TotalsCard value={totals.casuals} label="Internal Casuals"     bg={BRAND.bg} />
+        </div>
+      </div>
+
+      {/* Per-centre cards */}
+      <div>
+        <h2 className="text-sm font-bold uppercase tracking-wider mb-3" style={{ color: BRAND.textMuted }}>By Centre</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {summaries.map(s => (
+            <div key={s.centreId} className="rounded-2xl border overflow-hidden"
+              style={{ borderColor: BRAND.border, backgroundColor: BRAND.white }}>
+              {/* Centre header */}
+              <div className="px-4 py-3 border-b flex items-center justify-between"
+                style={{ borderColor: BRAND.border, backgroundColor: BRAND.bg }}>
+                <h3 className="font-bold text-sm" style={{ color: BRAND.text }}>{s.centreName}</h3>
+                {s.status === 'loading' && <span className="text-xs animate-pulse" style={{ color: BRAND.textMuted }}>Loading...</span>}
+                {s.status === 'error'   && <span className="text-xs" style={{ color: '#ef4444' }}>Error</span>}
+                {s.status === 'ok'      && (
+                  <div className="flex items-center gap-1.5">
+                    {s.expiredCount > 0 && (
+                      <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                        style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>
+                        {s.expiredCount} expired
+                      </span>
+                    )}
+                    {s.warningCount > 0 && (
+                      <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                        style={{ backgroundColor: '#fef9c3', color: '#92400e' }}>
+                        {s.warningCount} expiring
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Stats */}
+              {s.status === 'ok' && (
+                <div className="px-4 py-3 space-y-3">
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div>
+                      <div className="text-xl font-bold" style={{ color: BRAND.green }}>{s.totalActive}</div>
+                      <div className="text-xs" style={{ color: BRAND.textMuted }}>Active Staff</div>
+                    </div>
+                    <div>
+                      <div className="text-xl font-bold" style={{ color: BRAND.text }}>{s.rooms}</div>
+                      <div className="text-xs" style={{ color: BRAND.textMuted }}>Rooms</div>
+                    </div>
+                    <div>
+                      <div className="text-xl font-bold" style={{ color: BRAND.text }}>{s.floats + s.casuals}</div>
+                      <div className="text-xs" style={{ color: BRAND.textMuted }}>Float/Casual</div>
+                    </div>
+                  </div>
+                  {/* Qual breakdown */}
+                  <div className="flex flex-wrap gap-1 pt-1 border-t" style={{ borderColor: BRAND.border }}>
+                    {QUAL_OPTIONS.filter(q => s.byQual[q]).map(q => (
+                      <div key={q} className="flex items-center gap-1">
+                        <QualBadge qual={q} />
+                        <span className="text-xs font-bold" style={{ color: BRAND.text }}>{s.byQual[q]}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {s.status === 'error' && (
+                <div className="px-4 py-3 text-xs" style={{ color: '#ef4444' }}>{s.error}</div>
+              )}
+              {s.status === 'loading' && (
+                <div className="px-4 py-3 space-y-2">
+                  {[1,2,3].map(i => <div key={i} className="h-4 rounded animate-pulse" style={{ backgroundColor: BRAND.border }} />)}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -543,9 +647,7 @@ function RoomGroup({ group, onSelect }: { group: StaffGroup; onSelect: (s: Staff
                 {s.position && <div className="text-xs truncate" style={{ color: BRAND.textMuted }}>{s.position}</div>}
               </div>
               <ComplianceDot staff={s} />
-              {s.action && (
-                <span className="flex-shrink-0 w-2 h-2 rounded-full" style={{ backgroundColor: '#f59e0b' }} title={s.action} />
-              )}
+              {s.action && <span className="flex-shrink-0 w-2 h-2 rounded-full" style={{ backgroundColor: '#f59e0b' }} title={s.action} />}
               <span className="flex-shrink-0 text-gray-300 group-hover:text-gray-500">›</span>
             </button>
           ))
@@ -557,34 +659,44 @@ function RoomGroup({ group, onSelect }: { group: StaffGroup; onSelect: (s: Staff
 
 // ── Main Page ──────────────────────────────────────────────────────────────
 
+const ALL_CENTRES_VALUE = '__all__';
+
 export default function StaffingStructurePage() {
   const user = getUser();
 
   const accessibleCentres = useMemo(() => {
     if (!user) return [];
-    if (user.role === 'admin' || user.role === 'ceo') return CENTRES;
-    if (user.role === 'area_manager') return CENTRES;
-    return CENTRES.filter(c => c.id === user.centreId);
+    if (user.role === 'admin' || user.role === 'ceo') return CENTRES.filter(c => STAFFING_BOARD_IDS[c.id]);
+    if (user.role === 'area_manager') return CENTRES.filter(c => STAFFING_BOARD_IDS[c.id]);
+    return CENTRES.filter(c => c.id === user.centreId && STAFFING_BOARD_IDS[c.id]);
   }, [user]);
+
+  // Show "All Centres" option for users with access to 2+ centres
+  const showAllOption = accessibleCentres.length > 1;
 
   const [centreId, setCentreId] = useState('');
   useEffect(() => {
-    if (accessibleCentres.length > 0 && !centreId) setCentreId(accessibleCentres[0].id);
+    if (accessibleCentres.length > 0 && !centreId) {
+      // Admins/area managers default to All Centres view
+      setCentreId(showAllOption ? ALL_CENTRES_VALUE : accessibleCentres[0].id);
+    }
   }, [accessibleCentres]);
 
-  const [data, setData] = useState<BoardData | null>(null);
+  const isAllCentres = centreId === ALL_CENTRES_VALUE;
+
+  const [data, setData]     = useState<BoardData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError]   = useState<string | null>(null);
 
   const [qualFilter, setQualFilter] = useState('all');
   const [roomFilter, setRoomFilter] = useState('all');
-  const [search, setSearch] = useState('');
+  const [search, setSearch]         = useState('');
   const [showResigned, setShowResigned] = useState(false);
-
   const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
-  const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
+  const [editingStaff, setEditingStaff]   = useState<StaffMember | null>(null);
 
   function loadData(id: string) {
+    if (id === ALL_CENTRES_VALUE) { setData(null); return; }
     setLoading(true); setError(null); setData(null);
     fetch(\`/api/staffing-structure?centreId=\${id}\`)
       .then(r => r.ok ? r.json() : r.json().then((j: { error?: string }) => { throw new Error(j.error || r.statusText); }))
@@ -644,11 +756,14 @@ export default function StaffingStructurePage() {
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: BRAND.bg }}>
+      {/* Header */}
       <div className="sticky top-0 z-40 px-4 py-3 border-b"
         style={{ backgroundColor: BRAND.white, borderColor: BRAND.border, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
         <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold" style={{ color: BRAND.text }}>Staffing Structure</h1>
+            <h1 className="text-xl font-bold" style={{ color: BRAND.text }}>
+              Staffing Structure{!isAllCentres && centreName ? \` — \${centreName}\` : isAllCentres ? ' — All Centres' : ''}
+            </h1>
             {data?.fetchedAt && (
               <p className="text-xs mt-0.5" style={{ color: BRAND.textMuted }}>
                 Live from Monday.com · {new Date(data.fetchedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
@@ -656,10 +771,11 @@ export default function StaffingStructurePage() {
               </p>
             )}
           </div>
-          {accessibleCentres.length > 1 && (
-            <select value={centreId} onChange={e => setCentreId(e.target.value)}
+          {(showAllOption || accessibleCentres.length > 1) && (
+            <select value={centreId} onChange={e => { setCentreId(e.target.value); setRoomFilter('all'); setQualFilter('all'); setSearch(''); }}
               className="border rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2"
               style={{ borderColor: BRAND.border, backgroundColor: BRAND.white, color: BRAND.text }}>
+              {showAllOption && <option value={ALL_CENTRES_VALUE}>All Centres</option>}
               {accessibleCentres.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           )}
@@ -667,121 +783,112 @@ export default function StaffingStructurePage() {
       </div>
 
       <div className="max-w-6xl mx-auto px-4 py-5 space-y-5">
-        {loading && (
-          <div className="rounded-2xl p-10 text-center" style={{ backgroundColor: BRAND.white }}>
-            <div className="text-sm animate-pulse" style={{ color: BRAND.textMuted }}>Loading {centreName} staffing structure...</div>
-          </div>
+
+        {/* All Centres view */}
+        {isAllCentres && (
+          <AllCentresView centreIds={accessibleCentres.map(c => c.id)} />
         )}
 
-        {error && (
-          <div className="rounded-2xl p-5 text-sm border"
-            style={{ backgroundColor: '#fff5f5', borderColor: '#fca5a5', color: '#991b1b' }}>
-            <strong>Failed to load:</strong> {error}
-          </div>
-        )}
-
-        {data && !loading && (
+        {/* Single centre view */}
+        {!isAllCentres && (
           <>
-            <DashboardStats groups={data.groups} />
-
-            <div className="flex flex-wrap gap-2 items-center">
-              <input type="text" placeholder="Search staff..." value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="border rounded-xl px-3 py-2 text-sm flex-1 min-w-40 focus:outline-none focus:ring-2"
-                style={{ borderColor: BRAND.border }} />
-              <select value={roomFilter} onChange={e => setRoomFilter(e.target.value)}
-                className="border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2"
-                style={{ borderColor: BRAND.border }}>
-                <option value="all">All Rooms</option>
-                {activeGroups.map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
-              </select>
-              <select value={qualFilter} onChange={e => setQualFilter(e.target.value)}
-                className="border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2"
-                style={{ borderColor: BRAND.border }}>
-                <option value="all">All Qualifications</option>
-                {QUAL_OPTIONS.map(q => <option key={q} value={q}>{q}</option>)}
-              </select>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredGroups.map(g => (
-                <RoomGroup key={g.id} group={g} onSelect={setSelectedStaff} />
-              ))}
-            </div>
-
-            {pendingGroups.length > 0 && (
-              <div className="rounded-2xl overflow-hidden border" style={{ borderColor: BRAND.border, backgroundColor: BRAND.white }}>
-                <div className="px-4 py-3 border-b" style={{ borderColor: BRAND.border }}>
-                  <h3 className="font-bold text-sm" style={{ color: BRAND.textMuted }}>Pending / Onboarding</h3>
-                </div>
-                <div className="divide-y divide-gray-100">
-                  {pendingGroups.flatMap(g => g.staff.map(s => (
-                    <button key={s.mondayId} onClick={() => setSelectedStaff(s)}
-                      className="w-full flex items-center gap-3 px-4 py-3 hover:opacity-80 transition-opacity text-left group">
-                      <QualBadge qual={s.qualification} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-semibold truncate" style={{ color: BRAND.text }}>{s.name}</div>
-                        <div className="text-xs" style={{ color: BRAND.textMuted }}>{s.position || '—'}</div>
-                      </div>
-                      <span className="text-xs px-2 py-0.5 rounded-full"
-                        style={{ backgroundColor: BRAND.bg, color: BRAND.textMuted, border: \`1px solid \${BRAND.border}\` }}>
-                        {g.title}
-                      </span>
-                      <span style={{ color: BRAND.divider }}>›</span>
-                    </button>
-                  )))}
-                </div>
+            {loading && (
+              <div className="rounded-2xl p-10 text-center" style={{ backgroundColor: BRAND.white }}>
+                <div className="text-sm animate-pulse" style={{ color: BRAND.textMuted }}>Loading {centreName} staffing structure...</div>
               </div>
             )}
-
-            {resignedGroup && resignedGroup.staff.length > 0 && (
-              <div className="rounded-2xl overflow-hidden border" style={{ borderColor: BRAND.border, backgroundColor: BRAND.white }}>
-                <button onClick={() => setShowResigned(o => !o)}
-                  className="w-full flex items-center justify-between px-4 py-3 hover:opacity-80 transition-opacity">
-                  <h3 className="text-sm font-bold" style={{ color: BRAND.textMuted }}>
-                    Exited Staff <span className="font-normal">({resignedGroup.staff.length})</span>
-                  </h3>
-                  <span style={{ color: BRAND.textMuted }}>{showResigned ? 'Hide' : 'Show'}</span>
-                </button>
-                {showResigned && (
-                  <div className="border-t divide-y divide-gray-100" style={{ borderColor: BRAND.border }}>
-                    {resignedGroup.staff.map(s => (
-                      <button key={s.mondayId} onClick={() => setSelectedStaff(s)}
-                        className="w-full flex items-center gap-3 px-4 py-3 hover:opacity-80 transition-opacity text-left opacity-60">
-                        <QualBadge qual={s.qualification} />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate" style={{ color: BRAND.textMuted }}>{s.name}</div>
-                          <div className="text-xs" style={{ color: BRAND.textMuted }}>
-                            {[s.position, s.endDate && s.endDate !== 'Not Applicable' ? \`ended \${s.endDate}\` : undefined].filter(Boolean).join(' · ')}
+            {error && (
+              <div className="rounded-2xl p-5 text-sm border"
+                style={{ backgroundColor: '#fff5f5', borderColor: '#fca5a5', color: '#991b1b' }}>
+                <strong>Failed to load:</strong> {error}
+              </div>
+            )}
+            {data && !loading && (
+              <>
+                <DashboardStats groups={data.groups} />
+                <div className="flex flex-wrap gap-2 items-center">
+                  <input type="text" placeholder="Search staff..." value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    className="border rounded-xl px-3 py-2 text-sm flex-1 min-w-40 focus:outline-none focus:ring-2"
+                    style={{ borderColor: BRAND.border }} />
+                  <select value={roomFilter} onChange={e => setRoomFilter(e.target.value)}
+                    className="border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2" style={{ borderColor: BRAND.border }}>
+                    <option value="all">All Rooms</option>
+                    {activeGroups.map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
+                  </select>
+                  <select value={qualFilter} onChange={e => setQualFilter(e.target.value)}
+                    className="border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2" style={{ borderColor: BRAND.border }}>
+                    <option value="all">All Qualifications</option>
+                    {QUAL_OPTIONS.map(q => <option key={q} value={q}>{q}</option>)}
+                  </select>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredGroups.map(g => <RoomGroup key={g.id} group={g} onSelect={setSelectedStaff} />)}
+                </div>
+                {pendingGroups.length > 0 && (
+                  <div className="rounded-2xl overflow-hidden border" style={{ borderColor: BRAND.border, backgroundColor: BRAND.white }}>
+                    <div className="px-4 py-3 border-b" style={{ borderColor: BRAND.border }}>
+                      <h3 className="font-bold text-sm" style={{ color: BRAND.textMuted }}>Pending / Onboarding</h3>
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                      {pendingGroups.flatMap(g => g.staff.map(s => (
+                        <button key={s.mondayId} onClick={() => setSelectedStaff(s)}
+                          className="w-full flex items-center gap-3 px-4 py-3 hover:opacity-80 text-left group">
+                          <QualBadge qual={s.qualification} />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-semibold truncate" style={{ color: BRAND.text }}>{s.name}</div>
+                            <div className="text-xs" style={{ color: BRAND.textMuted }}>{s.position || '—'}</div>
                           </div>
-                        </div>
-                        <span style={{ color: BRAND.divider }}>›</span>
-                      </button>
-                    ))}
+                          <span className="text-xs px-2 py-0.5 rounded-full"
+                            style={{ backgroundColor: BRAND.bg, color: BRAND.textMuted, border: \`1px solid \${BRAND.border}\` }}>{g.title}</span>
+                          <span style={{ color: BRAND.divider }}>›</span>
+                        </button>
+                      )))}
+                    </div>
                   </div>
                 )}
-              </div>
+                {resignedGroup && resignedGroup.staff.length > 0 && (
+                  <div className="rounded-2xl overflow-hidden border" style={{ borderColor: BRAND.border, backgroundColor: BRAND.white }}>
+                    <button onClick={() => setShowResigned(o => !o)}
+                      className="w-full flex items-center justify-between px-4 py-3 hover:opacity-80">
+                      <h3 className="text-sm font-bold" style={{ color: BRAND.textMuted }}>
+                        Exited Staff <span className="font-normal">({resignedGroup.staff.length})</span>
+                      </h3>
+                      <span style={{ color: BRAND.textMuted }}>{showResigned ? 'Hide' : 'Show'}</span>
+                    </button>
+                    {showResigned && (
+                      <div className="border-t divide-y divide-gray-100" style={{ borderColor: BRAND.border }}>
+                        {resignedGroup.staff.map(s => (
+                          <button key={s.mondayId} onClick={() => setSelectedStaff(s)}
+                            className="w-full flex items-center gap-3 px-4 py-3 hover:opacity-80 text-left opacity-60">
+                            <QualBadge qual={s.qualification} />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium truncate" style={{ color: BRAND.textMuted }}>{s.name}</div>
+                              <div className="text-xs" style={{ color: BRAND.textMuted }}>
+                                {[s.position, s.endDate && s.endDate !== 'Not Applicable' ? \`ended \${s.endDate}\` : undefined].filter(Boolean).join(' · ')}
+                              </div>
+                            </div>
+                            <span style={{ color: BRAND.divider }}>›</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
       </div>
 
       {selectedStaff && (
-        <StaffCard
-          staff={selectedStaff}
+        <StaffCard staff={selectedStaff}
           onEdit={() => { setEditingStaff(selectedStaff); setSelectedStaff(null); }}
-          onClose={() => setSelectedStaff(null)}
-        />
+          onClose={() => setSelectedStaff(null)} />
       )}
-
       {editingStaff && data && (
-        <EditStaffModal
-          staff={editingStaff}
-          editableColumns={data.editableColumns}
-          groups={data.groups}
-          onSave={handleSave}
-          onClose={() => setEditingStaff(null)}
-        />
+        <EditStaffModal staff={editingStaff} editableColumns={data.editableColumns}
+          groups={data.groups} onSave={handleSave} onClose={() => setEditingStaff(null)} />
       )}
     </div>
   );
