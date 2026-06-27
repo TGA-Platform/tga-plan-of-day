@@ -17,6 +17,81 @@ interface StaffDoc {
   url: string;
 }
 
+// ── Document Preview Modal ─────────────────────────────────────────────────
+
+function DocPreviewModal({ url, label, onClose }: { url: string; label: string; onClose: () => void }) {
+  const isPdf = url && /\.pdf$/i.test(url);
+  const isImg = url && /\.(jpe?g|png|gif|webp)$/i.test(url);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/60" />
+      <div
+        className="relative w-full max-w-4xl max-h-[90vh] flex flex-col"
+        style={{
+          backgroundColor: '#ffffff',
+          borderRadius: 12,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid #E2F1DA' }}>
+          <h3 className="text-sm font-semibold truncate pr-4" style={{ color: '#050505' }}>{label}</h3>
+          <div className="flex items-center gap-2">
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg"
+              style={{ backgroundColor: '#e8f5e0', color: '#2d5c18', border: '1px solid #D0E8B8' }}
+            >
+              <ExternalLink size={11} />
+              Open
+            </a>
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full" style={{ color: '#596570' }}>
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* Preview */}
+        <div className="flex-1 overflow-auto p-4" style={{ minHeight: '60vh' }}>
+          {isPdf ? (
+            <iframe
+              src={url}
+              className="w-full"
+              style={{ height: '75vh', border: '1px solid #E2F1DA', borderRadius: 8 }}
+              title={label}
+            />
+          ) : isImg ? (
+            <img
+              src={url}
+              alt={label}
+              className="max-w-full mx-auto"
+              style={{ maxHeight: '75vh', borderRadius: 8 }}
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center py-20">
+              <FileText size={48} style={{ color: '#d1d5db' }} />
+              <p className="text-sm mt-4" style={{ color: '#596570' }}>Preview not available for this file type</p>
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 text-sm font-medium"
+                style={{ color: '#2d5c18' }}
+              >
+                Download to view
+              </a>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface StaffMemberRow {
   id: string;
   name: string;
@@ -819,6 +894,7 @@ function IssuesSection({ staffId, staffName, centreId }: {
 // ── Document Row ─────────────────────────────────────────────────────────
 
 function DocRow({ label, url, expiry, code }: { label: string; url?: string; expiry?: string | null; code?: string | null }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
   const days = expiry ? certDays(expiry) : null;
   const isExpired = days !== null && days < 0;
   const isWarning = days !== null && days >= 0 && days < 90;
@@ -827,44 +903,46 @@ function DocRow({ label, url, expiry, code }: { label: string; url?: string; exp
   const isPdf = url && /\.pdf$/i.test(url);
 
   return (
-    <div className="flex items-center gap-3 px-3 py-2.5" style={{ borderBottom: '1px solid #F5FAF3' }}>
-      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: dotColor }} />
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-semibold" style={{ color: '#050505' }}>{label}</div>
-        {code && <div className="text-xs" style={{ color: '#596570' }}>{code}</div>}
-        {expiry && (
-          <div className="text-xs font-medium" style={{ color: isExpired ? '#dc2626' : isWarning ? '#d97706' : '#16a34a' }}>
-            {fmtDate(expiry)}
-            {days !== null && days < 0 && ` · Expired ${Math.abs(days)}d ago`}
-            {days !== null && days >= 0 && days < 90 && ` · ${days}d remaining`}
+    <>
+      <div className="flex items-center gap-3 px-3 py-2.5" style={{ borderBottom: '1px solid #F5FAF3' }}>
+        <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: dotColor }} />
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-semibold" style={{ color: '#050505' }}>{label}</div>
+          {code && <div className="text-xs" style={{ color: '#596570' }}>{code}</div>}
+          {expiry && (
+            <div className="text-xs font-medium" style={{ color: isExpired ? '#dc2626' : isWarning ? '#d97706' : '#16a34a' }}>
+              {fmtDate(expiry)}
+              {days !== null && days < 0 && ` · Expired ${Math.abs(days)}d ago`}
+              {days !== null && days >= 0 && days < 90 && ` · ${days}d remaining`}
+            </div>
+          )}
+          {!expiry && !url && <div className="text-xs" style={{ color: '#d1d5db' }}>Not recorded</div>}
+        </div>
+        {url && (
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {isImg && (
+              <img src={url} alt={label} className="w-8 h-8 rounded object-cover" style={{ border: '1px solid #E2F1DA' }} />
+            )}
+            <button
+              onClick={() => setPreviewOpen(true)}
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg cursor-pointer"
+              style={{ backgroundColor: '#e8f5e0', color: '#2d5c18', border: '1px solid #D0E8B8' }}
+            >
+              {isPdf ? <FileText size={11} /> : <Eye size={11} />}
+              {isPdf ? 'PDF' : 'View'}
+            </button>
           </div>
         )}
-        {!expiry && !url && <div className="text-xs" style={{ color: '#d1d5db' }}>Not recorded</div>}
+        {!url && (
+          <span className="text-xs px-2 py-0.5 rounded-full flex-shrink-0" style={{ backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}>
+            No file
+          </span>
+        )}
       </div>
-      {url && (
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {isImg && (
-            <img src={url} alt={label} className="w-8 h-8 rounded object-cover" style={{ border: '1px solid #E2F1DA' }} />
-          )}
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg"
-            style={{ backgroundColor: '#e8f5e0', color: '#2d5c18', border: '1px solid #D0E8B8' }}
-          >
-            {isPdf ? <FileText size={11} /> : <Eye size={11} />}
-            {isPdf ? 'PDF' : 'View'}
-            <ExternalLink size={10} />
-          </a>
-        </div>
+      {previewOpen && url && (
+        <DocPreviewModal url={url} label={label} onClose={() => setPreviewOpen(false)} />
       )}
-      {!url && (
-        <span className="text-xs px-2 py-0.5 rounded-full flex-shrink-0" style={{ backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}>
-          No file
-        </span>
-      )}
-    </div>
+    </>
   );
 }
 
