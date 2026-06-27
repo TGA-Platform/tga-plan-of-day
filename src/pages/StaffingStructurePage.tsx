@@ -1385,21 +1385,31 @@ function StaffCard({
   staff,
   onSelect,
   onStatusChange,
+  groupId,
 }: {
   staff: StaffMemberRow;
   onSelect: (tab?: 'profile' | 'accidents' | 'issues') => void;
   onStatusChange: (staffId: string, status: string) => void;
+  groupId?: string;
 }) {
   const isResigned = staff.employment_status === 'Resigned';
   const isExited = staff.employment_status === 'Exited';
+  const canResign = staff.employment_status === 'Active' || staff.employment_status === 'On Leave' || staff.employment_status === 'Probation' || staff.employment_status === 'Casual';
 
   return (
     <div
-      className="flex flex-col gap-2 transition-all p-3.5"
+      draggable={!isResigned && !isExited}
+      onDragStart={e => {
+        if (groupId) {
+          e.dataTransfer.setData('application/json', JSON.stringify({ staffId: staff.id, sourceGroupId: groupId }));
+          e.dataTransfer.effectAllowed = 'move';
+        }
+      }}
+      className="flex flex-col gap-2 transition-all p-3.5 cursor-move"
       style={isResigned
         ? { backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }
         : isExited
-        ? { backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', opacity: 0.7 }
+        ? { backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', opacity: 0.7, cursor: 'default' }
         : { backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }
       }
     >
@@ -1412,6 +1422,16 @@ function StaffCard({
           )}
         </button>
         <div className="flex gap-1">
+          {canResign && (
+            <button
+              onClick={() => onStatusChange(staff.id, 'Resigned')}
+              className="px-2 py-0.5 rounded-full text-xs font-medium transition-colors hover:opacity-80"
+              style={{ border: '1px solid #dc2626', color: '#dc2626', fontSize: '11px', padding: '2px 8px' }}
+              title="Resign"
+            >
+              Resign
+            </button>
+          )}
           <button onClick={() => onSelect('accidents')} className="p-1 rounded-lg hover:bg-orange-50 text-gray-400 hover:text-orange-500" title="Accidents">
             <Stethoscope size={13} />
           </button>
@@ -2449,9 +2469,40 @@ export default function StaffingStructurePage() {
             {filteredGroups.map(group => {
               const isCollapsed = collapsedRooms.has(group.id) && !searchLower;
               const staffCount = group.staff.length;
+              const [dragOver, setDragOver] = React.useState(false);
 
               return (
-                <div key={group.id} className="overflow-hidden" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+                <div
+                  key={group.id}
+                  className="overflow-hidden transition-all"
+                  style={{
+                    backgroundColor: '#ffffff',
+                    border: dragOver ? '2px dashed #2d5c18' : '1px solid #E2F1DA',
+                    borderRadius: 12,
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
+                  }}
+                  onDragOver={e => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    setDragOver(true);
+                  }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={async e => {
+                    e.preventDefault();
+                    setDragOver(false);
+                    const raw = e.dataTransfer.getData('application/json');
+                    if (!raw) return;
+                    try {
+                      const { staffId, sourceGroupId } = JSON.parse(raw) as { staffId: string; sourceGroupId: string };
+                      if (sourceGroupId === group.id) return;
+                      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'move_staff', staffId, newGroupId: group.id });
+                      loadData(centreId);
+                      showToast('Staff moved to ' + group.title);
+                    } catch (err) {
+                      showToast((err as Error).message || 'Failed to move staff', 'error');
+                    }
+                  }}
+                >
                   {/* Room header */}
                   <div
                     className="flex items-center justify-between px-4 py-3 cursor-pointer transition-opacity"
@@ -2528,6 +2579,7 @@ export default function StaffingStructurePage() {
                             <StaffCard
                               key={sm.id}
                               staff={sm}
+                              groupId={group.id}
                               onSelect={tab => setProfileTarget({ staff: sm, tab })}
                               onStatusChange={handleStatusChange}
                             />
@@ -2559,6 +2611,7 @@ export default function StaffingStructurePage() {
                       <StaffCard
                         key={sm.id}
                         staff={sm}
+                        groupId={exitedGroup.id}
                         onSelect={tab => setProfileTarget({ staff: sm, tab })}
                         onStatusChange={handleStatusChange}
                       />
