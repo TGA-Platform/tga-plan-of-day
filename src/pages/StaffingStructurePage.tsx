@@ -3,11 +3,18 @@ import {
   Users, ChevronDown, ChevronRight, ShieldCheck, AlertTriangle,
   Pencil, Plus, Trash2, Briefcase, UserMinus, Search, List, LayoutGrid,
   ChevronsDown, ChevronsUp, X, AlertCircle, CheckCircle, XCircle, Stethoscope,
+  FileText, ExternalLink, Eye,
 } from 'lucide-react';
 import { getUser } from '../auth';
 import { CENTRES } from '../config';
 
 // ── Types ──────────────────────────────────────────────────────────────────
+
+interface StaffDoc {
+  id: string;
+  label: string;
+  url: string;
+}
 
 interface StaffMemberRow {
   id: string;
@@ -40,6 +47,9 @@ interface StaffMemberRow {
   child_protection_renewal?: string;
   ratio_50?: string;
   action?: string;
+  // Documents from Supabase staff_documents table
+  docs?: StaffDoc[];
+  certDocs?: StaffDoc[];
 }
 
 interface OpenPosition {
@@ -782,6 +792,58 @@ function IssuesSection({ staffId, staffName, centreId }: {
   );
 }
 
+// ── Document Row ─────────────────────────────────────────────────────────
+
+function DocRow({ label, url, expiry, code }: { label: string; url?: string; expiry?: string | null; code?: string | null }) {
+  const days = expiry ? certDays(expiry) : null;
+  const isExpired = days !== null && days < 0;
+  const isWarning = days !== null && days >= 0 && days < 90;
+  const dotColor = isExpired ? '#dc2626' : isWarning ? '#d97706' : days !== null ? '#16a34a' : url ? '#16a34a' : '#d1d5db';
+  const isImg = url && /\.(jpe?g|png|gif|webp)$/i.test(url);
+  const isPdf = url && /\.pdf$/i.test(url);
+
+  return (
+    <div className="flex items-center gap-3 px-3 py-2.5" style={{ borderBottom: '1px solid #F5FAF3' }}>
+      <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: dotColor }} />
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-semibold" style={{ color: '#050505' }}>{label}</div>
+        {code && <div className="text-xs" style={{ color: '#596570' }}>{code}</div>}
+        {expiry && (
+          <div className="text-xs font-medium" style={{ color: isExpired ? '#dc2626' : isWarning ? '#d97706' : '#16a34a' }}>
+            {fmtDate(expiry)}
+            {days !== null && days < 0 && ` · Expired ${Math.abs(days)}d ago`}
+            {days !== null && days >= 0 && days < 90 && ` · ${days}d remaining`}
+          </div>
+        )}
+        {!expiry && !url && <div className="text-xs" style={{ color: '#d1d5db' }}>Not recorded</div>}
+      </div>
+      {url && (
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {isImg && (
+            <img src={url} alt={label} className="w-8 h-8 rounded object-cover" style={{ border: '1px solid #E2F1DA' }} />
+          )}
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg"
+            style={{ backgroundColor: '#e8f5e0', color: '#2d5c18', border: '1px solid #D0E8B8' }}
+          >
+            {isPdf ? <FileText size={11} /> : <Eye size={11} />}
+            {isPdf ? 'PDF' : 'View'}
+            <ExternalLink size={10} />
+          </a>
+        </div>
+      )}
+      {!url && (
+        <span className="text-xs px-2 py-0.5 rounded-full flex-shrink-0" style={{ backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}>
+          No file
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ── Staff Profile Drawer ───────────────────────────────────────────────────
 
 function StaffProfileDrawer({
@@ -867,13 +929,7 @@ function StaffProfileDrawer({
     }
   }
 
-  const compItems = [
-    { label: 'WWCC', expiry: local.wwcc_expiry, code: local.wwcc_number },
-    { label: 'First Aid', expiry: local.first_aid_expiry, code: local.first_aid_code },
-    { label: 'CPR', expiry: local.cpr_expiry, code: local.cpr_code },
-    { label: 'Anaphylaxis', expiry: local.anaphylaxis_expiry, code: local.anaphylaxis_code },
-    { label: 'Child Protection', expiry: local.child_protection_renewal },
-  ];
+
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
@@ -1104,41 +1160,135 @@ function StaffProfileDrawer({
                 </section>
               )}
 
-              {/* Compliance */}
+              {/* Compliance & Documents */}
               <section>
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: '#596570' }}>
                   <ShieldCheck size={12} />
-                  Compliance
+                  Compliance Certificates
                 </h3>
                 <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
-                  {compItems.map((item, i) => {
-                    const days = item.expiry ? certDays(item.expiry) : null;
-                    const isExpired = days !== null && days < 0;
-                    const isWarning = days !== null && days >= 0 && days < 90;
-                    const dotColor = isExpired ? '#dc2626' : isWarning ? '#d97706' : item.expiry ? '#16a34a' : '#d1d5db';
+                  <DocRow
+                    label="WWCC"
+                    expiry={local.wwcc_expiry}
+                    code={local.wwcc_number}
+                    url={local.certDocs?.find(d => /wwcc/i.test(d.label))?.url}
+                  />
+                  <DocRow
+                    label="First Aid"
+                    expiry={local.first_aid_expiry}
+                    code={local.first_aid_code}
+                    url={local.certDocs?.find(d => /first.?aid/i.test(d.label))?.url}
+                  />
+                  <DocRow
+                    label="CPR"
+                    expiry={local.cpr_expiry}
+                    code={local.cpr_code}
+                    url={local.certDocs?.find(d => /cpr/i.test(d.label))?.url}
+                  />
+                  <DocRow
+                    label="Anaphylaxis"
+                    expiry={local.anaphylaxis_expiry}
+                    code={local.anaphylaxis_code}
+                    url={local.certDocs?.find(d => /anaphylaxis/i.test(d.label))?.url}
+                  />
+                  <DocRow
+                    label="Child Protection"
+                    expiry={local.child_protection_renewal}
+                    url={local.certDocs?.find(d => /child.?prot/i.test(d.label))?.url}
+                  />
+                </div>
+              </section>
+
+              {/* HR Documents */}
+              <section>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: '#596570' }}>
+                  <FileText size={12} />
+                  HR Documents
+                </h3>
+                <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
+                  {[
+                    { key: 'qualification', label: 'Qualification / Transcript' },
+                    { key: 'induction', label: 'Induction Records' },
+                    { key: 'policy_kit', label: 'Policy Kit Signed' },
+                    { key: 'staff_record', label: 'Staff Record' },
+                    { key: 'job_description', label: 'Job Description' },
+                    { key: 'food_handler', label: 'Food Handler Cert' },
+                  ].map(({ key, label }) => {
+                    const doc = local.docs?.find(d => d.label.toLowerCase().includes(key) || key.split('_').some(k => d.label.toLowerCase().includes(k)));
                     return (
-                      <div key={item.label}
-                        className={`flex items-start gap-3 px-3 py-2.5 text-sm ${i < compItems.length - 1 ? 'border-b border-gray-50' : ''}`}
-                        style={{ backgroundColor: isExpired ? '#fff5f5' : isWarning ? '#fffbeb' : 'white' }}
-                      >
-                        <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 mt-1" style={{ backgroundColor: dotColor }} />
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-xs text-gray-800">{item.label}</div>
-                          {item.code && <div className="text-xs text-gray-500">{item.code}</div>}
-                          {item.expiry
-                            ? <div className={`text-xs font-medium ${isExpired ? 'text-red-700' : isWarning ? 'text-amber-700' : 'text-green-700'}`}>
-                                {fmtDate(item.expiry)}
-                                {days !== null && days < 0 && ` · Expired ${Math.abs(days)}d ago`}
-                                {days !== null && days >= 0 && days < 90 && ` · ${days}d remaining`}
-                              </div>
-                            : <div className="text-xs text-gray-400">Not recorded</div>
-                          }
-                        </div>
-                      </div>
+                      <DocRow key={key} label={label} url={doc?.url} />
                     );
                   })}
                 </div>
               </section>
+
+              {/* Audit Checklist */}
+              {(() => {
+                const checks = [
+                  { label: 'WWCC', expiry: local.wwcc_expiry, hasDoc: !!local.certDocs?.find(d => /wwcc/i.test(d.label)) },
+                  { label: 'First Aid', expiry: local.first_aid_expiry, hasDoc: !!local.certDocs?.find(d => /first.?aid/i.test(d.label)) },
+                  { label: 'CPR', expiry: local.cpr_expiry, hasDoc: !!local.certDocs?.find(d => /cpr/i.test(d.label)) },
+                  { label: 'Anaphylaxis', expiry: local.anaphylaxis_expiry, hasDoc: !!local.certDocs?.find(d => /anaphylaxis/i.test(d.label)) },
+                  { label: 'Child Protection', expiry: local.child_protection_renewal, hasDoc: !!local.certDocs?.find(d => /child.?prot/i.test(d.label)) },
+                  { label: 'Qualification Doc', expiry: null, hasDoc: !!local.docs?.find(d => /qualif|transcript/i.test(d.label)) },
+                  { label: 'Induction', expiry: null, hasDoc: !!local.docs?.find(d => /induction/i.test(d.label)) },
+                  { label: 'Policy Kit', expiry: null, hasDoc: !!local.docs?.find(d => /policy/i.test(d.label)) },
+                  { label: 'Staff Record', expiry: null, hasDoc: !!local.docs?.find(d => /record/i.test(d.label)) },
+                  { label: 'Job Description', expiry: null, hasDoc: !!local.docs?.find(d => /job.?desc/i.test(d.label)) },
+                  { label: 'Food Handler', expiry: null, hasDoc: !!local.docs?.find(d => /food/i.test(d.label)) },
+                ];
+                const scores = checks.map(c => {
+                  if (c.expiry) {
+                    const d = certDays(c.expiry);
+                    if (d < 0) return 'red';
+                    if (d < 90) return 'amber';
+                    return 'green';
+                  }
+                  return c.hasDoc ? 'green' : 'red';
+                });
+                const greenCount = scores.filter(s => s === 'green').length;
+                const amberCount = scores.filter(s => s === 'amber').length;
+                const redCount = scores.filter(s => s === 'red').length;
+                const pct = Math.round((greenCount / checks.length) * 100);
+                return (
+                  <section>
+                    <h3 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center justify-between" style={{ color: '#596570' }}>
+                      <span className="flex items-center gap-1.5"><ShieldCheck size={12} /> Audit Checklist</span>
+                      <span className="text-xs font-bold" style={{ color: pct === 100 ? '#16a34a' : pct >= 70 ? '#d97706' : '#dc2626' }}>
+                        {greenCount}/{checks.length} on file
+                      </span>
+                    </h3>
+                    {/* Score bar */}
+                    <div className="w-full h-2 rounded-full mb-3 overflow-hidden" style={{ backgroundColor: '#F5FAF3' }}>
+                      <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: pct === 100 ? '#16a34a' : pct >= 70 ? '#d97706' : '#dc2626' }} />
+                    </div>
+                    <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
+                      {checks.map((c, i) => {
+                        const s = scores[i];
+                        return (
+                          <div key={c.label} className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: i < checks.length - 1 ? '1px solid #F5FAF3' : 'none' }}>
+                            {s === 'green' && <CheckCircle size={13} style={{ color: '#16a34a', flexShrink: 0 }} />}
+                            {s === 'amber' && <AlertTriangle size={13} style={{ color: '#d97706', flexShrink: 0 }} />}
+                            {s === 'red' && <XCircle size={13} style={{ color: '#dc2626', flexShrink: 0 }} />}
+                            <span className="text-xs flex-1" style={{ color: s === 'red' ? '#dc2626' : s === 'amber' ? '#d97706' : '#050505' }}>
+                              {c.label}
+                            </span>
+                            {c.expiry && (
+                              <span className="text-xs" style={{ color: '#596570' }}>{fmtDate(c.expiry)}</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {(amberCount > 0 || redCount > 0) && (
+                      <div className="mt-2 text-xs flex gap-3">
+                        {redCount > 0 && <span style={{ color: '#dc2626' }}>✗ {redCount} missing/expired</span>}
+                        {amberCount > 0 && <span style={{ color: '#d97706' }}>⚠ {amberCount} expiring soon</span>}
+                      </div>
+                    )}
+                  </section>
+                );
+              })()}
             </>
           )}
 
@@ -1474,51 +1624,83 @@ function ResignationModal({
   onCancel,
 }: {
   staffName: string;
-  onConfirm: (data: { lastDay: string; terminationType: string; reason: string; notes: string }) => void;
+  onConfirm: (data: { lastDay: string; terminationType: string; reason: string; notes: string; resignationReceivedDate: string }) => void;
   onCancel: () => void;
 }) {
+  const today = new Date().toISOString().split('T')[0];
+  const [resignationReceivedDate, setResignationReceivedDate] = useState(today);
   const [lastDay, setLastDay] = useState('');
   const [terminationType, setTerminationType] = useState('Voluntary Resignation');
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
 
+  const daysNotice = resignationReceivedDate && lastDay
+    ? Math.max(0, Math.round((new Date(lastDay).getTime() - new Date(resignationReceivedDate).getTime()) / 86400000))
+    : null;
+
   return (
-    <Modal isOpen onClose={onCancel} title="Mark as Resigned" size="sm">
+    <Modal isOpen onClose={onCancel} title="Mark as Resigned" size="md">
       <div className="space-y-4">
-        <p className="text-sm text-gray-600">
-          Marking <span className="font-semibold text-gray-900">{staffName}</span> as resigned.
-          Their card stays visible with amber highlight until their last day.
+        <p className="text-sm" style={{ color: '#596570' }}>
+          You are marking <span className="font-semibold" style={{ color: '#050505' }}>{staffName}</span> as resigned.
+          Their card stays visible with an amber highlight until their last day.
         </p>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Last Day *</label>
-          <input type="date" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
-            value={lastDay} onChange={e => setLastDay(e.target.value)} />
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: '#596570' }}>Resignation Received</label>
+            <input type="date" className="w-full text-sm rounded-lg px-3 py-2 focus:outline-none"
+              style={{ border: '1px solid #E2F1DA' }}
+              value={resignationReceivedDate} onChange={e => setResignationReceivedDate(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: '#596570' }}>
+              Last Day <span style={{ color: '#dc2626' }}>*</span>
+            </label>
+            <input type="date" className="w-full text-sm rounded-lg px-3 py-2 focus:outline-none"
+              style={{ border: '1px solid #E2F1DA' }}
+              value={lastDay} onChange={e => setLastDay(e.target.value)} />
+          </div>
         </div>
+
+        {daysNotice !== null && (
+          <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg"
+            style={{ backgroundColor: daysNotice >= 14 ? '#F5FAF3' : '#fffbeb', color: daysNotice >= 14 ? '#2d5c18' : '#92400e', border: `1px solid ${daysNotice >= 14 ? '#D0E8B8' : '#fde68a'}` }}>
+            <ShieldCheck size={13} />
+            {daysNotice} day{daysNotice !== 1 ? 's' : ''} notice period
+            {daysNotice < 14 && ' — less than 2 weeks notice'}
+          </div>
+        )}
+
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Termination Type</label>
-          <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+          <label className="block text-xs font-medium mb-1" style={{ color: '#596570' }}>Termination Type</label>
+          <select className="w-full text-sm rounded-lg px-3 py-2 focus:outline-none"
+            style={{ border: '1px solid #E2F1DA', backgroundColor: '#ffffff' }}
             value={terminationType} onChange={e => setTerminationType(e.target.value)}>
-            {['Voluntary Resignation', 'Transfer to TGA Service', 'Termination', 'End of Contract', 'Other'].map(t => <option key={t}>{t}</option>)}
+            {['Voluntary Resignation', 'Transfer to TGA Service', 'Termination', 'Redundancy', 'End of Contract', 'Other'].map(t => <option key={t}>{t}</option>)}
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Reason</label>
-          <textarea rows={2} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none resize-none"
-            value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Relocating, career change..." />
+          <label className="block text-xs font-medium mb-1" style={{ color: '#596570' }}>Reason for Leaving</label>
+          <textarea rows={2} className="w-full text-sm rounded-lg px-3 py-2 focus:outline-none resize-none"
+            style={{ border: '1px solid #E2F1DA' }}
+            value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Relocating, personal reasons, career change..." />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Notes (optional)</label>
-          <textarea rows={2} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none resize-none"
-            value={notes} onChange={e => setNotes(e.target.value)} />
+          <label className="block text-xs font-medium mb-1" style={{ color: '#596570' }}>Notes (optional)</label>
+          <textarea rows={2} className="w-full text-sm rounded-lg px-3 py-2 focus:outline-none resize-none"
+            style={{ border: '1px solid #E2F1DA' }}
+            value={notes} onChange={e => setNotes(e.target.value)} placeholder="Any additional details..." />
         </div>
         <div className="flex justify-end gap-3 pt-1">
-          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+          <button onClick={onCancel} className="px-4 py-2 text-sm" style={{ color: '#596570' }}>Cancel</button>
           <button
             onClick={() => {
               if (!lastDay) { showToast('Please select a last day', 'error'); return; }
-              onConfirm({ lastDay, terminationType, reason, notes });
+              onConfirm({ lastDay, terminationType, reason, notes, resignationReceivedDate });
             }}
-            className="flex items-center gap-2 px-5 py-2 bg-amber-600 text-white text-sm font-medium rounded-xl hover:bg-amber-700 transition-colors"
+            className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg transition-colors"
+            style={{ backgroundColor: '#d97706', color: '#fff' }}
           >
             <UserMinus size={14} />
             Confirm Resignation
@@ -1653,16 +1835,25 @@ export default function StaffingStructurePage() {
     }
   }
 
-  async function handleResignationConfirm(data: { lastDay: string; terminationType: string; reason: string; notes: string }) {
+  async function handleResignationConfirm(data: { lastDay: string; terminationType: string; reason: string; notes: string; resignationReceivedDate: string }) {
     if (!resignationPending) return;
+    const { staffId, staffName } = resignationPending;
+    const sm = allActive.find(s => s.id === staffId);
+    const formattedDate = new Date(data.lastDay + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' });
+    const daysNotice = Math.max(0, Math.round(
+      (new Date(data.lastDay).getTime() - new Date(data.resignationReceivedDate).getTime()) / 86400000
+    ));
     try {
+      // 1. Update staff status + end_date
       await apiPost(`staffing-structure?centreId=${centreId}`, {
-        action: 'update_staff', staffId: resignationPending.staffId,
-        fields: { employment_status: 'Resigned', end_date: data.lastDay },
+        action: 'update_staff', staffId,
+        fields: {
+          employment_status: 'Resigned',
+          end_date: data.lastDay,
+        },
       });
 
-      // Create backfill open position
-      const sm = allActive.find(s => s.id === resignationPending.staffId);
+      // 2. Create backfill open position
       if (sm) {
         await apiPost('open-positions', {
           centre_id: centreId,
@@ -1670,11 +1861,34 @@ export default function StaffingStructurePage() {
           qualification_required: sm.qualification || '',
           room_id: sm.group_id || undefined,
           status: 'Open',
-          notes: `Backfill for ${resignationPending.staffName} — last day ${new Date(data.lastDay + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })}${data.notes ? `. ${data.notes}` : ''}`,
+          notes: `Backfill for ${staffName} — last day ${formattedDate}${data.notes ? `. ${data.notes}` : ''}`,
         });
       }
 
-      showToast(`${resignationPending.staffName} marked as resigned`);
+      // 3. Create offboarding record in Supabase (best-effort)
+      try {
+        const centreName = CENTRES.find(c => c.id === centreId)?.name ?? centreId;
+        await apiPost('staff-offboarding', {
+          centre_id: centreId,
+          campus: centreName,
+          staff_name: staffName,
+          staff_email: sm?.email || '',
+          position: sm?.position || '',
+          qualification: sm?.qualification || '',
+          resignation_received_date: data.resignationReceivedDate,
+          last_day: data.lastDay,
+          days_notice: daysNotice,
+          termination_type: data.terminationType,
+          reason_for_leaving: data.reason,
+          notes: data.notes,
+          hr_checklist_status: 'Pending',
+          status: 'New',
+        });
+      } catch {
+        // non-fatal — offboarding table may not exist yet
+      }
+
+      showToast(`🟧 ${staffName} marked as resigned. Card highlighted until ${formattedDate}.`);
       loadData(centreId);
       loadPositions(centreId);
     } catch (err) {
