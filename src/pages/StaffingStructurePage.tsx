@@ -2002,6 +2002,7 @@ export default function StaffingStructurePage() {
   const [addStaffTarget, setAddStaffTarget] = useState<{ groupId?: string } | null>(null);
   const [positionModal, setPositionModal] = useState<{ existing?: OpenPosition } | null>(null);
   const [resignationPending, setResignationPending] = useState<{ staffId: string; staffName: string } | null>(null);
+  const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
 
   // Load all-centres summary data
   const loadAllCentresSummary = useCallback(async () => {
@@ -2610,7 +2611,7 @@ export default function StaffingStructurePage() {
             {filteredGroups.map(group => {
               const isCollapsed = collapsedRooms.has(group.id) && !searchLower;
               const staffCount = group.staff.length;
-              const [dragOver, setDragOver] = React.useState(false);
+              const dragOver = dragOverGroupId === group.id;
 
               return (
                 <div
@@ -2625,12 +2626,12 @@ export default function StaffingStructurePage() {
                   onDragOver={e => {
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'move';
-                    setDragOver(true);
+                    setDragOverGroupId(group.id);
                   }}
-                  onDragLeave={() => setDragOver(false)}
+                  onDragLeave={() => setDragOverGroupId(null)}
                   onDrop={async e => {
                     e.preventDefault();
-                    setDragOver(false);
+                    setDragOverGroupId(null);
                     const raw = e.dataTransfer.getData('application/json');
                     if (!raw) return;
                     try {
