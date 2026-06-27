@@ -2192,7 +2192,8 @@ export default function StaffingStructurePage() {
               return (
                 <div
                   key={centre.id}
-                  className="flex flex-col justify-between p-5 transition-all"
+                  onClick={() => { setCentreId(centre.id); setCollapsedRooms(new Set()); setSearch(''); }}
+                  className="flex flex-col justify-between p-5 transition-all cursor-pointer hover:shadow-lg"
                   style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
                 >
                   <div className="mb-4">
@@ -2218,13 +2219,12 @@ export default function StaffingStructurePage() {
                       <div className="mt-2 h-4 bg-gray-100 rounded animate-pulse w-2/3" />
                     )}
                   </div>
-                  <button
-                    onClick={() => { setCentreId(centre.id); setCollapsedRooms(new Set()); setSearch(''); }}
-                    className="w-full flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg transition-colors hover:opacity-90"
+                  <div
+                    className="w-full flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg"
                     style={{ backgroundColor: '#2d5c18', color: '#ffffff' }}
                   >
                     View Staffing →
-                  </button>
+                  </div>
                 </div>
               );
             })}
