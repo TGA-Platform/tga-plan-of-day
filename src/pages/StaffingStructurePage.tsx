@@ -1,5 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import type { StaffMember } from '../types';
 import { CENTRES, STAFFING_BOARD_IDS } from '../config';
 import { getUser } from '../auth';
@@ -30,218 +29,6 @@ const B = {
   green: '#2d5c18', greenLight: '#5a9228', bg: '#F5FAF3',
   border: '#E2F1DA', white: '#ffffff', text: '#050505', muted: '#596570',
 };
-
-// ── HR Sub-Navigation ─────────────────────────────────────────────────────
-function HrSubNav() {
-  const location = useLocation();
-  const tabs = [
-    { to: '/staffing', label: '👥 Staffing Structure' },
-    { to: '/staff-accidents', label: '🩹 Accidents' },
-    { to: '/staff-issues', label: '⚠️ HR Issues' },
-  ];
-  return (
-    <div className="flex items-center gap-1">
-      {tabs.map(t => (
-        <Link
-          key={t.to}
-          to={t.to}
-          className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
-          style={{
-            backgroundColor: location.pathname === t.to ? B.green : 'transparent',
-            color: location.pathname === t.to ? '#fff' : B.muted,
-          }}
-        >
-          {t.label}
-        </Link>
-      ))}
-    </div>
-  );
-}
-
-// ── Open Positions ─────────────────────────────────────────────────────────
-interface OpenPosition {
-  id: string;
-  centre_id: string;
-  room_id?: string;
-  title: string;
-  qualification_required: string;
-  status: string;
-  notes?: string;
-}
-
-const POSITION_STATUS_COLORS: Record<string, string> = {
-  'Open': 'bg-emerald-100 text-emerald-700',
-  'On Hold': 'bg-yellow-100 text-yellow-700',
-  'Offered': 'bg-blue-100 text-blue-700',
-  'Filled': 'bg-gray-100 text-gray-500',
-};
-
-function OpenPositionsSection({ centreId, rooms }: { centreId: string; rooms: { id: string; title: string }[] }) {
-  const [positions, setPositions] = useState<OpenPosition[]>([]);
-  const [collapsed, setCollapsed] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [editPos, setEditPos] = useState<OpenPosition | null>(null);
-  const [form, setForm] = useState({ title: '', qualification_required: '', room_id: '', status: 'Open', notes: '' });
-  const [saving, setSaving] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch(`/api/open-positions?centreId=${centreId}`);
-      if (r.ok) setPositions(await r.json());
-    } catch { /* table may not exist yet */ }
-  }, [centreId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const openCount = positions.filter(p => p.status === 'Open' || p.status === 'On Hold').length;
-
-  async function handleSave() {
-    if (!form.title.trim()) return;
-    setSaving(true);
-    try {
-      if (editPos) {
-        await fetch('/api/open-positions', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'update', id: editPos.id, ...form }),
-        });
-      } else {
-        await fetch('/api/open-positions', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'create', centre_id: centreId, ...form }),
-        });
-      }
-      setAdding(false); setEditPos(null); setForm({ title: '', qualification_required: '', room_id: '', status: 'Open', notes: '' });
-      load();
-    } finally { setSaving(false); }
-  }
-
-  async function handleStatusChange(id: string, status: string) {
-    await fetch('/api/open-positions', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update', id, status }),
-    });
-    setPositions(prev => prev.map(p => p.id === id ? { ...p, status } : p));
-  }
-
-  async function handleDelete(id: string) {
-    await fetch('/api/open-positions', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete', id }),
-    });
-    setPositions(prev => prev.filter(p => p.id !== id));
-  }
-
-  return (
-    <div className="rounded-2xl overflow-hidden border" style={{ borderColor: '#d1fae5', backgroundColor: B.white }}>
-      <button
-        onClick={() => setCollapsed(c => !c)}
-        className="w-full flex items-center gap-3 px-5 py-4 text-left hover:opacity-90 transition-opacity"
-      >
-        <span className="text-base">{collapsed ? '▶' : '▼'}</span>
-        <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center">
-          <span className="text-base">📋</span>
-        </div>
-        <div className="flex-1 flex items-center gap-3">
-          <span className="text-sm font-semibold text-gray-900">Open Positions</span>
-          {openCount > 0 && (
-            <span className="text-xs font-semibold px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">{openCount} active</span>
-          )}
-        </div>
-        <button
-          onClick={e => { e.stopPropagation(); setAdding(true); setEditPos(null); setForm({ title: '', qualification_required: '', room_id: '', status: 'Open', notes: '' }); }}
-          className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition-colors"
-        >
-          + Add Position
-        </button>
-      </button>
-
-      {!collapsed && (
-        <div className="px-5 pb-5">
-          {(adding || editPos) && (
-            <div className="mb-4 p-4 rounded-xl border" style={{ borderColor: B.border, backgroundColor: B.bg }}>
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Position Title *</label>
-                  <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }}
-                    placeholder="e.g. Diploma Educator, Room Leader" />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Qualification Required</label>
-                  <input value={form.qualification_required} onChange={e => setForm(f => ({ ...f, qualification_required: e.target.value }))}
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }}
-                    placeholder="e.g. Diploma ECE" />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Room (optional)</label>
-                  <select value={form.room_id} onChange={e => setForm(f => ({ ...f, room_id: e.target.value }))}
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }}>
-                    <option value="">Any room</option>
-                    {rooms.map(r => <option key={r.id} value={r.id}>{r.title}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Status</label>
-                  <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
-                    className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }}>
-                    <option>Open</option><option>On Hold</option><option>Offered</option><option>Filled</option>
-                  </select>
-                </div>
-              </div>
-              <div className="mb-3">
-                <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Notes</label>
-                <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-                  rows={2} className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none resize-none" style={{ borderColor: B.border }} />
-              </div>
-              <div className="flex justify-end gap-2">
-                <button onClick={() => { setAdding(false); setEditPos(null); }} className="px-3 py-1.5 text-sm border rounded-lg hover:opacity-80" style={{ borderColor: B.border, color: B.muted }}>Cancel</button>
-                <button onClick={handleSave} disabled={saving} className="px-4 py-1.5 text-sm font-semibold text-white rounded-lg hover:opacity-90" style={{ backgroundColor: saving ? '#9ca3af' : B.green }}>{saving ? 'Saving...' : editPos ? 'Update' : 'Add Position'}</button>
-              </div>
-            </div>
-          )}
-          {positions.length === 0 ? (
-            <p className="text-sm text-gray-400 py-4 text-center">No open positions recorded</p>
-          ) : (
-            <div className="space-y-2">
-              {positions.map(pos => {
-                const room = rooms.find(r => r.id === pos.room_id);
-                return (
-                  <div key={pos.id} className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${pos.status === 'Filled' ? 'bg-gray-50 border-gray-100 opacity-60' : 'bg-white border-gray-100 hover:border-gray-200'}`}>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-gray-900">{pos.title}</span>
-                        {room && <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{room.title}</span>}
-                      </div>
-                      {pos.qualification_required && <div className="text-xs text-gray-500 mt-0.5">{pos.qualification_required}</div>}
-                      {pos.notes && <div className="text-xs text-gray-400 italic mt-0.5">{pos.notes}</div>}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={pos.status}
-                        onChange={e => handleStatusChange(pos.id, e.target.value)}
-                        className={`text-xs font-semibold px-2 py-0.5 rounded-full border-0 cursor-pointer ${POSITION_STATUS_COLORS[pos.status] || 'bg-gray-100 text-gray-500'}`}
-                      >
-                        {['Open', 'On Hold', 'Offered', 'Filled'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                      <button onClick={() => { setEditPos(pos); setAdding(false); setForm({ title: pos.title, qualification_required: pos.qualification_required, room_id: pos.room_id || '', status: pos.status, notes: pos.notes || '' }); }}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">
-                        ✏️
-                      </button>
-                      <button onClick={() => handleDelete(pos.id)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function daysUntil(iso?: string | null): number | null {
@@ -929,13 +716,6 @@ export default function StaffingStructurePage() {
 
   return (
     <div className="min-h-screen" style={{ backgroundColor:B.bg }}>
-      {/* HR Sub-Navigation */}
-      <div className="px-4 py-2 border-b" style={{ backgroundColor:B.white, borderColor:B.border }}>
-        <div className="max-w-6xl mx-auto flex items-center gap-1">
-          <HrSubNav />
-        </div>
-      </div>
-
       {/* Header */}
       <div className="sticky top-0 z-40 px-4 py-3 border-b" style={{ backgroundColor:B.white, borderColor:B.border, boxShadow:'0 1px 4px rgba(0,0,0,0.04)' }}>
         <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
@@ -976,9 +756,6 @@ export default function StaffingStructurePage() {
             {data && !loading && (
               <>
                 <DashboardStats groups={data.groups} />
-
-                {/* Open Positions */}
-                <OpenPositionsSection centreId={centreId} rooms={activeGroups.map(g => ({ id: g.id, title: g.title }))} />
 
                 {/* Filters */}
                 <div className="flex flex-wrap gap-2">
