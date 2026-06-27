@@ -1562,30 +1562,32 @@ function StaffingOverviewChart({
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Section 1: Staff by Room */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-end gap-3" style={{ height: 160 }}>
+          <div className="flex items-end gap-4" style={{ height: 280 }}>
             {chartGroups.map(group => {
-              const barHeightPct = (group.staff.length / maxCount) * 100;
+              const BAR_PX_PER_STAFF = 18;
+              const barHeight = group.staff.length * BAR_PX_PER_STAFF;
+              const maxHeight = maxCount * BAR_PX_PER_STAFF;
               return (
-                <div key={group.id} className="flex flex-col items-center flex-1 min-w-0">
+                <div key={group.id} className="flex flex-col items-center flex-1 min-w-0" style={{ height: '100%', justifyContent: 'flex-end' }}>
                   {/* Total count above bar */}
                   <span className="text-xs font-bold mb-1" style={{ color: '#050505' }}>{group.staff.length}</span>
-                  {/* Stacked bar */}
+                  {/* Stacked bar — fixed px height per staff member */}
                   <div
-                    className="w-full flex flex-col-reverse rounded-t-md overflow-hidden"
-                    style={{ height: `${barHeightPct}%`, minHeight: 4 }}
+                    className="w-full flex flex-col-reverse rounded-t-lg overflow-hidden"
+                    style={{ height: barHeight, maxHeight }}
                   >
                     {group.staff.map((s, i) => (
                       <div
                         key={`${s.id}-${i}`}
-                        className="w-full flex-1"
-                        style={{ backgroundColor: getQualificationColor(s.qualification), minHeight: 2 }}
+                        className="w-full"
+                        style={{ backgroundColor: getQualificationColor(s.qualification), height: BAR_PX_PER_STAFF, borderBottom: '1px solid rgba(255,255,255,0.3)' }}
                         title={`${s.name} — ${s.qualification || 'No Qualification'}`}
                       />
                     ))}
                   </div>
                   {/* Room label */}
-                  <span className="text-[10px] font-medium mt-1.5 text-center truncate w-full" style={{ color: '#596570' }}>
-                    {truncate(group.title, 12)}
+                  <span className="text-[10px] font-medium mt-2 text-center w-full" style={{ color: '#596570', wordBreak: 'break-word' }}>
+                    {truncate(group.title, 14)}
                   </span>
                 </div>
               );
