@@ -9,16 +9,6 @@ import { CENTRES } from '../config';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-interface StaffRoom {
-  id: string;
-  group_id: string;
-  centre_id: string;
-  title: string;
-  color: string;
-  is_active: boolean;
-  sort_order?: number;
-}
-
 interface StaffMemberRow {
   id: string;
   name: string;
@@ -50,13 +40,6 @@ interface StaffMemberRow {
   child_protection_renewal?: string;
   ratio_50?: string;
   action?: string;
-}
-
-interface StaffDoc {
-  id: string;
-  label: string;
-  url: string;
-  doc_type: string;
 }
 
 interface OpenPosition {
@@ -122,10 +105,7 @@ interface BoardData {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const DAY_SHORT: Record<string, string> = {
-  Monday: 'M', Tuesday: 'T', Wednesday: 'W', Thursday: 'Th', Friday: 'F',
-};
-const ALL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
 
 const ROLE_COLORS: Record<string, string> = {
   'Room Leader': 'bg-blue-100 text-blue-700',
@@ -227,34 +207,6 @@ function CertDot({ expiry }: { expiry?: string | null }) {
   return <span className="w-2 h-2 rounded-full bg-green-400 inline-block" title={`Valid · ${days}d`} />;
 }
 
-function CertRow({ label, value, number: num }: { label: string; value?: string | null; number?: string | null }) {
-  if (!value) return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="text-gray-400 w-24 flex-shrink-0">{label}</span>
-      <span className="text-gray-300">—</span>
-    </div>
-  );
-  const days = certDays(value);
-  let dotClass = 'bg-green-400';
-  let textClass = 'text-green-700';
-  const statusText = new Date(value).toLocaleDateString('en-AU');
-  let daysText = '';
-
-  if (days < 0) { dotClass = 'bg-red-500'; textClass = 'text-red-600'; daysText = `Expired ${Math.abs(days)}d ago`; }
-  else if (days < 30) { dotClass = 'bg-red-400'; textClass = 'text-red-600'; daysText = `${days}d remaining`; }
-  else if (days < 90) { dotClass = 'bg-amber-400'; textClass = 'text-amber-600'; daysText = `${days}d`; }
-
-  return (
-    <div className="flex items-center gap-2 text-xs">
-      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${dotClass}`} />
-      <span className="text-gray-500 w-20 flex-shrink-0">{label}</span>
-      {num && <span className="text-gray-600 font-mono mr-1">{num}</span>}
-      <span className={`font-medium ${textClass}`}>{statusText}</span>
-      {daysText && <span className={`ml-1 font-semibold ${textClass}`}>({daysText})</span>}
-    </div>
-  );
-}
-
 // ── Toast utility ──────────────────────────────────────────────────────────
 
 function showToast(msg: string, type: 'success' | 'error' = 'success') {
@@ -267,8 +219,7 @@ function showToast(msg: string, type: 'success' | 'error' = 'success') {
 
 // ── API helpers ────────────────────────────────────────────────────────────
 
-const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NDE3MjUsImV4cCI6MjA4OTUxNzcyNX0.wVfVKM_WYblSS5FQTfijGlFl18pv-vVoT4pEiGfKlAE';
+
 
 async function apiGet(path: string) {
   const r = await fetch(`/api/${path}`);
