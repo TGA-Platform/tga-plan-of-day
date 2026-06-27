@@ -109,6 +109,9 @@ interface BoardData {
     title: string;
     color: string;
     isActive: boolean;
+    age_min?: number | null;
+    age_max?: number | null;
+    capacity?: number | null;
     staff: StaffMemberRow[];
   }>;
   editableColumns: Array<{ id: string; label: string; type: string; options?: string[] }>;
@@ -1543,11 +1546,14 @@ function AddRoomModal({ onClose, onSave }: { onClose: () => void; onSave: (title
   );
 }
 
-function EditRoomModal({ initialTitle, initialColor, onClose, onSave }: {
-  groupId: string; initialTitle: string; initialColor: string; onClose: () => void; onSave: (title: string, color: string) => void;
+function EditRoomModal({ initialTitle, initialColor, initialAgeMin, initialAgeMax, initialCapacity, onClose, onSave }: {
+  groupId: string; initialTitle: string; initialColor: string; initialAgeMin?: number | null; initialAgeMax?: number | null; initialCapacity?: number | null; onClose: () => void; onSave: (title: string, color: string, ageMin: number | null, ageMax: number | null, capacity: number | null) => void;
 }) {
   const [title, setTitle] = useState(initialTitle);
   const [color, setColor] = useState(initialColor);
+  const [ageMin, setAgeMin] = useState(initialAgeMin !== null && initialAgeMin !== undefined ? String(initialAgeMin) : '');
+  const [ageMax, setAgeMax] = useState(initialAgeMax !== null && initialAgeMax !== undefined ? String(initialAgeMax) : '');
+  const [capacity, setCapacity] = useState(initialCapacity !== null && initialCapacity !== undefined ? String(initialCapacity) : '');
 
   return (
     <Modal isOpen onClose={onClose} title="Edit Room" size="sm">
@@ -1578,10 +1584,30 @@ function EditRoomModal({ initialTitle, initialColor, onClose, onSave }: {
             ))}
           </div>
         </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Age Min (months)</label>
+            <input type="number" min="0" max="72"
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+              value={ageMin} onChange={e => setAgeMin(e.target.value)} placeholder="e.g. 0" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Age Max (months)</label>
+            <input type="number" min="0" max="72"
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+              value={ageMax} onChange={e => setAgeMax(e.target.value)} placeholder="e.g. 24" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Capacity</label>
+            <input type="number" min="1"
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+              value={capacity} onChange={e => setCapacity(e.target.value)} placeholder="e.g. 16" />
+          </div>
+        </div>
         <div className="flex justify-end gap-3 pt-2">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors">Cancel</button>
           <button
-            onClick={() => { if (!title.trim()) { showToast('Room name is required', 'error'); return; } onSave(title.trim(), color); }}
+            onClick={() => { if (!title.trim()) { showToast('Room name is required', 'error'); return; } onSave(title.trim(), color, ageMin ? parseInt(ageMin) : null, ageMax ? parseInt(ageMax) : null, capacity ? parseInt(capacity) : null); }}
             className="px-5 py-2 bg-[#2d5c18] text-white text-sm font-medium rounded-xl hover:bg-[#2d5c18]/90 transition-colors"
           >
             Save Changes
@@ -2149,7 +2175,7 @@ export default function StaffingStructurePage() {
 
   // Room management modals
   const [addRoomOpen, setAddRoomOpen] = useState(false);
-  const [editRoomTarget, setEditRoomTarget] = useState<{ groupId: string; title: string; color: string } | null>(null);
+  const [editRoomTarget, setEditRoomTarget] = useState<{ groupId: string; title: string; color: string; age_min?: number | null; age_max?: number | null; capacity?: number | null } | null>(null);
   const [deleteRoomTarget, setDeleteRoomTarget] = useState<{ groupId: string; title: string; staffCount: number } | null>(null);
 
   // Load all-centres summary data
@@ -2380,9 +2406,13 @@ export default function StaffingStructurePage() {
     }
   }
 
-  async function handleUpdateRoom(groupId: string, title: string, color: string) {
+  async function handleUpdateRoom(groupId: string, title: string, color: string, ageMin?: number | null, ageMax?: number | null, capacity?: number | null) {
     try {
-      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'update_room', centreId, groupId, title, color });
+      const payload: Record<string, unknown> = { action: 'update_room', centreId, groupId, title, color };
+      if (ageMin !== undefined) payload.ageMin = ageMin;
+      if (ageMax !== undefined) payload.ageMax = ageMax;
+      if (capacity !== undefined) payload.capacity = capacity;
+      await apiPost(`staffing-structure?centreId=${centreId}`, payload);
       showToast('Room updated');
       loadData(centreId);
     } catch (err) {
@@ -2471,8 +2501,11 @@ export default function StaffingStructurePage() {
           groupId={editRoomTarget.groupId}
           initialTitle={editRoomTarget.title}
           initialColor={editRoomTarget.color}
+          initialAgeMin={editRoomTarget.age_min}
+          initialAgeMax={editRoomTarget.age_max}
+          initialCapacity={editRoomTarget.capacity}
           onClose={() => setEditRoomTarget(null)}
-          onSave={(title, color) => { handleUpdateRoom(editRoomTarget.groupId, title, color); setEditRoomTarget(null); }}
+          onSave={(title, color, ageMin, ageMax, capacity) => { handleUpdateRoom(editRoomTarget.groupId, title, color, ageMin, ageMax, capacity); setEditRoomTarget(null); }}
         />
       )}
       {deleteRoomTarget && (
@@ -2895,7 +2928,7 @@ export default function StaffingStructurePage() {
                       {!searchLower && (isCollapsed ? <ChevronRight size={14} style={{ color: '#596570' }} /> : <ChevronDown size={14} style={{ color: '#596570' }} />)}
                       <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', backgroundColor: group.color || '#2d5c18', flexShrink: 0 }} />
                       <button
-                        onClick={e => { e.stopPropagation(); setEditRoomTarget({ groupId: group.id, title: group.title, color: group.color || '#808080' }); }}
+                        onClick={e => { e.stopPropagation(); setEditRoomTarget({ groupId: group.id, title: group.title, color: group.color || '#808080', age_min: group.age_min, age_max: group.age_max, capacity: group.capacity }); }}
                         className="text-sm font-bold hover:underline"
                         style={{ color: '#050505' }}
                         title="Click to rename"
@@ -2903,6 +2936,16 @@ export default function StaffingStructurePage() {
                         {group.title}
                       </button>
                       <span className="text-xs font-semibold" style={{ color: '#596570' }}>{staffCount} staff</span>
+                      {(group.age_min !== null || group.age_max !== null) && (
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' }}>
+                          {group.age_min !== null ? `${group.age_min}m` : '0m'} - {group.age_max !== null ? `${group.age_max}m` : '?'}
+                        </span>
+                      )}
+                      {group.capacity !== null && (
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#f3e8ff', color: '#7e22ce', border: '1px solid #d8b4fe' }}>
+                          Cap: {group.capacity}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <button

@@ -160,12 +160,19 @@ export default async function handler(req, res) {
         roomList = Array.from(seen.values());
       }
 
+      // Fetch staff_rooms for age group data
+      const staffRooms = await sbGet(`/staff_rooms?centre_id=eq.${centreId}`);
+      const roomAgeMap = new Map(staffRooms.map(r => [r.group_id, { age_min: r.age_min, age_max: r.age_max, capacity: r.capacity }]));
+
       // Build groups
       const groups = roomList.map(room => ({
         id: room.group_id,
         title: room.title,
         color: room.color || '#808080',
         isActive: room.is_active,
+        age_min: roomAgeMap.get(room.group_id)?.age_min || null,
+        age_max: roomAgeMap.get(room.group_id)?.age_max || null,
+        capacity: roomAgeMap.get(room.group_id)?.capacity || null,
         staff: staff.filter(s => s.group_id === room.group_id).map(s => mapRow(s, docs)),
       }));
 
@@ -255,14 +262,17 @@ export default async function handler(req, res) {
           return res.json({ ok: true, room });
         }
 
-        // Update room (rename, recolor, toggle active)
+        // Update room (rename, recolor, toggle active, age group, capacity)
         case 'update_room': {
-          const { centreId, groupId, title, color, isActive } = body;
+          const { centreId, groupId, title, color, isActive, ageMin, ageMax, capacity } = body;
           if (!centreId || !groupId) return res.status(400).json({ error: 'centreId and groupId required' });
           const patch = {};
-          if (title    !== undefined) patch.title     = title;
-          if (color    !== undefined) patch.color     = color;
-          if (isActive !== undefined) patch.is_active = isActive;
+          if (title     !== undefined) patch.title      = title;
+          if (color     !== undefined) patch.color      = color;
+          if (isActive  !== undefined) patch.is_active  = isActive;
+          if (ageMin    !== undefined) patch.age_min    = ageMin;
+          if (ageMax    !== undefined) patch.age_max    = ageMax;
+          if (capacity  !== undefined) patch.capacity   = capacity;
           // Update room record
           await sbPatch(`/staff_rooms?centre_id=eq.${centreId}&group_id=eq.${groupId}`, patch);
           // Sync group_title/color on all staff in this room
