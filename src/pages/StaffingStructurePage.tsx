@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { getUser } from '../auth';
 import { CENTRES } from '../config';
+import Layout from '../components/Layout';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -1939,6 +1940,7 @@ export default function StaffingStructurePage() {
   }
 
   return (
+    <Layout>
     <div className="space-y-6 pb-10">
       {/* Modals */}
       {resignationPending && (
@@ -2328,5 +2330,6 @@ export default function StaffingStructurePage() {
         </>
       )}
     </div>
+    </Layout>
   );
 }
