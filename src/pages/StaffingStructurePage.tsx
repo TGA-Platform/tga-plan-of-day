@@ -203,6 +203,23 @@ function certDays(dateStr?: string | null): number {
   return Math.round((new Date(dateStr).getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 }
 
+function isStaffCompliant(s: StaffMemberRow): boolean {
+  const certs = [s.wwcc_expiry, s.first_aid_expiry, s.cpr_expiry, s.anaphylaxis_expiry];
+  return certs.every(e => !!e && certDays(e) >= 0);
+}
+
+function complianceColor(pct: number): string {
+  if (pct >= 90) return '#2d5c18';
+  if (pct >= 70) return '#d97706';
+  return '#dc2626';
+}
+
+function complianceBg(pct: number): string {
+  if (pct >= 90) return '#e8f5e0';
+  if (pct >= 70) return '#fffbeb';
+  return '#fff5f5';
+}
+
 function fmtDate(iso?: string | null) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -1779,6 +1796,8 @@ interface CentreSummary {
   openPositions: number;
   complianceHealth: 'green' | 'amber' | 'red';
   certAlerts: number;
+  compliantStaff: number;
+  compliancePct: number;
   loading: boolean;
   error?: string;
 }
@@ -1837,6 +1856,8 @@ export default function StaffingStructurePage() {
       openPositions: 0,
       complianceHealth: 'green' as const,
       certAlerts: 0,
+      compliantStaff: 0,
+      compliancePct: 0,
       loading: true,
     }));
     setCentreSummaries(initial);
@@ -1860,10 +1881,12 @@ export default function StaffingStructurePage() {
           return expiries.some(e => e && certDays(e) < 0);
         }).length;
         const openPos = Array.isArray(posData) ? (posData as OpenPosition[]).filter(p => p.status === 'Open' || p.status === 'On Hold').length : 0;
+        const compliantStaff = activeStaff.filter(isStaffCompliant).length;
+        const compliancePct = activeStaff.length > 0 ? Math.round((compliantStaff / activeStaff.length) * 100) : 100;
         const health: 'green' | 'amber' | 'red' = expiredCerts > 0 ? 'red' : certAlerts > 0 ? 'amber' : 'green';
         setCentreSummaries(prev => prev.map(s =>
           s.centreId === centre.id
-            ? { ...s, loading: false, activeStaff: activeStaff.length, openPositions: openPos, certAlerts, complianceHealth: health }
+            ? { ...s, loading: false, activeStaff: activeStaff.length, openPositions: openPos, certAlerts, complianceHealth: health, compliantStaff, compliancePct }
             : s
         ));
       } catch {
@@ -2185,6 +2208,36 @@ export default function StaffingStructurePage() {
               Refresh All
             </button>
           </div>
+
+          {/* Summary bar */}
+          {(() => {
+            const loaded = centreSummaries.filter(s => !s.loading && !s.error);
+            if (loaded.length === 0) return null;
+            const totalStaff = loaded.reduce((sum, s) => sum + s.activeStaff, 0);
+            const totalOpen = loaded.reduce((sum, s) => sum + s.openPositions, 0);
+            const totalCompliant = loaded.reduce((sum, s) => sum + s.compliantStaff, 0);
+            const overallPct = totalStaff > 0 ? Math.round((totalCompliant / totalStaff) * 100) : 0;
+            const overallColor = complianceColor(overallPct);
+            return (
+              <div className="flex flex-wrap items-center gap-4 px-5 py-3 rounded-xl" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA' }}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium" style={{ color: '#596570' }}>Total Staff</span>
+                  <span className="text-sm font-bold" style={{ color: '#050505' }}>{totalStaff}</span>
+                </div>
+                <div className="w-px h-4" style={{ backgroundColor: '#E2F1DA' }} />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium" style={{ color: '#596570' }}>Open Positions</span>
+                  <span className="text-sm font-bold" style={{ color: totalOpen > 0 ? '#d97706' : '#050505' }}>{totalOpen}</span>
+                </div>
+                <div className="w-px h-4" style={{ backgroundColor: '#E2F1DA' }} />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium" style={{ color: '#596570' }}>Compliance</span>
+                  <span className="text-sm font-bold" style={{ color: overallColor }}>{totalCompliant}/{totalStaff} — {overallPct}%</span>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Centre cards — use accessible list so cards always appear even before summary data loads */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {accessible.map(centre => {
@@ -2199,24 +2252,25 @@ export default function StaffingStructurePage() {
                   <div className="mb-4">
                     <h3 className="text-lg font-bold" style={{ color: '#050505' }}>{centre.name}</h3>
                     {summary && !summary.loading && !summary.error && (
-                      <div className="flex gap-3 mt-2">
-                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#e8f5e0', color: '#2d5c18' }}>
-                          {summary.activeStaff} staff
-                        </span>
-                        {summary.openPositions > 0 && (
-                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fffbeb', color: '#d97706' }}>
-                            {summary.openPositions} open
-                          </span>
-                        )}
-                        {summary.certAlerts > 0 && (
-                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fff7ed', color: '#ea580c' }}>
-                            {summary.certAlerts} cert alerts
-                          </span>
-                        )}
+                      <div className="grid grid-cols-3 gap-2 mt-3">
+                        <div className="text-center px-2 py-2 rounded-lg" style={{ backgroundColor: '#F5FAF3' }}>
+                          <div className="text-sm font-bold" style={{ color: '#2d5c18' }}>{summary.activeStaff}</div>
+                          <div className="text-[10px] font-medium" style={{ color: '#596570' }}>staff</div>
+                        </div>
+                        <div className="text-center px-2 py-2 rounded-lg" style={{ backgroundColor: summary.openPositions > 0 ? '#fffbeb' : '#F5FAF3' }}>
+                          <div className="text-sm font-bold" style={{ color: summary.openPositions > 0 ? '#d97706' : '#596570' }}>{summary.openPositions}</div>
+                          <div className="text-[10px] font-medium" style={{ color: '#596570' }}>open</div>
+                        </div>
+                        <div className="text-center px-2 py-2 rounded-lg" style={{ backgroundColor: complianceBg(summary.compliancePct) }}>
+                          <div className="text-sm font-bold" style={{ color: complianceColor(summary.compliancePct) }}>
+                            {summary.activeStaff > 0 ? `${summary.compliantStaff}/${summary.activeStaff}` : '—'}
+                          </div>
+                          <div className="text-[10px] font-medium" style={{ color: '#596570' }}>compliant</div>
+                        </div>
                       </div>
                     )}
                     {summary?.loading && (
-                      <div className="mt-2 h-4 bg-gray-100 rounded animate-pulse w-2/3" />
+                      <div className="mt-3 h-12 bg-gray-100 rounded animate-pulse w-full" />
                     )}
                   </div>
                   <div
