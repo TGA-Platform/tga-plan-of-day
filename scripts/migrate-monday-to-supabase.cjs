@@ -247,9 +247,8 @@ async function migrateCentre(centreId, skipFiles = false) {
         anaphylaxis_code:        col(cv, 'anaphylaxis_code'),
         anaphylaxis_expiry:      parseDate(col(cv, 'date35')),
         child_protection_renewal:parseDate(col(cv, 'date__1')),
-        // NOTE: date_of_qualification and campus columns need to be added to Supabase schema
-        // date_of_qualification:   parseDate(col(cv, 'dateq20')),
-        // campus:                  col(cv, 'status8'),
+        date_of_qualification:   parseDate(col(cv, 'dateq20')),
+        campus:                  col(cv, 'status8'),
       };
 
       const [upserted] = await sbUpsert('staff_members', [staffRow], 'monday_id');

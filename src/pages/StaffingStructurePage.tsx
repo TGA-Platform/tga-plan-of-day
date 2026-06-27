@@ -47,6 +47,8 @@ interface StaffMemberRow {
   anaphylaxis_code?: string;
   anaphylaxis_expiry?: string;
   child_protection_renewal?: string;
+  date_of_qualification?: string;
+  campus?: string;
   ratio_50?: string;
   action?: string;
   // Documents from Supabase staff_documents table

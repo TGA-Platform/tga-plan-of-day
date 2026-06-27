@@ -83,6 +83,8 @@ function mapRow(row, docs) {
     anaphylaxis_code: row.anaphylaxis_code,
     anaphylaxis_expiry: row.anaphylaxis_expiry,
     child_protection_renewal: row.child_protection_renewal,
+    date_of_qualification: row.date_of_qualification,
+    campus: row.campus,
     docs:     rowDocs.filter(d => d.doc_type === 'main').map(d => ({ id: d.id, label: d.label, url: d.storage_path ? `/api/staffing-file?path=${encodeURIComponent(d.storage_path)}` : d.monday_url || '' })),
     certDocs: rowDocs.filter(d => d.doc_type === 'subitem').map(d => ({ id: d.id, label: d.label, url: d.storage_path ? `/api/staffing-file?path=${encodeURIComponent(d.storage_path)}` : d.monday_url || '' })),
   };
@@ -111,6 +113,8 @@ const EDITABLE_COLUMNS = [
   { id: 'anaphylaxis_code',  label: 'Anaphylaxis Code',         type: 'text' },
   { id: 'anaphylaxis_expiry',label: 'Anaphylaxis Expiry',       type: 'date' },
   { id: 'child_protection_renewal', label: 'Child Protection Renewal', type: 'date' },
+  { id: 'date_of_qualification', label: 'Date of Qualification', type: 'date' },
+  { id: 'campus', label: 'Campus', type: 'text' },
 ];
 
 // ── Main handler ───────────────────────────────────────────────────────────
