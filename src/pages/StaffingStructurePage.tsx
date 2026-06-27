@@ -199,12 +199,12 @@ function fmtDate(iso?: string | null) {
 }
 
 function CertDot({ expiry }: { expiry?: string | null }) {
-  if (!expiry) return <span className="w-2 h-2 rounded-full bg-gray-200 inline-block" title="Not recorded" />;
+  if (!expiry) return <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: '#d1d5db' }} title="Not recorded" />;
   const days = certDays(expiry);
-  if (days < 0) return <span className="w-2 h-2 rounded-full bg-red-500 inline-block" title={`Expired ${Math.abs(days)}d ago`} />;
-  if (days < 30) return <span className="w-2 h-2 rounded-full bg-red-400 inline-block" title={`${days}d remaining`} />;
-  if (days < 90) return <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" title={`${days}d`} />;
-  return <span className="w-2 h-2 rounded-full bg-green-400 inline-block" title={`Valid · ${days}d`} />;
+  if (days < 0) return <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: '#dc2626' }} title={`Expired ${Math.abs(days)}d ago`} />;
+  if (days < 30) return <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: '#dc2626' }} title={`${days}d remaining`} />;
+  if (days < 90) return <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: '#d97706' }} title={`${days}d`} />;
+  return <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: '#16a34a' }} title={`Valid · ${days}d`} />;
 }
 
 // ── Toast utility ──────────────────────────────────────────────────────────
@@ -256,10 +256,10 @@ function Modal({ isOpen, onClose, title, children, size = 'md' }: {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50" />
-      <div className={`relative bg-white rounded-2xl shadow-2xl w-full ${maxW} max-h-[90vh] overflow-y-auto`} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-          <h2 className="font-bold text-gray-900">{title}</h2>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400">
+      <div className={`relative w-full ${maxW} max-h-[90vh] overflow-y-auto`} style={{ backgroundColor: '#ffffff', borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.15)', border: '1px solid #E2F1DA' }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #E2F1DA' }}>
+          <h2 className="font-bold" style={{ color: '#050505' }}>{title}</h2>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full" style={{ color: '#596570' }}>
             <X size={16} />
           </button>
         </div>
@@ -404,11 +404,11 @@ function AccidentsSection({ staffId, staffName, centreId }: {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
-          <AlertTriangle size={14} className="text-orange-500" />
+        <h4 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: '#050505' }}>
+          <AlertTriangle size={14} style={{ color: '#d97706' }} />
           Workplace Accidents ({accidents.length})
         </h4>
-        <button onClick={openAdd} className="flex items-center gap-1 text-xs font-medium text-orange-700 bg-orange-50 hover:bg-orange-100 px-2.5 py-1.5 rounded-lg transition-colors">
+        <button onClick={openAdd} className="flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg transition-colors" style={{ color: '#d97706', backgroundColor: '#fffbeb', border: '1px solid #fde68a' }}>
           <Plus size={12} />
           Record
         </button>
@@ -421,9 +421,10 @@ function AccidentsSection({ staffId, staffName, centreId }: {
       ) : (
         <div className="space-y-2">
           {accidents.map(acc => (
-            <div key={acc.id} className="border border-gray-100 rounded-xl overflow-hidden">
+            <div key={acc.id} className="rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
               <button
-                className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 text-left"
+                className="w-full flex items-center gap-3 px-3 py-2.5 text-left"
+                style={{ backgroundColor: '#ffffff' }}
                 onClick={() => setExpanded(expanded === acc.id ? null : acc.id)}
               >
                 <div className="flex-1 min-w-0">
@@ -447,7 +448,7 @@ function AccidentsSection({ staffId, staffName, centreId }: {
                 {expanded === acc.id ? <ChevronDown size={14} className="text-gray-400 flex-shrink-0" /> : <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />}
               </button>
               {expanded === acc.id && (
-                <div className="px-3 pb-3 space-y-2 bg-gray-50 border-t border-gray-100">
+                <div className="px-3 pb-3 space-y-2" style={{ backgroundColor: '#F5FAF3', borderTop: '1px solid #E2F1DA' }}>
                   <div className="pt-2">
                     <InlineSelect
                       value={acc.status}
@@ -642,11 +643,11 @@ function IssuesSection({ staffId, staffName, centreId }: {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
-          <AlertCircle size={14} className="text-red-500" />
+        <h4 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: '#050505' }}>
+          <AlertCircle size={14} style={{ color: '#dc2626' }} />
           HR Issues ({issues.length})
         </h4>
-        <button onClick={openAdd} className="flex items-center gap-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-1.5 rounded-lg transition-colors">
+        <button onClick={openAdd} className="flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg transition-colors" style={{ color: '#dc2626', backgroundColor: '#fff5f5', border: '1px solid #fca5a5' }}>
           <Plus size={12} />
           Log Issue
         </button>
@@ -659,9 +660,10 @@ function IssuesSection({ staffId, staffName, centreId }: {
       ) : (
         <div className="space-y-2">
           {issues.map(issue => (
-            <div key={issue.id} className="border border-gray-100 rounded-xl overflow-hidden">
+            <div key={issue.id} className="rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
               <button
-                className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 text-left"
+                className="w-full flex items-center gap-3 px-3 py-2.5 text-left"
+                style={{ backgroundColor: '#ffffff' }}
                 onClick={() => setExpanded(expanded === issue.id ? null : issue.id)}
               >
                 <div className="flex-1 min-w-0">
@@ -687,7 +689,7 @@ function IssuesSection({ staffId, staffName, centreId }: {
                 {expanded === issue.id ? <ChevronDown size={14} className="text-gray-400 flex-shrink-0" /> : <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />}
               </button>
               {expanded === issue.id && (
-                <div className="px-3 pb-3 space-y-2 bg-gray-50 border-t border-gray-100">
+                <div className="px-3 pb-3 space-y-2" style={{ backgroundColor: '#F5FAF3', borderTop: '1px solid #E2F1DA' }}>
                   <div className="pt-2">
                     <InlineSelect
                       value={issue.status}
@@ -877,14 +879,15 @@ function StaffProfileDrawer({
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
       <div className="absolute inset-0 bg-black/30" />
       <div
-        className="relative w-full max-w-lg bg-white h-full overflow-y-auto shadow-2xl flex flex-col border-l border-gray-200"
+        className="relative w-full max-w-lg h-full overflow-y-auto flex flex-col"
+        style={{ backgroundColor: '#ffffff', boxShadow: '-4px 0 24px rgba(0,0,0,0.08)', borderLeft: '1px solid #E2F1DA' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="sticky top-0 z-10 bg-white px-5 pt-4 pb-3 border-b border-gray-100">
+        <div className="sticky top-0 z-10 px-5 pt-4 pb-3" style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #E2F1DA' }}>
           <div className="flex items-start justify-between gap-2">
             <div className="flex-1 min-w-0">
-              <h2 className="text-base font-bold text-gray-900">{local.name}</h2>
+              <h2 className="text-base font-bold" style={{ color: '#050505' }}>{local.name}</h2>
               <div className="flex flex-wrap gap-1.5 mt-1.5">
                 <InlineSelect
                   value={local.employment_status || 'Active'}
@@ -901,7 +904,7 @@ function StaffProfileDrawer({
                 {saving && <span className="text-xs text-gray-400 animate-pulse">Saving...</span>}
               </div>
             </div>
-            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 flex-shrink-0">
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full flex-shrink-0" style={{ color: '#596570' }}>
               <X size={16} />
             </button>
           </div>
@@ -911,7 +914,11 @@ function StaffProfileDrawer({
               <button
                 key={t}
                 onClick={() => setTab(t)}
-                className={`flex-1 py-1.5 text-xs font-semibold rounded-lg capitalize transition-colors ${tab === t ? 'bg-[#2d5c18] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                className="flex-1 py-1.5 text-xs font-semibold rounded-lg capitalize transition-colors"
+                style={tab === t
+                  ? { backgroundColor: '#2d5c18', color: '#ffffff' }
+                  : { backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }
+                }
               >
                 {t}
               </button>
@@ -925,10 +932,11 @@ function StaffProfileDrawer({
             <>
               {/* Move to room */}
               <section>
-                <h3 className="text-xs font-bold uppercase tracking-wider mb-2 text-gray-400">Room / Group</h3>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#596570' }}>Room / Group</h3>
                 <select
                   onChange={e => { if (e.target.value) handleMoveRoom(e.target.value); }}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none"
+                  className="w-full rounded-xl px-3 py-2 text-sm focus:outline-none"
+                  style={{ border: '1px solid #E2F1DA', backgroundColor: '#ffffff', color: '#050505' }}
                   defaultValue=""
                 >
                   <option value="">Move to room...</option>
@@ -942,13 +950,14 @@ function StaffProfileDrawer({
               {!editMode ? (
                 <section>
                   <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Employment</h3>
+                    <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: '#596570' }}>Employment</h3>
                     <button onClick={() => { setEditForm({ ...local }); setEditMode(true); }}
-                      className="flex items-center gap-1 text-xs text-[#2d5c18] hover:bg-[#2d5c18]/10 px-2 py-1 rounded-lg">
+                      className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg"
+                      style={{ color: '#2d5c18', backgroundColor: '#e8f5e0' }}>
                       <Pencil size={12} /> Edit
                     </button>
                   </div>
-                  <div className="rounded-xl overflow-hidden border border-gray-100">
+                  <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
                     {[
                       { label: 'Status', value: local.employment_status || 'Active' },
                       { label: 'Position', value: local.position },
@@ -959,26 +968,26 @@ function StaffProfileDrawer({
                       { label: 'Start Date', value: fmtDate(local.start_date) },
                       { label: 'End Date', value: local.end_date },
                     ].filter(r => r.value && r.value !== '—').map((row, i, arr) => (
-                      <div key={row.label} className={`flex items-center justify-between px-3 py-2 text-sm ${i < arr.length - 1 ? 'border-b border-gray-50' : ''}`}>
-                        <span className="text-gray-500">{row.label}</span>
-                        <span className="font-medium text-gray-900">{row.value}</span>
+                      <div key={row.label} className="flex items-center justify-between px-3 py-2 text-sm" style={{ borderBottom: i < arr.length - 1 ? '1px solid #F5FAF3' : 'none' }}>
+                        <span style={{ color: '#596570' }}>{row.label}</span>
+                        <span className="font-medium" style={{ color: '#050505' }}>{row.value}</span>
                       </div>
                     ))}
                   </div>
 
                   {/* Contact */}
                   {(local.email || local.mobile) && (
-                    <div className="mt-3 rounded-xl border border-gray-100 overflow-hidden">
+                    <div className="mt-3 rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
                       {local.email && (
-                        <div className="flex items-center justify-between px-3 py-2 text-sm border-b border-gray-50">
-                          <span className="text-gray-500">Email</span>
-                          <a href={`mailto:${local.email}`} className="text-[#2d5c18] hover:underline text-xs">{local.email}</a>
+                        <div className="flex items-center justify-between px-3 py-2 text-sm" style={{ borderBottom: '1px solid #F5FAF3' }}>
+                          <span style={{ color: '#596570' }}>Email</span>
+                          <a href={`mailto:${local.email}`} className="hover:underline text-xs" style={{ color: '#2d5c18' }}>{local.email}</a>
                         </div>
                       )}
                       {local.mobile && (
                         <div className="flex items-center justify-between px-3 py-2 text-sm">
-                          <span className="text-gray-500">Mobile</span>
-                          <a href={`tel:${local.mobile}`} className="text-[#2d5c18] hover:underline">{local.mobile}</a>
+                          <span style={{ color: '#596570' }}>Mobile</span>
+                          <a href={`tel:${local.mobile}`} className="hover:underline" style={{ color: '#2d5c18' }}>{local.mobile}</a>
                         </div>
                       )}
                     </div>
@@ -987,8 +996,8 @@ function StaffProfileDrawer({
               ) : (
                 <section>
                   <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Edit Profile</h3>
-                    <button onClick={() => setEditMode(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                    <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: '#596570' }}>Edit Profile</h3>
+                    <button onClick={() => setEditMode(false)} className="text-xs" style={{ color: '#596570' }}>Cancel</button>
                   </div>
                   <div className="space-y-3">
                     <div className="grid grid-cols-2 gap-3">
@@ -1055,10 +1064,10 @@ function StaffProfileDrawer({
                           value={editForm.end_date || ''} onChange={e => setEditForm(f => ({ ...f, end_date: e.target.value }))} />
                       </div>
                     </div>
-                    <div className="border-t border-gray-100 pt-3">
+                    <div className="pt-3" style={{ borderTop: '1px solid #E2F1DA' }}>
                       <div className="flex items-center gap-1.5 mb-2">
-                        <ShieldCheck size={13} className="text-gray-400" />
-                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Certifications</span>
+                        <ShieldCheck size={13} style={{ color: '#596570' }} />
+                        <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#596570' }}>Certifications</span>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         {[
@@ -1097,16 +1106,16 @@ function StaffProfileDrawer({
 
               {/* Compliance */}
               <section>
-                <h3 className="text-xs font-bold uppercase tracking-wider mb-2 text-gray-400 flex items-center gap-1.5">
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: '#596570' }}>
                   <ShieldCheck size={12} />
                   Compliance
                 </h3>
-                <div className="rounded-xl overflow-hidden border border-gray-100">
+                <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
                   {compItems.map((item, i) => {
                     const days = item.expiry ? certDays(item.expiry) : null;
                     const isExpired = days !== null && days < 0;
                     const isWarning = days !== null && days >= 0 && days < 90;
-                    const dotColor = isExpired ? '#ef4444' : isWarning ? '#f59e0b' : item.expiry ? '#22c55e' : '#d1d5db';
+                    const dotColor = isExpired ? '#dc2626' : isWarning ? '#d97706' : item.expiry ? '#16a34a' : '#d1d5db';
                     return (
                       <div key={item.label}
                         className={`flex items-start gap-3 px-3 py-2.5 text-sm ${i < compItems.length - 1 ? 'border-b border-gray-50' : ''}`}
@@ -1164,16 +1173,20 @@ function StaffCard({
 
   return (
     <div
-      className={`bg-white rounded-2xl border shadow-sm p-3.5 flex flex-col gap-2 transition-all ${
-        isResigned ? 'border-amber-200 bg-amber-50/30' : isExited ? 'border-gray-100 opacity-70' : 'border-gray-100'
-      }`}
+      className="flex flex-col gap-2 transition-all p-3.5"
+      style={isResigned
+        ? { backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }
+        : isExited
+        ? { backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', opacity: 0.7 }
+        : { backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }
+      }
     >
       {/* Name row */}
       <div className="flex items-start justify-between gap-2">
         <button className="flex-1 min-w-0 text-left" onClick={() => onSelect('profile')}>
-          <div className="text-sm font-bold text-gray-900 hover:text-[#2d5c18] truncate">{staff.name}</div>
+          <div className="text-sm font-bold truncate" style={{ color: '#050505' }}>{staff.name}</div>
           {staff.qualification && (
-            <span className="text-xs text-indigo-600 font-medium">{staff.qualification}</span>
+            <span className="text-xs font-medium" style={{ color: '#596570' }}>{staff.qualification}</span>
           )}
         </button>
         <div className="flex gap-1">
@@ -1206,23 +1219,23 @@ function StaffCard({
 
       {/* Days worked */}
       {staff.days_per_week && (
-        <div className="text-xs text-gray-500">
+        <div className="text-xs" style={{ color: '#596570' }}>
           <span className="font-medium">Days:</span> {staff.days_per_week}
-          {staff.min_hours_pw && <span className="ml-2 text-gray-400">{staff.min_hours_pw}h/wk</span>}
+          {staff.min_hours_pw && <span className="ml-2">{staff.min_hours_pw}h/wk</span>}
         </div>
       )}
 
       {/* Compliance dots */}
-      <div className="flex items-center gap-1.5 border-t border-gray-50 pt-2 mt-1">
-        <ShieldCheck size={11} className="text-gray-300 flex-shrink-0" />
+      <div className="flex items-center gap-1.5 pt-2 mt-1" style={{ borderTop: '1px solid #E2F1DA' }}>
+        <ShieldCheck size={11} style={{ color: '#E2F1DA' }} className="flex-shrink-0" />
         <CertDot expiry={staff.wwcc_expiry} />
-        <span className="text-xs text-gray-300">WWCC</span>
+        <span className="text-xs" style={{ color: '#596570' }}>WWCC</span>
         <CertDot expiry={staff.first_aid_expiry} />
-        <span className="text-xs text-gray-300">FA</span>
+        <span className="text-xs" style={{ color: '#596570' }}>FA</span>
         <CertDot expiry={staff.cpr_expiry} />
-        <span className="text-xs text-gray-300">CPR</span>
+        <span className="text-xs" style={{ color: '#596570' }}>CPR</span>
         <CertDot expiry={staff.anaphylaxis_expiry} />
-        <span className="text-xs text-gray-300">Ana</span>
+        <span className="text-xs" style={{ color: '#596570' }}>Ana</span>
       </div>
     </div>
   );
@@ -1751,64 +1764,68 @@ export default function StaffingStructurePage() {
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Staffing Structure</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Staff assigned by room — compliance, certifications &amp; HR
-            {data?.fetchedAt && (
-              <span className="ml-2 text-gray-400">
-                · {new Date(data.fetchedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
-                {' · '}<button onClick={() => loadData(centreId)} className="underline hover:no-underline">Refresh</button>
-              </span>
+      <div className="mb-2">
+        <div className="flex items-start justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold" style={{ color: '#050505' }}>Staffing Structure</h1>
+            <p className="text-sm mt-1" style={{ color: '#596570' }}>
+              Manage staff, rooms, compliance and HR records
+              {data?.fetchedAt && (
+                <span className="ml-2" style={{ color: '#596570' }}>
+                  · {new Date(data.fetchedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
+                  {' · '}<button onClick={() => loadData(centreId)} className="underline hover:no-underline">Refresh</button>
+                </span>
+              )}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {centreId !== ALL && data && (
+              <button
+                onClick={() => setAddStaffTarget({})}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg transition-colors"
+                style={{ backgroundColor: '#2d5c18', color: '#fff' }}
+              >
+                <Plus size={14} />
+                Add Staff
+              </button>
             )}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {centreId !== ALL && data && (
-            <button
-              onClick={() => setAddStaffTarget({})}
-              className="flex items-center gap-1.5 px-4 py-2 bg-[#2d5c18] text-white text-sm font-semibold rounded-xl hover:bg-[#2d5c18]/90 transition-colors"
-            >
-              <Plus size={14} />
-              Add Staff
-            </button>
-          )}
-          {multiAccess && (
-            <select
-              value={centreId}
-              onChange={e => { setCentreId(e.target.value); setCollapsedRooms(new Set()); setSearch(''); }}
-              className="text-sm border border-gray-200 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
-            >
-              <option value={ALL}>All Centres</option>
-              {accessible.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          )}
-          {!multiAccess && accessible.length === 1 && (
-            <div className="flex items-center px-3 py-2 bg-[#2d5c18]/10 rounded-xl text-sm text-[#2d5c18] font-medium">
-              {accessible[0].name}
-            </div>
-          )}
+            {multiAccess && (
+              <select
+                value={centreId}
+                onChange={e => { setCentreId(e.target.value); setCollapsedRooms(new Set()); setSearch(''); }}
+                className="text-sm rounded-lg px-3 py-2 focus:outline-none"
+                style={{ border: '1px solid #E2F1DA', backgroundColor: '#ffffff', color: '#050505' }}
+              >
+                <option value={ALL}>All Centres</option>
+                {accessible.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            )}
+            {!multiAccess && accessible.length === 1 && (
+              <div className="flex items-center px-3 py-2 rounded-lg text-sm font-medium" style={{ backgroundColor: '#e8f5e0', color: '#2d5c18', border: '1px solid #E2F1DA' }}>
+                {accessible[0].name}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Loading / Error */}
       {loading && (
-        <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
-          <div className="text-sm text-gray-400 animate-pulse">Loading {centreName}...</div>
+        <div className="rounded-2xl p-10 text-center" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+          <div className="text-sm animate-pulse" style={{ color: '#596570' }}>Loading {centreName}...</div>
         </div>
       )}
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-sm text-red-700">
+        <div className="rounded-2xl p-4 text-sm" style={{ backgroundColor: '#fff5f5', border: '1px solid #fca5a5', borderRadius: 12, color: '#dc2626' }}>
           <strong>Failed to load:</strong> {error}
         </div>
       )}
 
       {/* All centres view */}
       {centreId === ALL && !loading && (
-        <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center">
-          <Users size={32} className="text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500 text-sm">Select a centre from the dropdown to view staffing.</p>
+        <div className="p-8 text-center rounded-2xl" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+          <Users size={32} className="mx-auto mb-3" style={{ color: '#E2F1DA' }} />
+          <p className="text-sm" style={{ color: '#596570' }}>Select a centre from the dropdown to view staffing.</p>
         </div>
       )}
 
@@ -1818,48 +1835,51 @@ export default function StaffingStructurePage() {
           {/* Summary stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {[
-              { label: 'Active Staff', value: allActive.length, color: 'text-[#2d5c18]' },
-              { label: 'Rooms', value: activeGroups.length },
-              { label: 'Open Positions', value: openPositionCount, color: openPositionCount > 0 ? 'text-emerald-600' : undefined },
-              { label: 'Cert Alerts', value: certAlerts, color: certAlerts > 0 ? 'text-orange-600' : undefined },
+              { label: 'Active Staff', value: allActive.length, valueColor: '#2d5c18' },
+              { label: 'Rooms', value: activeGroups.length, valueColor: '#050505' },
+              { label: 'Open Positions', value: openPositionCount, valueColor: openPositionCount > 0 ? '#16a34a' : '#050505' },
+              { label: 'Cert Alerts', value: certAlerts, valueColor: certAlerts > 0 ? '#d97706' : '#050505' },
             ].map(s => (
-              <div key={s.label} className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4">
-                <div className={`text-2xl font-bold ${s.color || 'text-gray-900'}`}>{s.value}</div>
-                <div className="text-xs text-gray-500 font-medium mt-0.5">{s.label}</div>
+              <div key={s.label} className="px-5 py-4" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+                <div className="text-2xl font-bold" style={{ color: s.valueColor }}>{s.value}</div>
+                <div className="text-xs font-medium mt-0.5" style={{ color: '#596570' }}>{s.label}</div>
               </div>
             ))}
           </div>
 
           {/* Compliance legend */}
-          <div className="flex items-center gap-4 text-xs text-gray-500">
-            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-red-500" /><span>Expired or &lt;30d</span></div>
-            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-amber-400" /><span>Expiring 30–90d</span></div>
-            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-green-400" /><span>Current (&gt;90d)</span></div>
-            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-gray-200" /><span>Not recorded</span></div>
+          <div className="flex items-center gap-4 text-xs" style={{ color: '#596570' }}>
+            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: '#dc2626' }} /><span>Expired or &lt;30d</span></div>
+            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: '#d97706' }} /><span>Expiring 30–90d</span></div>
+            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: '#16a34a' }} /><span>Current (&gt;90d)</span></div>
+            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: '#d1d5db' }} /><span>Not recorded</span></div>
           </div>
 
           {/* Search + Controls */}
           <div className="flex items-center gap-3 flex-wrap">
             <div className="relative flex-1 min-w-[200px] max-w-sm">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#596570' }} />
               <input
                 type="text"
                 placeholder="Search staff by name, position or qualification..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                className="w-full pl-9 pr-3 py-2 text-sm rounded-lg focus:outline-none"
+                style={{ border: '1px solid #E2F1DA', backgroundColor: '#ffffff', color: '#050505' }}
               />
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setViewMode('card')}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-colors ${viewMode === 'card' ? 'bg-[#2d5c18] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                style={viewMode === 'card' ? { backgroundColor: '#2d5c18', color: '#fff' } : { backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}
               >
                 <LayoutGrid size={15} /> Cards
               </button>
               <button
                 onClick={() => setViewMode('list')}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-colors ${viewMode === 'list' ? 'bg-[#2d5c18] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                style={viewMode === 'list' ? { backgroundColor: '#2d5c18', color: '#fff' } : { backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}
               >
                 <List size={15} /> List
               </button>
@@ -1867,13 +1887,15 @@ export default function StaffingStructurePage() {
             <div className="flex items-center gap-2">
               <button
                 onClick={expandAll}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                style={{ backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}
               >
                 <ChevronsDown size={15} /> Expand All
               </button>
               <button
                 onClick={collapseAll}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                style={{ backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}
               >
                 <ChevronsUp size={15} /> Collapse All
               </button>
@@ -1882,24 +1904,26 @@ export default function StaffingStructurePage() {
 
           {/* Open Positions Section */}
           {(openPositions.length > 0 || true) && (
-            <div className="bg-white rounded-2xl border border-emerald-100 shadow-sm overflow-hidden">
+            <div className="overflow-hidden" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
               <button
                 onClick={() => setPositionsCollapsed(c => !c)}
-                className="w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-emerald-50/50 transition-colors"
+                className="w-full flex items-center gap-3 px-5 py-4 text-left transition-colors"
+                style={{ backgroundColor: positionsCollapsed ? '#ffffff' : '#F5FAF3' }}
               >
-                {positionsCollapsed ? <ChevronRight size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
-                <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center">
-                  <Briefcase size={16} className="text-emerald-700" />
+                {positionsCollapsed ? <ChevronRight size={16} style={{ color: '#596570' }} /> : <ChevronDown size={16} style={{ color: '#596570' }} />}
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ backgroundColor: '#e8f5e0' }}>
+                  <Briefcase size={16} style={{ color: '#2d5c18' }} />
                 </div>
                 <div className="flex-1 flex items-center gap-3">
-                  <span className="text-sm font-semibold text-gray-900">Open Positions</span>
+                  <span className="text-sm font-semibold" style={{ color: '#050505' }}>Open Positions</span>
                   {openPositionCount > 0 && (
-                    <span className="text-xs font-semibold px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">{openPositionCount} active</span>
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: '#e8f5e0', color: '#2d5c18' }}>{openPositionCount} active</span>
                   )}
                 </div>
                 <button
                   onClick={e => { e.stopPropagation(); setPositionModal({}); }}
-                  className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition-colors"
+                  className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                  style={{ backgroundColor: '#e8f5e0', color: '#2d5c18', border: '1px solid #D0E8B8' }}
                 >
                   <Plus size={13} />
                   Add Position
@@ -1909,7 +1933,7 @@ export default function StaffingStructurePage() {
               {!positionsCollapsed && (
                 <div className="px-5 pb-5">
                   {openPositions.length === 0 ? (
-                    <p className="text-sm text-gray-400 py-4 text-center">No open positions recorded</p>
+                    <p className="text-sm py-4 text-center" style={{ color: '#596570' }}>No open positions recorded</p>
                   ) : (
                     <div className="space-y-2">
                       {openPositions.map(pos => {
@@ -1917,17 +1941,21 @@ export default function StaffingStructurePage() {
                         return (
                           <div
                             key={pos.id}
-                            className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${pos.status === 'Filled' ? 'bg-gray-50 border-gray-100 opacity-60' : 'bg-white border-gray-100 hover:border-gray-200'}`}
+                            className="flex items-center gap-3 p-3 rounded-xl transition-all"
+                            style={pos.status === 'Filled'
+                              ? { backgroundColor: '#F5FAF3', border: '1px solid #E2F1DA', opacity: 0.6 }
+                              : { backgroundColor: '#ffffff', border: '1px solid #E2F1DA' }
+                            }
                           >
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
-                                <span className="text-sm font-semibold text-gray-900">{pos.title}</span>
-                                {room && <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{room.title}</span>}
+                                <span className="text-sm font-semibold" style={{ color: '#050505' }}>{pos.title}</span>
+                                {room && <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#e8f5e0', color: '#2d5c18' }}>{room.title}</span>}
                               </div>
                               {pos.qualification_required && (
-                                <div className="text-xs text-gray-500 mt-0.5">{pos.qualification_required}</div>
+                                <div className="text-xs mt-0.5" style={{ color: '#596570' }}>{pos.qualification_required}</div>
                               )}
-                              {pos.notes && <div className="text-xs text-gray-400 italic mt-0.5">{pos.notes}</div>}
+                              {pos.notes && <div className="text-xs italic mt-0.5" style={{ color: '#596570' }}>{pos.notes}</div>}
                             </div>
                             <InlineSelect
                               value={pos.status}
@@ -1937,13 +1965,15 @@ export default function StaffingStructurePage() {
                             />
                             <button
                               onClick={() => setPositionModal({ existing: pos })}
-                              className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                              className="p-1.5 rounded-lg transition-colors"
+                              style={{ color: '#596570' }}
                             >
                               <Pencil size={13} />
                             </button>
                             <button
                               onClick={() => handleDeletePosition(pos.id)}
-                              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              className="p-1.5 rounded-lg transition-colors"
+                              style={{ color: '#596570' }}
                             >
                               <Trash2 size={13} />
                             </button>
@@ -1964,22 +1994,23 @@ export default function StaffingStructurePage() {
               const staffCount = group.staff.length;
 
               return (
-                <div key={group.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                <div key={group.id} className="overflow-hidden" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
                   {/* Room header */}
                   <div
-                    className="flex items-center justify-between px-4 py-3 border-l-4 cursor-pointer hover:opacity-90 transition-opacity"
-                    style={{ borderColor: group.color || '#4a7a3a', backgroundColor: (group.color || '#4a7a3a') + '18' }}
+                    className="flex items-center justify-between px-4 py-3 cursor-pointer transition-opacity"
+                    style={{ backgroundColor: '#F5FAF3', borderBottom: '1px solid #E2F1DA', borderLeft: `4px solid ${group.color || '#2d5c18'}` }}
                     onClick={() => !searchLower && toggleRoom(group.id)}
                   >
                     <div className="flex items-center gap-3">
-                      {!searchLower && (isCollapsed ? <ChevronRight size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />)}
-                      <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', backgroundColor: group.color || '#4a7a3a', flexShrink: 0 }} />
-                      <span className="text-sm font-bold text-gray-800">{group.title}</span>
-                      <span className="text-xs font-semibold text-gray-500">{staffCount} staff</span>
+                      {!searchLower && (isCollapsed ? <ChevronRight size={14} style={{ color: '#596570' }} /> : <ChevronDown size={14} style={{ color: '#596570' }} />)}
+                      <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', backgroundColor: group.color || '#2d5c18', flexShrink: 0 }} />
+                      <span className="text-sm font-bold" style={{ color: '#050505' }}>{group.title}</span>
+                      <span className="text-xs font-semibold" style={{ color: '#596570' }}>{staffCount} staff</span>
                     </div>
                     <button
                       onClick={e => { e.stopPropagation(); setAddStaffTarget({ groupId: group.id }); }}
-                      className="flex items-center gap-1 text-xs text-[#2d5c18] hover:bg-[#2d5c18]/10 px-2 py-1 rounded-lg transition-colors font-medium"
+                      className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg transition-colors font-medium"
+                      style={{ color: '#2d5c18', backgroundColor: '#e8f5e0', border: '1px solid #D0E8B8' }}
                     >
                       <Plus size={12} />
                       Add Staff
@@ -1989,11 +2020,11 @@ export default function StaffingStructurePage() {
                   {!isCollapsed && (
                     <div className="p-3">
                       {group.staff.length === 0 ? (
-                        <p className="text-xs text-gray-400 py-2 pl-1">No staff in this room</p>
+                        <p className="text-xs py-2 pl-1" style={{ color: '#596570' }}>No staff in this room</p>
                       ) : viewMode === 'list' ? (
                         <table className="w-full text-sm">
                           <thead>
-                            <tr className="bg-gray-50 text-left text-xs font-semibold text-gray-500">
+                            <tr className="text-left text-xs font-semibold" style={{ backgroundColor: '#F5FAF3', color: '#596570' }}>
                               <th className="px-3 py-2">Name</th>
                               <th className="px-3 py-2">Position</th>
                               <th className="px-3 py-2">Qualification</th>
@@ -2055,14 +2086,14 @@ export default function StaffingStructurePage() {
 
           {/* Exited Staff */}
           {exitedGroup && exitedGroup.staff.length > 0 && (
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="overflow-hidden" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
               <button
                 onClick={() => setExitedCollapsed(c => !c)}
-                className="w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-gray-50 transition-colors"
+                className="w-full flex items-center gap-3 px-5 py-4 text-left transition-colors"
               >
-                {exitedCollapsed ? <ChevronRight size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
-                <span className="text-sm font-semibold text-gray-500">Exited Staff</span>
-                <span className="text-xs font-medium px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">{exitedGroup.staff.length}</span>
+                {exitedCollapsed ? <ChevronRight size={16} style={{ color: '#596570' }} /> : <ChevronDown size={16} style={{ color: '#596570' }} />}
+                <span className="text-sm font-semibold" style={{ color: '#596570' }}>Exited Staff</span>
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}>{exitedGroup.staff.length}</span>
               </button>
               {!exitedCollapsed && (
                 <div className="px-5 pb-5">
