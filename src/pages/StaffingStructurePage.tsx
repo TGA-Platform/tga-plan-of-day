@@ -2853,12 +2853,35 @@ export default function StaffingStructurePage() {
                     try {
                       const { staffId, sourceGroupId } = JSON.parse(raw) as { staffId: string; sourceGroupId: string };
                       if (sourceGroupId === group.id) return;
-                      // API expects groupId not newGroupId
-                      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'move_staff', staffId, groupId: group.id, centreId });
-                      loadData(centreId);
+                      
+                      // Optimistic UI update — move staff locally first
+                      setData(prev => {
+                        if (!prev) return prev;
+                        const sourceGroup = prev.groups.find(g => g.id === sourceGroupId);
+                        const targetGroup = prev.groups.find(g => g.id === group.id);
+                        if (!sourceGroup || !targetGroup) return prev;
+                        const staffIndex = sourceGroup.staff.findIndex(s => s.id === staffId);
+                        if (staffIndex === -1) return prev;
+                        const staff = sourceGroup.staff[staffIndex];
+                        // Update staff's group references
+                        const updatedStaff = { ...staff, group_id: group.id, group_title: targetGroup.title, group_color: targetGroup.color };
+                        return {
+                          ...prev,
+                          groups: prev.groups.map(g => {
+                            if (g.id === sourceGroupId) return { ...g, staff: g.staff.filter(s => s.id !== staffId) };
+                            if (g.id === group.id) return { ...g, staff: [...g.staff, updatedStaff] };
+                            return g;
+                          })
+                        };
+                      });
                       showToast('Staff moved to ' + group.title);
+                      
+                      // API call in background
+                      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'move_staff', staffId, groupId: group.id, centreId });
                     } catch (err) {
                       showToast((err as Error).message || 'Failed to move staff', 'error');
+                      // Revert on error
+                      loadData(centreId);
                     }
                   }}
                 >
