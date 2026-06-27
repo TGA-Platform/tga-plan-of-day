@@ -8,6 +8,7 @@ import {
 import { getUser } from '../auth';
 import { CENTRES } from '../config';
 import Layout from '../components/Layout';
+import { calculateCompliance } from '../compliance-requirements';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -1353,65 +1354,59 @@ function StaffProfileDrawer({
                 </section>
               )}
 
-              {/* Compliance Checklist */}
+              {/* Compliance Checklist - Dynamic based on position */}
               <section>
                 <h3 className="text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-1.5" style={{ color: '#596570' }}>
                   <ShieldCheck size={12} />
-                  Compliance Checklist
+                  Certifications
                 </h3>
                 <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
-                  {([
-                    { label: 'WWCC', expiry: local.wwcc_expiry, extra: local.wwcc_number ? `#${local.wwcc_number}` : null },
-                    { label: 'First Aid', expiry: local.first_aid_expiry, extra: local.first_aid_code || null },
-                    { label: 'CPR', expiry: local.cpr_expiry, extra: local.cpr_code || null },
-                    { label: 'Anaphylaxis', expiry: local.anaphylaxis_expiry, extra: local.anaphylaxis_code || null },
-                    { label: 'Qualification', expiry: null, extra: local.qualification || null },
-                  ] as Array<{ label: string; expiry?: string | null; extra?: string | null }>).map((item, i, arr) => {
-                    const days = item.expiry ? certDays(item.expiry) : null;
-                    let statusDot: string;
-                    let statusLabel: string;
-                    let statusColor: string;
-                    if (item.label === 'Qualification') {
-                      if (item.extra) {
-                        statusDot = '#16a34a'; statusLabel = 'On file'; statusColor = '#16a34a';
-                      } else {
-                        statusDot = '#dc2626'; statusLabel = 'Missing'; statusColor = '#dc2626';
-                      }
-                    } else if (days === null || days === Infinity) {
-                      statusDot = '#dc2626'; statusLabel = 'Missing'; statusColor = '#dc2626';
-                    } else if (days < 0) {
-                      statusDot = '#dc2626'; statusLabel = 'Expired'; statusColor = '#dc2626';
-                    } else if (days < 90) {
-                      statusDot = '#d97706'; statusLabel = 'Expiring soon'; statusColor = '#d97706';
-                    } else {
-                      statusDot = '#16a34a'; statusLabel = 'Valid'; statusColor = '#16a34a';
+                  {(() => {
+                    const compliance = calculateCompliance(local);
+                    const certItems = compliance.items.filter(i => i.category === 'certification');
+                    if (certItems.length === 0) {
+                      return <div className="px-3 py-2.5 text-xs text-gray-400">No certification requirements for this position</div>;
                     }
-                    return (
-                      <div
-                        key={item.label}
-                        className="flex items-center gap-3 px-3 py-2.5"
-                        style={{ borderBottom: i < arr.length - 1 ? '1px solid #F5FAF3' : 'none' }}
-                      >
-                        {/* Status dot */}
-                        <span
-                          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: statusDot }}
-                        />
-                        {/* Label */}
-                        <span className="text-sm font-medium flex-1" style={{ color: '#050505' }}>{item.label}</span>
-                        {/* Extra (number/code) */}
-                        {item.extra && item.label !== 'Qualification' && (
-                          <span className="text-xs" style={{ color: '#596570' }}>{item.extra}</span>
-                        )}
-                        {/* Expiry date */}
-                        {item.expiry && (
-                          <span className="text-xs" style={{ color: '#596570' }}>{fmtDate(item.expiry)}</span>
-                        )}
-                        {/* Status label */}
-                        <span className="text-xs font-semibold" style={{ color: statusColor }}>{statusLabel}</span>
-                      </div>
-                    );
-                  })}
+                    return certItems.map((item, i, arr) => {
+                      const days = item.daysRemaining;
+                      let statusDot: string;
+                      let statusLabel: string;
+                      let statusColor: string;
+                      if (!item.hasItem) {
+                        statusDot = '#dc2626'; statusLabel = 'Missing'; statusColor = '#dc2626';
+                      } else if (days !== null && days < 0) {
+                        statusDot = '#dc2626'; statusLabel = 'Expired'; statusColor = '#dc2626';
+                      } else if (days !== null && days < 90) {
+                        statusDot = '#d97706'; statusLabel = 'Expiring soon'; statusColor = '#d97706';
+                      } else {
+                        statusDot = '#16a34a'; statusLabel = 'Valid'; statusColor = '#16a34a';
+                      }
+                      const extra = item.id === 'wwcc' ? (local.wwcc_number ? `#${local.wwcc_number}` : null)
+                        : item.id === 'first_aid' ? (local.first_aid_code || null)
+                        : item.id === 'cpr' ? (local.cpr_code || null)
+                        : item.id === 'anaphylaxis' ? (local.anaphylaxis_code || null)
+                        : null;
+                      const expiry = item.id === 'wwcc' ? local.wwcc_expiry
+                        : item.id === 'first_aid' ? local.first_aid_expiry
+                        : item.id === 'cpr' ? local.cpr_expiry
+                        : item.id === 'anaphylaxis' ? local.anaphylaxis_expiry
+                        : item.id === 'child_protection' ? local.child_protection_renewal
+                        : null;
+                      return (
+                        <div
+                          key={item.id}
+                          className="flex items-center gap-3 px-3 py-2.5"
+                          style={{ borderBottom: i < arr.length - 1 ? '1px solid #F5FAF3' : 'none' }}
+                        >
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: statusDot }} />
+                          <span className="text-sm font-medium flex-1" style={{ color: '#050505' }}>{item.label}</span>
+                          {extra && <span className="text-xs" style={{ color: '#596570' }}>{extra}</span>}
+                          {expiry && <span className="text-xs" style={{ color: '#596570' }}>{fmtDate(expiry)}</span>}
+                          <span className="text-xs font-semibold" style={{ color: statusColor }}>{statusLabel}</span>
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
               </section>
 
@@ -1438,41 +1433,19 @@ function StaffProfileDrawer({
                 </div>
               </section>
 
-              {/* Audit Checklist */}
+              {/* Audit Checklist - Dynamic based on position */}
               {(() => {
-                const checks = [
-                  { label: 'WWCC', expiry: local.wwcc_expiry, hasDoc: !!local.certDocs?.find(d => /wwcc/i.test(d.label)) },
-                  { label: 'First Aid', expiry: local.first_aid_expiry, hasDoc: !!local.certDocs?.find(d => /first.?aid/i.test(d.label)) },
-                  { label: 'CPR', expiry: local.cpr_expiry, hasDoc: !!local.certDocs?.find(d => /cpr/i.test(d.label)) },
-                  { label: 'Anaphylaxis', expiry: local.anaphylaxis_expiry, hasDoc: !!local.certDocs?.find(d => /anaphylaxis/i.test(d.label)) },
-                  { label: 'Child Protection', expiry: local.child_protection_renewal, hasDoc: !!local.certDocs?.find(d => /child.?prot/i.test(d.label)) },
-                  { label: 'Qualification Doc', expiry: null, hasDoc: !!local.docs?.find(d => /qualif|transcript/i.test(d.label)) },
-                  { label: 'Induction', expiry: null, hasDoc: !!local.docs?.find(d => /induction/i.test(d.label)) },
-                  { label: 'Policy Kit', expiry: null, hasDoc: !!local.docs?.find(d => /policy/i.test(d.label)) },
-                  { label: 'Staff Record', expiry: null, hasDoc: !!local.docs?.find(d => /record/i.test(d.label)) },
-                  { label: 'Job Description', expiry: null, hasDoc: !!local.docs?.find(d => /job.?desc/i.test(d.label)) },
-                  { label: 'Food Handler', expiry: null, hasDoc: !!local.docs?.find(d => /food/i.test(d.label)) },
-
-                ];
-                const scores = checks.map(c => {
-                  if (c.expiry) {
-                    const d = certDays(c.expiry);
-                    if (d < 0) return 'red';
-                    if (d < 90) return 'amber';
-                    return 'green';
-                  }
-                  return c.hasDoc ? 'green' : 'red';
-                });
-                const greenCount = scores.filter(s => s === 'green').length;
-                const amberCount = scores.filter(s => s === 'amber').length;
-                const redCount = scores.filter(s => s === 'red').length;
-                const pct = Math.round((greenCount / checks.length) * 100);
+                const compliance = calculateCompliance(local);
+                const checks = compliance.items;
+                const amberCount = checks.filter(c => c.status === 'expiring').length;
+                const redCount = checks.filter(c => c.status === 'expired' || c.status === 'missing').length;
+                const pct = compliance.score;
                 return (
                   <section>
                     <h3 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center justify-between" style={{ color: '#596570' }}>
-                      <span className="flex items-center gap-1.5"><ShieldCheck size={12} /> Audit Checklist</span>
+                      <span className="flex items-center gap-1.5"><ShieldCheck size={12} /> Compliance Audit</span>
                       <span className="text-xs font-bold" style={{ color: pct === 100 ? '#16a34a' : pct >= 70 ? '#d97706' : '#dc2626' }}>
-                        {greenCount}/{checks.length} on file
+                        {pct}% Compliant
                       </span>
                     </h3>
                     {/* Score bar */}
@@ -1481,17 +1454,22 @@ function StaffProfileDrawer({
                     </div>
                     <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
                       {checks.map((c, i) => {
-                        const s = scores[i];
+                        const s = c.status;
+                        const isMandatory = c.isMandatory;
                         return (
-                          <div key={c.label} className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: i < checks.length - 1 ? '1px solid #F5FAF3' : 'none' }}>
-                            {s === 'green' && <CheckCircle size={13} style={{ color: '#16a34a', flexShrink: 0 }} />}
-                            {s === 'amber' && <AlertTriangle size={13} style={{ color: '#d97706', flexShrink: 0 }} />}
-                            {s === 'red' && <XCircle size={13} style={{ color: '#dc2626', flexShrink: 0 }} />}
-                            <span className="text-xs flex-1" style={{ color: s === 'red' ? '#dc2626' : s === 'amber' ? '#d97706' : '#050505' }}>
+                          <div key={c.id} className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: i < checks.length - 1 ? '1px solid #F5FAF3' : 'none' }}>
+                            {s === 'valid' && <CheckCircle size={13} style={{ color: '#16a34a', flexShrink: 0 }} />}
+                            {s === 'expiring' && <AlertTriangle size={13} style={{ color: '#d97706', flexShrink: 0 }} />}
+                            {(s === 'expired' || s === 'missing') && <XCircle size={13} style={{ color: isMandatory ? '#dc2626' : '#d1d5db', flexShrink: 0 }} />}
+                            <span className="text-xs flex-1" style={{ color: s === 'expired' || (s === 'missing' && isMandatory) ? '#dc2626' : s === 'expiring' ? '#d97706' : '#050505' }}>
                               {c.label}
+                              {!isMandatory && <span className="ml-1 text-gray-400">(opt)</span>}
                             </span>
-                            {c.expiry && (
-                              <span className="text-xs" style={{ color: '#596570' }}>{fmtDate(c.expiry)}</span>
+                            {c.daysRemaining !== null && c.daysRemaining < 90 && c.daysRemaining >= 0 && (
+                              <span className="text-xs font-medium" style={{ color: '#d97706' }}>{c.daysRemaining}d</span>
+                            )}
+                            {c.daysRemaining !== null && c.daysRemaining < 0 && (
+                              <span className="text-xs font-medium" style={{ color: '#dc2626' }}>Expired</span>
                             )}
                           </div>
                         );
