@@ -2501,7 +2501,7 @@ export default function StaffingStructurePage() {
             qualification_required: sm.qualification || '',
             room_id: sm.group_id || undefined,
             status: 'Open',
-            notes: `Backfill for ${staffName} — last day ${formattedDate}${data.notes ? `. ${data.notes}` : ''}`,
+            notes: `${sm.position || 'Educator'}${sm.qualification ? ` (${sm.qualification})` : ''} — Replacement for ${staffName}. Last day ${formattedDate}${data.notes ? `. ${data.notes}` : ''}`,
           });
         } catch {
           // non-fatal — open-positions endpoint may not exist yet
