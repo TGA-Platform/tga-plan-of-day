@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
-  Users, ChevronDown, ChevronRight, ShieldCheck, AlertTriangle,
+  ChevronDown, ChevronRight, ShieldCheck, AlertTriangle,
   Pencil, Plus, Trash2, Briefcase, UserMinus, Search, List, LayoutGrid,
   ChevronsDown, ChevronsUp, X, AlertCircle, CheckCircle, XCircle, Stethoscope,
   FileText, ExternalLink, Eye,
@@ -1729,69 +1729,6 @@ interface CentreSummary {
   error?: string;
 }
 
-function ComplianceIndicator({ health }: { health: 'green' | 'amber' | 'red' }) {
-  const config = {
-    green: { label: 'Compliant', bg: '#dcfce7', color: '#166534', dot: '#16a34a' },
-    amber: { label: 'Some Alerts', bg: '#fffbeb', color: '#92400e', dot: '#d97706' },
-    red:   { label: 'Action Needed', bg: '#fef2f2', color: '#991b1b', dot: '#dc2626' },
-  }[health];
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-1 rounded-full" style={{ backgroundColor: config.bg, color: config.color }}>
-      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: config.dot }} />
-      {config.label}
-    </span>
-  );
-}
-
-function CentreSummaryCard({ summary, onSelect }: { summary: CentreSummary; onSelect: () => void }) {
-  if (summary.loading) {
-    return (
-      <div className="p-5 animate-pulse" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
-        <div className="h-4 bg-gray-200 rounded mb-3 w-3/4" />
-        <div className="grid grid-cols-2 gap-2">
-          <div className="h-10 bg-gray-100 rounded" />
-          <div className="h-10 bg-gray-100 rounded" />
-        </div>
-      </div>
-    );
-  }
-  return (
-    <button
-      onClick={onSelect}
-      className="text-left w-full p-5 transition-all hover:shadow-md"
-      style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
-    >
-      <div className="flex items-start justify-between gap-2 mb-3">
-        <h3 className="text-sm font-bold" style={{ color: '#050505' }}>{summary.centreName}</h3>
-        <ComplianceIndicator health={summary.complianceHealth} />
-      </div>
-      {summary.error ? (
-        <p className="text-xs" style={{ color: '#dc2626' }}>Failed to load</p>
-      ) : (
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-xl px-3 py-2" style={{ backgroundColor: '#F5FAF3', border: '1px solid #E2F1DA' }}>
-            <div className="text-lg font-bold" style={{ color: '#2d5c18' }}>{summary.activeStaff}</div>
-            <div className="text-xs" style={{ color: '#596570' }}>Active Staff</div>
-          </div>
-          <div className="rounded-xl px-3 py-2" style={{ backgroundColor: summary.openPositions > 0 ? '#fffbeb' : '#F5FAF3', border: `1px solid ${summary.openPositions > 0 ? '#fde68a' : '#E2F1DA'}` }}>
-            <div className="text-lg font-bold" style={{ color: summary.openPositions > 0 ? '#d97706' : '#596570' }}>{summary.openPositions}</div>
-            <div className="text-xs" style={{ color: '#596570' }}>Open Positions</div>
-          </div>
-        </div>
-      )}
-      {summary.certAlerts > 0 && (
-        <div className="mt-2 text-xs flex items-center gap-1.5" style={{ color: '#d97706' }}>
-          <AlertTriangle size={12} />
-          {summary.certAlerts} cert{summary.certAlerts === 1 ? '' : 's'} expiring / expired
-        </div>
-      )}
-      <div className="mt-3 flex items-center gap-1 text-xs font-medium" style={{ color: '#2d5c18' }}>
-        View staffing <ChevronRight size={12} />
-      </div>
-    </button>
-  );
-}
-
 export default function StaffingStructurePage() {
   const user = getUser();
   const accessible = useMemo(() => {
@@ -1806,7 +1743,7 @@ export default function StaffingStructurePage() {
 
   // All-centres summary state
   const [centreSummaries, setCentreSummaries] = useState<CentreSummary[]>([]);
-  const [summariesLoading, setSummariesLoading] = useState(false);
+  const [_summariesLoading, setSummariesLoading] = useState(false);
 
   useEffect(() => {
     if (accessible.length > 0 && !centreId) {
