@@ -2630,7 +2630,12 @@ export default function StaffingStructurePage() {
                     e.dataTransfer.dropEffect = 'move';
                     setDragOverGroupId(group.id);
                   }}
-                  onDragLeave={() => setDragOverGroupId(null)}
+                  onDragLeave={e => {
+                    // Only clear if leaving the room container itself, not a child element
+                    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                      setDragOverGroupId(null);
+                    }
+                  }}
                   onDrop={async e => {
                     e.preventDefault();
                     setDragOverGroupId(null);
@@ -2639,7 +2644,8 @@ export default function StaffingStructurePage() {
                     try {
                       const { staffId, sourceGroupId } = JSON.parse(raw) as { staffId: string; sourceGroupId: string };
                       if (sourceGroupId === group.id) return;
-                      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'move_staff', staffId, newGroupId: group.id });
+                      // API expects groupId not newGroupId
+                      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'move_staff', staffId, groupId: group.id, centreId });
                       loadData(centreId);
                       showToast('Staff moved to ' + group.title);
                     } catch (err) {
