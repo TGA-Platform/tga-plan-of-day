@@ -1,97 +1,358 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import type { StaffMember } from '../types';
-import { CENTRES, STAFFING_BOARD_IDS } from '../config';
-import { getUser } from '../auth';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
-  QUALIFICATION_OPTIONS, EMPLOYMENT_STATUS_OPTIONS, POSITION_OPTIONS,
-  POSITION_CATEGORY_OPTIONS, RATIO_50_OPTIONS, ACTION_OPTIONS,
-  findOption, type StatusOption,
-} from '../staffingConfig';
+  Users, ChevronDown, ChevronRight, ShieldCheck, AlertTriangle,
+  Pencil, Plus, Trash2, Briefcase, UserMinus, Search, List, LayoutGrid,
+  ChevronsDown, ChevronsUp, X, AlertCircle, CheckCircle, XCircle, Stethoscope,
+} from 'lucide-react';
+import { getUser } from '../auth';
+import { CENTRES } from '../config';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-interface StaffGroup {
-  id: string; title: string; color: string; isActive: boolean; staff: StaffMember[];
-}
-interface BoardData {
-  centreId: string; groups: StaffGroup[];
-  editableColumns: { id: string; label: string; type: string; options?: string[] }[];
-  fetchedAt: string;
-}
-interface CentreSummary {
-  centreId: string; centreName: string; status: 'loading' | 'ok' | 'error'; error?: string;
-  totalActive: number; rooms: number; floats: number; casuals: number;
-  expiredCount: number; warningCount: number; byQual: Record<string, number>;
+interface StaffRoom {
+  id: string;
+  group_id: string;
+  centre_id: string;
+  title: string;
+  color: string;
+  is_active: boolean;
+  sort_order?: number;
 }
 
-// ── Brand ──────────────────────────────────────────────────────────────────
-const B = {
-  green: '#2d5c18', greenLight: '#5a9228', bg: '#F5FAF3',
-  border: '#E2F1DA', white: '#ffffff', text: '#050505', muted: '#596570',
+interface StaffMemberRow {
+  id: string;
+  name: string;
+  qualification?: string;
+  position?: string;
+  position_category?: string;
+  employment_status?: string;
+  centre_id: string;
+  group_id?: string;
+  group_title?: string;
+  group_color?: string;
+  is_active_group?: boolean;
+  start_date?: string;
+  end_date?: string;
+  dob?: string;
+  days_per_week?: string;
+  min_hours_pw?: string;
+  probationary_date?: string;
+  email?: string;
+  mobile?: string;
+  wwcc_number?: string;
+  wwcc_expiry?: string;
+  first_aid_code?: string;
+  first_aid_expiry?: string;
+  cpr_code?: string;
+  cpr_expiry?: string;
+  anaphylaxis_code?: string;
+  anaphylaxis_expiry?: string;
+  child_protection_renewal?: string;
+  ratio_50?: string;
+  action?: string;
+}
+
+interface StaffDoc {
+  id: string;
+  label: string;
+  url: string;
+  doc_type: string;
+}
+
+interface OpenPosition {
+  id: string;
+  centre_id: string;
+  room_id?: string;
+  title: string;
+  qualification_required?: string;
+  status: string;
+  notes?: string;
+  created_at?: string;
+}
+
+interface StaffAccident {
+  id: string;
+  staff_id: string;
+  centre_id: string;
+  staff_name?: string;
+  incident_date: string;
+  time_of_injury?: string;
+  specific_location?: string;
+  circumstances?: string;
+  injury_type: string;
+  location_on_body?: string;
+  first_aid_provided?: string;
+  medical_attention?: boolean;
+  worker_comp_claim?: boolean;
+  return_to_work_date?: string;
+  status: string;
+  created_at?: string;
+}
+
+interface StaffIssue {
+  id: string;
+  staff_id: string;
+  centre_id: string;
+  staff_name?: string;
+  issue_type: string;
+  severity: string;
+  date_raised: string;
+  raised_by?: string;
+  description: string;
+  action_taken?: string;
+  outcome?: string;
+  status: string;
+  follow_up_date?: string;
+  hr_involved?: boolean;
+  created_at?: string;
+}
+
+interface BoardData {
+  centreId: string;
+  groups: Array<{
+    id: string;
+    title: string;
+    color: string;
+    isActive: boolean;
+    staff: StaffMemberRow[];
+  }>;
+  editableColumns: Array<{ id: string; label: string; type: string; options?: string[] }>;
+  fetchedAt: string;
+}
+
+// ── Constants ──────────────────────────────────────────────────────────────
+
+const DAY_SHORT: Record<string, string> = {
+  Monday: 'M', Tuesday: 'T', Wednesday: 'W', Thursday: 'Th', Friday: 'F',
+};
+const ALL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+const ROLE_COLORS: Record<string, string> = {
+  'Room Leader': 'bg-blue-100 text-blue-700',
+  'Educator': 'bg-green-100 text-green-700',
+  'Educational Leader': 'bg-purple-100 text-purple-700',
+  'Assistant Director': 'bg-orange-100 text-orange-700',
+  'Centre Director': 'bg-red-100 text-red-700',
+  'Trainee': 'bg-yellow-100 text-yellow-700',
+  'Float': 'bg-gray-100 text-gray-700',
+  'Internal Casual': 'bg-pink-100 text-pink-700',
+  'Early Childhood Teacher': 'bg-indigo-100 text-indigo-700',
+  'Educator Casual': 'bg-teal-100 text-teal-700',
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  'Active': 'bg-green-100 text-green-700',
+  'On Leave': 'bg-yellow-100 text-yellow-700',
+  'Resigned': 'bg-amber-100 text-amber-700',
+  'Exited': 'bg-gray-100 text-gray-600',
+  'Inactive': 'bg-gray-100 text-gray-600',
+  'PPL': 'bg-blue-100 text-blue-700',
+  'Long Service': 'bg-purple-100 text-purple-700',
+  'Probation': 'bg-orange-100 text-orange-700',
+  'Casual': 'bg-pink-100 text-pink-700',
+};
+
+const POSITION_STATUS_COLORS: Record<string, string> = {
+  'Open': 'bg-emerald-100 text-emerald-700',
+  'On Hold': 'bg-yellow-100 text-yellow-700',
+  'Offered': 'bg-blue-100 text-blue-700',
+  'Filled': 'bg-gray-100 text-gray-500',
+};
+
+const ACCIDENT_STATUS_COLORS: Record<string, string> = {
+  'New': 'bg-blue-100 text-blue-700',
+  'Notification Only': 'bg-gray-100 text-gray-700',
+  'Medical Treatment': 'bg-orange-100 text-orange-700',
+  'Light Duties': 'bg-yellow-100 text-yellow-700',
+  'Active Certificate': 'bg-red-100 text-red-700',
+  'Case Closed': 'bg-green-100 text-green-700',
+  'Not Reporting': 'bg-gray-100 text-gray-500',
+};
+
+const INJURY_COLORS: Record<string, string> = {
+  'Sprain/Strain': 'bg-orange-100 text-orange-700',
+  'Cut/Laceration': 'bg-red-100 text-red-700',
+  'Bruise': 'bg-purple-100 text-purple-700',
+  'Fracture': 'bg-red-100 text-red-800',
+  'Burn': 'bg-orange-100 text-orange-800',
+  'Eye Injury': 'bg-blue-100 text-blue-700',
+  'Back Injury': 'bg-yellow-100 text-yellow-700',
+  'Other': 'bg-gray-100 text-gray-700',
+};
+
+const ISSUE_STATUS_COLORS: Record<string, string> = {
+  'Open': 'bg-blue-100 text-blue-700',
+  'Under Review': 'bg-orange-100 text-orange-700',
+  'Action Taken': 'bg-yellow-100 text-yellow-700',
+  'Resolved': 'bg-green-100 text-green-700',
+  'Escalated': 'bg-red-100 text-red-700',
+};
+
+const SEVERITY_COLORS: Record<string, string> = {
+  'Minor': 'bg-yellow-100 text-yellow-700',
+  'Moderate': 'bg-orange-100 text-orange-700',
+  'Serious': 'bg-red-100 text-red-700',
+};
+
+const ISSUE_TYPE_COLORS: Record<string, string> = {
+  'Performance': 'bg-purple-100 text-purple-700',
+  'Conduct': 'bg-red-100 text-red-700',
+  'Attendance': 'bg-orange-100 text-orange-700',
+  'Grievance': 'bg-blue-100 text-blue-700',
+  'Bullying/Harassment': 'bg-pink-100 text-pink-700',
+  'WHS Concern': 'bg-yellow-100 text-yellow-700',
+  'Other': 'bg-gray-100 text-gray-700',
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-function daysUntil(iso?: string | null): number | null {
-  if (!iso) return null;
-  const d = new Date(iso); if (isNaN(d.getTime())) return null;
-  return Math.floor((d.getTime() - Date.now()) / 86400000);
+
+function certDays(dateStr?: string | null): number {
+  if (!dateStr) return Infinity;
+  const today = new Date();
+  return Math.round((new Date(dateStr).getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 }
-function complianceLevel(days: number | null) {
-  if (days === null) return 'missing';
-  if (days < 0) return 'expired'; if (days <= 90) return 'warning'; return 'ok';
-}
-function worstCompliance(s: StaffMember) {
-  const c = s.compliance;
-  const lvls = [c.wwccExpiry,c.firstAidExpiry,c.cprExpiry,c.anaphylaxisExpiry,c.childProtectionRenewal].map(d => complianceLevel(daysUntil(d)));
-  if (lvls.includes('expired')) return 'expired';
-  if (lvls.includes('warning')) return 'warning';
-  if (lvls.every(l => l === 'missing')) return 'missing'; return 'ok';
-}
+
 function fmtDate(iso?: string | null) {
   if (!iso) return '—';
   const d = new Date(iso);
   return isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-// ── Status Badge (clickable) ───────────────────────────────────────────────
-function StatusBadge({ value, options, onChange, size = 'sm' }: {
-  value?: string | null; options: StatusOption[]; onChange?: (v: string) => void; size?: 'xs' | 'sm' | 'md';
+function CertDot({ expiry }: { expiry?: string | null }) {
+  if (!expiry) return <span className="w-2 h-2 rounded-full bg-gray-200 inline-block" title="Not recorded" />;
+  const days = certDays(expiry);
+  if (days < 0) return <span className="w-2 h-2 rounded-full bg-red-500 inline-block" title={`Expired ${Math.abs(days)}d ago`} />;
+  if (days < 30) return <span className="w-2 h-2 rounded-full bg-red-400 inline-block" title={`${days}d remaining`} />;
+  if (days < 90) return <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" title={`${days}d`} />;
+  return <span className="w-2 h-2 rounded-full bg-green-400 inline-block" title={`Valid · ${days}d`} />;
+}
+
+function CertRow({ label, value, number: num }: { label: string; value?: string | null; number?: string | null }) {
+  if (!value) return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-gray-400 w-24 flex-shrink-0">{label}</span>
+      <span className="text-gray-300">—</span>
+    </div>
+  );
+  const days = certDays(value);
+  let dotClass = 'bg-green-400';
+  let textClass = 'text-green-700';
+  const statusText = new Date(value).toLocaleDateString('en-AU');
+  let daysText = '';
+
+  if (days < 0) { dotClass = 'bg-red-500'; textClass = 'text-red-600'; daysText = `Expired ${Math.abs(days)}d ago`; }
+  else if (days < 30) { dotClass = 'bg-red-400'; textClass = 'text-red-600'; daysText = `${days}d remaining`; }
+  else if (days < 90) { dotClass = 'bg-amber-400'; textClass = 'text-amber-600'; daysText = `${days}d`; }
+
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${dotClass}`} />
+      <span className="text-gray-500 w-20 flex-shrink-0">{label}</span>
+      {num && <span className="text-gray-600 font-mono mr-1">{num}</span>}
+      <span className={`font-medium ${textClass}`}>{statusText}</span>
+      {daysText && <span className={`ml-1 font-semibold ${textClass}`}>({daysText})</span>}
+    </div>
+  );
+}
+
+// ── Toast utility ──────────────────────────────────────────────────────────
+
+function showToast(msg: string, type: 'success' | 'error' = 'success') {
+  const el = document.createElement('div');
+  el.style.cssText = `position:fixed;bottom:24px;right:24px;z-index:9999;padding:10px 18px;border-radius:10px;font-size:14px;font-weight:500;color:#fff;background:${type === 'error' ? '#ef4444' : '#22c55e'};box-shadow:0 4px 16px rgba(0,0,0,0.15);transition:opacity 0.3s`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3000);
+}
+
+// ── API helpers ────────────────────────────────────────────────────────────
+
+const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NDE3MjUsImV4cCI6MjA4OTUxNzcyNX0.wVfVKM_WYblSS5FQTfijGlFl18pv-vVoT4pEiGfKlAE';
+
+async function apiGet(path: string) {
+  const r = await fetch(`/api/${path}`);
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error((j as { error?: string }).error || `HTTP ${r.status}`); }
+  return r.json();
+}
+
+async function apiPost(path: string, body: unknown) {
+  const r = await fetch(`/api/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error((j as { error?: string }).error || `HTTP ${r.status}`); }
+  return r.json();
+}
+
+async function apiPatch(path: string, body: unknown) {
+  const r = await fetch(`/api/${path}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error((j as { error?: string }).error || `HTTP ${r.status}`); }
+  return r.json();
+}
+
+async function apiDelete(path: string) {
+  const r = await fetch(`/api/${path}`, { method: 'DELETE' });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error((j as { error?: string }).error || `HTTP ${r.status}`); }
+  return r.json().catch(() => ({}));
+}
+
+// ── Modal wrapper ──────────────────────────────────────────────────────────
+
+function Modal({ isOpen, onClose, title, children, size = 'md' }: {
+  isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode;
+  size?: 'sm' | 'md' | 'lg';
+}) {
+  if (!isOpen) return null;
+  const maxW = size === 'sm' ? 'max-w-md' : size === 'lg' ? 'max-w-2xl' : 'max-w-lg';
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50" />
+      <div className={`relative bg-white rounded-2xl shadow-2xl w-full ${maxW} max-h-[90vh] overflow-y-auto`} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h2 className="font-bold text-gray-900">{title}</h2>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Inline Status Select ───────────────────────────────────────────────────
+
+function InlineSelect({ value, options, onChange, getColor }: {
+  value: string; options: string[]; onChange: (v: string) => void;
+  getColor: (v: string) => string;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const opt = findOption(options, value);
-  const bg = opt?.color || '#f1f5f9'; const col = opt?.border || '#64748b';
-  const label = opt?.label || value || 'Not set';
-  const pad = size === 'xs' ? 'px-1.5 py-0.5 text-xs' : size === 'sm' ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm';
+  const ref = React.useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', handler); return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
   }, [open]);
-
-  if (!onChange) return (
-    <span className={`inline-block rounded-full font-semibold leading-tight ${pad}`} style={{ backgroundColor: bg, color: col }}>{label}</span>
-  );
 
   return (
     <div ref={ref} className="relative inline-block">
-      <button onClick={() => setOpen(o => !o)}
-        className={`inline-flex items-center gap-1 rounded-full font-semibold leading-tight cursor-pointer hover:opacity-80 transition-opacity ${pad}`}
-        style={{ backgroundColor: bg, color: col }}>
-        {label}
-        <span style={{ fontSize: 8, opacity: 0.7 }}>v</span>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full cursor-pointer hover:opacity-80 transition-opacity ${getColor(value)}`}
+      >
+        {value}
+        <span style={{ fontSize: 8, opacity: 0.7 }}>▼</span>
       </button>
       {open && (
-        <div className="absolute z-50 top-full left-0 mt-1 bg-white rounded-xl shadow-xl border overflow-hidden min-w-max"
-          style={{ borderColor: B.border }}>
+        <div className="absolute z-50 top-full left-0 mt-1 bg-white rounded-xl shadow-xl border border-gray-100 overflow-hidden min-w-max">
           {options.map(o => (
-            <button key={o.value} onClick={() => { onChange(o.value); setOpen(false); }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:opacity-80 transition-opacity text-left"
-              style={{ backgroundColor: o.value === value ? o.color + '44' : 'transparent' }}>
-              <span className="inline-block w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: o.color, border: `1px solid ${o.border}` }} />
-              <span className="font-semibold" style={{ color: o.border }}>{o.label || o.value || 'None'}</span>
-              {o.value === value && <span className="ml-auto text-gray-400">c</span>}
+            <button
+              key={o}
+              onClick={() => { onChange(o); setOpen(false); }}
+              className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-gray-50 text-left ${o === value ? 'font-bold' : ''}`}
+            >
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${getColor(o)}`}>{o}</span>
+              {o === value && <span className="ml-auto text-green-500">✓</span>}
             </button>
           ))}
         </div>
@@ -100,797 +361,1776 @@ function StatusBadge({ value, options, onChange, size = 'sm' }: {
   );
 }
 
-// ── Compliance dot ─────────────────────────────────────────────────────────
-function ComplianceDot({ staff }: { staff: StaffMember }) {
-  const level = worstCompliance(staff);
-  const c: Record<string, string> = { expired: '#ef4444', warning: '#f59e0b', ok: '#22c55e' };
-  if (level === 'missing') return null;
-  return <span title={`Compliance ${level}`} style={{ display:'inline-block', width:10, height:10, borderRadius:'50%', backgroundColor: c[level]||'#e5e7eb', flexShrink:0 }} />;
-}
+// ── Accidents Section (inside Staff Profile Drawer) ────────────────────────
 
-// ── Document preview ───────────────────────────────────────────────────────
-function DocPreviewModal({ doc, onClose }: { doc: { label: string; url: string }; onClose: () => void }) {
-  const isPdf = doc.url.includes('.pdf') || doc.url.includes('staffing-file');
-  const isImage = /\.(jpg|jpeg|png|gif|webp)/i.test(doc.url);
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/60" />
-      <div className="relative bg-white rounded-2xl shadow-2xl flex flex-col" style={{ width:'90vw', maxWidth:900, height:'90vh' }} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: B.border }}>
-          <span className="font-semibold text-sm" style={{ color: B.text }}>{doc.label}</span>
-          <div className="flex gap-2">
-            <a href={doc.url} target="_blank" rel="noopener noreferrer" className="text-xs px-3 py-1.5 rounded-lg border hover:opacity-80" style={{ borderColor: B.border, color: B.muted }}>Open in new tab</a>
-            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 font-bold">x</button>
-          </div>
-        </div>
-        <div className="flex-1 overflow-hidden rounded-b-2xl">
-          {(isPdf || (!isImage)) && <iframe src={doc.url} className="w-full h-full border-0" title={doc.label} />}
-          {isImage && !isPdf && <div className="w-full h-full flex items-center justify-center bg-gray-50 p-4"><img src={doc.url} alt={doc.label} className="max-w-full max-h-full object-contain rounded-lg" /></div>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Staff Card ─────────────────────────────────────────────────────────────
-function StaffCard({ staff, centreId, groups, onClose, onRefresh }: {
-  staff: StaffMember; centreId: string; groups: StaffGroup[];
-  onClose: () => void; onRefresh: () => void;
+function AccidentsSection({ staffId, staffName, centreId }: {
+  staffId: string; staffName: string; centreId: string;
 }) {
-  const [previewDoc, setPreviewDoc] = useState<{ label: string; url: string } | null>(null);
-  const [saving, setSaving] = useState<string | null>(null);
-  const [localStaff, setLocalStaff] = useState<StaffMember>(staff);
+  const [accidents, setAccidents] = useState<StaffAccident[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<StaffAccident | null>(null);
 
-  async function updateField(fieldId: string, value: string) {
-    setSaving(fieldId);
+  const emptyForm = {
+    incident_date: '',
+    time_of_injury: '',
+    specific_location: '',
+    circumstances: '',
+    injury_type: 'Sprain/Strain',
+    location_on_body: '',
+    first_aid_provided: '',
+    medical_attention: false,
+    worker_comp_claim: false,
+    return_to_work_date: '',
+    status: 'New',
+  };
+  const [form, setForm] = useState<typeof emptyForm>(emptyForm);
+
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      await fetch(`/api/staffing-structure?centreId=${centreId}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'update_staff', staffId: localStaff.id || localStaff.mondayId, fields: { [fieldId]: value || null } }),
-      });
-      setLocalStaff(prev => ({ ...prev, [fieldId === 'employment_status' ? 'employmentStatus' : fieldId === 'position_category' ? 'positionCategory' : fieldId === 'ratio_50' ? 'ratio50' : fieldId]: value }));
-    } finally { setSaving(null); }
+      const data = await apiGet(`staff-accidents?staffId=${staffId}`);
+      setAccidents((data as StaffAccident[]) || []);
+    } catch { setAccidents([]); }
+    finally { setLoading(false); }
+  }, [staffId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  function openAdd() {
+    setForm(emptyForm);
+    setEditTarget(null);
+    setModalOpen(true);
   }
 
-  async function moveToRoom(groupId: string) {
-    setSaving('group');
+  function openEdit(acc: StaffAccident) {
+    setForm({
+      incident_date: acc.incident_date || '',
+      time_of_injury: acc.time_of_injury || '',
+      specific_location: acc.specific_location || '',
+      circumstances: acc.circumstances || '',
+      injury_type: acc.injury_type || 'Sprain/Strain',
+      location_on_body: acc.location_on_body || '',
+      first_aid_provided: acc.first_aid_provided || '',
+      medical_attention: acc.medical_attention || false,
+      worker_comp_claim: acc.worker_comp_claim || false,
+      return_to_work_date: acc.return_to_work_date || '',
+      status: acc.status || 'New',
+    });
+    setEditTarget(acc);
+    setModalOpen(true);
+  }
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.incident_date) { showToast('Incident date is required', 'error'); return; }
+    const payload = { ...form, staff_id: staffId, staff_name: staffName, centre_id: centreId };
     try {
-      await fetch(`/api/staffing-structure?centreId=${centreId}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'move_staff', staffId: localStaff.id || localStaff.mondayId, groupId, centreId }),
-      });
-      onRefresh(); onClose();
-    } finally { setSaving(null); }
+      if (editTarget) {
+        await apiPatch(`staff-accidents?id=${editTarget.id}`, payload);
+        showToast('Accident updated');
+      } else {
+        await apiPost('staff-accidents', payload);
+        showToast('Accident recorded');
+      }
+      setModalOpen(false);
+      load();
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to save', 'error');
+    }
   }
 
-  async function deleteStaff() {
-    if (!confirm(`Delete ${localStaff.name}? This cannot be undone.`)) return;
-    await fetch(`/api/staffing-structure?centreId=${centreId}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete_staff', staffId: localStaff.id || localStaff.mondayId }),
-    });
-    onRefresh(); onClose();
-  }
-
-  const comp = localStaff.compliance;
-  const compItems = [
-    { label: 'WWCC',             expiry: comp.wwccExpiry,            code: comp.wwccNumber },
-    { label: 'First Aid',        expiry: comp.firstAidExpiry,        code: comp.firstAidCode },
-    { label: 'CPR',              expiry: comp.cprExpiry,             code: comp.cprCode },
-    { label: 'Anaphylaxis',      expiry: comp.anaphylaxisExpiry,     code: comp.anaphylaxisCode },
-    { label: 'Child Protection', expiry: comp.childProtectionRenewal },
-  ];
-
-  return (
-    <>
-      <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
-        <div className="absolute inset-0 bg-black/30" />
-        <div className="relative w-full max-w-lg bg-white h-full overflow-y-auto shadow-2xl flex flex-col"
-          style={{ borderLeft: `1px solid ${B.border}` }} onClick={e => e.stopPropagation()}>
-
-          {/* Header */}
-          <div className="sticky top-0 z-10 bg-white px-5 pt-4 pb-3 border-b" style={{ borderColor: B.border }}>
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex-1 min-w-0">
-                <h2 className="text-base font-bold" style={{ color: B.text }}>{localStaff.name}</h2>
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  <StatusBadge value={localStaff.employmentStatus || 'Active'} options={EMPLOYMENT_STATUS_OPTIONS}
-                    onChange={v => updateField('employment_status', v)} />
-                  <StatusBadge value={localStaff.qualification} options={QUALIFICATION_OPTIONS}
-                    onChange={v => updateField('qualification', v)} />
-                  <StatusBadge value={localStaff.position} options={POSITION_OPTIONS}
-                    onChange={v => updateField('position', v)} />
-                  {localStaff.positionCategory && (
-                    <StatusBadge value={localStaff.positionCategory} options={POSITION_CATEGORY_OPTIONS}
-                      onChange={v => updateField('position_category', v)} />
-                  )}
-                  {saving && <span className="text-xs animate-pulse" style={{ color: B.muted }}>Saving...</span>}
-                </div>
-              </div>
-              <div className="flex gap-1 flex-shrink-0">
-                <button onClick={deleteStaff} className="px-2 py-1.5 rounded-xl text-xs font-semibold border hover:opacity-80" style={{ borderColor: '#fca5a5', color: '#ef4444' }}>Delete</button>
-                <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 font-bold">x</button>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex-1 px-5 py-4 space-y-5">
-
-            {/* Move to room */}
-            <section>
-              <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: B.muted }}>Room / Group</h3>
-              <select onChange={e => { if (e.target.value) moveToRoom(e.target.value); }}
-                className="w-full border rounded-xl px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }}
-                defaultValue="">
-                <option value="">Move to room...</option>
-                {groups.filter(g => g.isActive).map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
-              </select>
-            </section>
-
-            {/* Additional status fields */}
-            <section>
-              <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: B.muted }}>Status Fields</h3>
-              <div className="flex flex-wrap gap-2">
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs" style={{ color: B.muted }}>50% Ratio</span>
-                  <StatusBadge value={localStaff.ratio50} options={RATIO_50_OPTIONS} onChange={v => updateField('ratio_50', v)} />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs" style={{ color: B.muted }}>Action</span>
-                  <StatusBadge value={localStaff.action} options={ACTION_OPTIONS} onChange={v => updateField('action', v)} />
-                </div>
-                {!localStaff.positionCategory && (
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs" style={{ color: B.muted }}>Category</span>
-                    <StatusBadge value={localStaff.positionCategory} options={POSITION_CATEGORY_OPTIONS} onChange={v => updateField('position_category', v)} />
-                  </div>
-                )}
-              </div>
-            </section>
-
-            {/* Employment details */}
-            <section>
-              <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: B.muted }}>Employment</h3>
-              <div className="rounded-xl overflow-hidden border" style={{ borderColor: B.border }}>
-                {[
-                  { label: 'Start Date', value: fmtDate(localStaff.startDate) },
-                  { label: 'End Date', value: localStaff.endDate || '—' },
-                  { label: 'Days / Hours', value: localStaff.daysPerWeek || '—' },
-                  { label: 'Min Hours/wk', value: localStaff.minHoursPerWeek || '—' },
-                  { label: 'Probation End', value: fmtDate(localStaff.probationaryDate) },
-                  { label: 'DOB', value: fmtDate(localStaff.dob) },
-                ].filter(r => r.value && r.value !== '—').map((row, i, arr) => (
-                  <div key={row.label} className={`flex items-center justify-between px-3 py-2 text-sm ${i < arr.length-1 ? 'border-b' : ''}`} style={{ borderColor: B.border }}>
-                    <span style={{ color: B.muted }}>{row.label}</span>
-                    <span className="font-medium" style={{ color: B.text }}>{row.value}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            {/* Contact */}
-            {(localStaff.email || localStaff.mobile) && (
-              <section>
-                <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: B.muted }}>Contact</h3>
-                <div className="space-y-1">
-                  {localStaff.email  && <a href={`mailto:${localStaff.email}`}  className="block text-sm hover:underline" style={{ color: B.greenLight }}>{localStaff.email}</a>}
-                  {localStaff.mobile && <a href={`tel:0${localStaff.mobile}`} className="block text-sm hover:underline" style={{ color: B.greenLight }}>0{localStaff.mobile}</a>}
-                </div>
-              </section>
-            )}
-
-            {/* Compliance */}
-            <section>
-              <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: B.muted }}>Compliance</h3>
-              <div className="rounded-xl overflow-hidden border" style={{ borderColor: B.border }}>
-                {compItems.map((item, i) => {
-                  const days = daysUntil(item.expiry);
-                  const level = complianceLevel(days);
-                  const dotColor = level === 'expired' ? '#ef4444' : level === 'warning' ? '#f59e0b' : level === 'ok' ? '#22c55e' : '#d1d5db';
-                  const dateStr = item.expiry ? fmtDate(item.expiry) : null;
-                  const dayStr = days !== null ? (days < 0 ? `Expired ${Math.abs(days)}d ago` : days <= 90 ? `${days}d remaining` : '') : '';
-                  return (
-                    <div key={item.label} className={`flex items-start gap-3 px-3 py-2.5 text-sm ${i < compItems.length-1 ? 'border-b' : ''}`}
-                      style={{ borderColor: B.border, backgroundColor: level==='expired'?'#fff5f5':level==='warning'?'#fffbeb':B.white }}>
-                      <span style={{ display:'inline-block', width:10, height:10, borderRadius:'50%', backgroundColor:dotColor, flexShrink:0, marginTop:4 }} />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold text-xs" style={{ color: B.text }}>{item.label}</div>
-                        {item.code && <div className="text-xs" style={{ color: B.muted }}>{item.code}</div>}
-                        {dateStr ? <div className="text-xs font-medium" style={{ color: level==='expired'?'#991b1b':level==='warning'?'#92400e':B.green }}>{dateStr}{dayStr ? ` · ${dayStr}` : ''}</div>
-                          : <div className="text-xs text-gray-400">Not recorded</div>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-
-            {/* Documents */}
-            {(localStaff.docs.length > 0 || localStaff.certDocs.length > 0) && (
-              <section>
-                <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: B.muted }}>Documents ({localStaff.docs.length + localStaff.certDocs.length})</h3>
-                <div className="space-y-1.5">
-                  {[...localStaff.docs, ...localStaff.certDocs].map((doc, i) => (
-                    <button key={i} onClick={() => setPreviewDoc(doc)}
-                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium border text-left hover:opacity-80"
-                      style={{ borderColor: B.border, backgroundColor: B.bg }}>
-                      <span className="flex-1 truncate" style={{ color: B.text }}>{doc.label}</span>
-                      <span style={{ color: B.muted }}>Preview</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
-          </div>
-        </div>
-      </div>
-      {previewDoc && <DocPreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} />}
-    </>
-  );
-}
-
-// ── Create Staff Modal ─────────────────────────────────────────────────────
-function CreateStaffModal({ centreId, groups, onSave, onClose }: {
-  centreId: string; groups: StaffGroup[];
-  onSave: () => void; onClose: () => void;
-}) {
-  const [name, setName] = useState('');
-  const [groupId, setGroupId] = useState(groups.filter(g=>g.isActive)[0]?.id || '');
-  const [qual, setQual] = useState('');
-  const [pos, setPos] = useState('');
-  const [cat, setCat] = useState('');
-  const [status, setStatus] = useState('Active');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  async function handleSave() {
-    if (!name.trim()) { setError('Name is required'); return; }
-    setSaving(true); setError('');
+  async function handleStatusChange(id: string, status: string) {
     try {
-      const r = await fetch(`/api/staffing-structure?centreId=${centreId}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'create_staff', centreId, groupId, name: name.trim(), qualification: qual, position: pos, positionCategory: cat, employment_status: status }),
-      });
-      if (!r.ok) throw new Error((await r.json()).error);
-      onSave(); onClose();
-    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Save failed'); }
-    finally { setSaving(false); }
-  }
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/50" />
-      <div className="relative bg-white rounded-2xl shadow-2xl" style={{ width:'100%', maxWidth:480 }} onClick={e=>e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: B.border }}>
-          <h2 className="font-bold" style={{ color: B.text }}>Add Staff Member</h2>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 font-bold">x</button>
-        </div>
-        <div className="px-5 py-4 space-y-3">
-          <div>
-            <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Name *</label>
-            <input autoFocus value={name} onChange={e=>setName(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }} />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Room</label>
-            <select value={groupId} onChange={e=>setGroupId(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }}>
-              {groups.filter(g=>g.isActive).map(g=><option key={g.id} value={g.id}>{g.title}</option>)}
-            </select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Employment Status</label>
-              <select value={status} onChange={e=>setStatus(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }}>
-                {EMPLOYMENT_STATUS_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Qualification</label>
-              <select value={qual} onChange={e=>setQual(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }}>
-                <option value="">Select...</option>
-                {QUALIFICATION_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Position</label>
-              <select value={pos} onChange={e=>setPos(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }}>
-                <option value="">Select...</option>
-                {POSITION_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium mb-1" style={{ color: B.muted }}>Category</label>
-              <select value={cat} onChange={e=>setCat(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor: B.border }}>
-                <option value="">Select...</option>
-                {POSITION_CATEGORY_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-          </div>
-          {error && <div className="text-xs px-3 py-2 rounded-lg" style={{ backgroundColor:'#fee2e2', color:'#991b1b' }}>{error}</div>}
-        </div>
-        <div className="px-5 py-4 border-t flex justify-end gap-2" style={{ borderColor: B.border }}>
-          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm border hover:opacity-80" style={{ borderColor: B.border, color: B.muted }}>Cancel</button>
-          <button onClick={handleSave} disabled={saving} className="px-4 py-2 rounded-xl text-sm font-semibold text-white hover:opacity-90" style={{ backgroundColor: saving?'#9ca3af':B.green }}>
-            {saving?'Adding...':'Add Staff'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Room Group Card ────────────────────────────────────────────────────────
-function RoomGroup({ group, centreId, onSelect, onRoomUpdated, onDrop }: {
-  group: StaffGroup; centreId: string; onSelect: (s: StaffMember) => void; onRoomUpdated: () => void;
-  onDrop: (staffId: string, fromGroupId: string, toGroupId: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(group.title);
-  const [saving, setSaving] = useState(false);
-
-  async function saveTitle() {
-    if (!title.trim() || title === group.title) { setEditing(false); setTitle(group.title); return; }
-    setSaving(true);
-    await fetch(`/api/staffing-structure?centreId=${centreId}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update_room', centreId, groupId: group.id, title: title.trim() }),
-    });
-    setSaving(false); setEditing(false); onRoomUpdated();
-  }
-
-  async function deleteRoom() {
-    if (group.staff.length > 0) { alert(`Move or delete all ${group.staff.length} staff first.`); return; }
-    if (!confirm(`Delete room "${group.title}"?`)) return;
-    await fetch(`/api/staffing-structure?centreId=${centreId}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete_room', centreId, groupId: group.id }),
-    });
-    onRoomUpdated();
-  }
-
-  const [dragOver, setDragOver] = useState(false);
-
-  return (
-    <div
-      className="rounded-2xl overflow-hidden border"
-      style={{ borderColor: dragOver ? B.green : B.border, backgroundColor: B.white, transition: 'border-color 0.15s' }}
-      onDragOver={e=>{ e.preventDefault(); setDragOver(true); }}
-      onDragLeave={()=>setDragOver(false)}
-      onDrop={e=>{
-        e.preventDefault(); setDragOver(false);
-        const staffId = e.dataTransfer.getData('staffId');
-        const fromGroupId = e.dataTransfer.getData('fromGroupId');
-        if (staffId && fromGroupId && fromGroupId !== group.id) onDrop(staffId, fromGroupId, group.id);
-      }}
-    >
-      <div className="px-4 py-3 flex items-center gap-2" style={{ backgroundColor: group.color+'22', borderBottom: `1px solid ${B.border}` }}>
-        <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: group.color }} />
-        {editing ? (
-          <input autoFocus value={title} onChange={e=>setTitle(e.target.value)}
-            onKeyDown={e=>{ if(e.key==='Enter') saveTitle(); if(e.key==='Escape'){setEditing(false);setTitle(group.title);} }}
-            onBlur={saveTitle}
-            className="flex-1 text-sm font-bold bg-transparent border-b focus:outline-none" style={{ color: B.text, borderColor: B.green }} />
-        ) : (
-          <h3 className="font-bold text-sm flex-1 truncate" style={{ color: B.text }}>{group.title}</h3>
-        )}
-        <span className="text-xs px-1.5 py-0.5 rounded-full font-medium flex-shrink-0" style={{ backgroundColor: B.white, color: B.muted, border: `1px solid ${B.border}` }}>{group.staff.length}</span>
-        {!editing && (
-          <div className="flex gap-1 flex-shrink-0">
-            <button onClick={()=>setEditing(true)} className="text-xs px-1.5 py-0.5 rounded hover:opacity-80" style={{ color: B.muted }}>rename</button>
-            {group.staff.length === 0 && <button onClick={deleteRoom} className="text-xs px-1.5 py-0.5 rounded hover:opacity-80" style={{ color:'#ef4444' }}>delete</button>}
-          </div>
-        )}
-        {saving && <span className="text-xs animate-pulse" style={{ color: B.muted }}>...</span>}
-      </div>
-      <div className="divide-y divide-gray-100">
-        {group.staff.length === 0
-          ? <div className="px-4 py-3 text-xs" style={{ color: B.muted }}>No staff.</div>
-          : group.staff.map(s => (
-            <button key={s.mondayId || s.id} onClick={()=>onSelect(s)}
-              draggable
-              onDragStart={e=>{ e.dataTransfer.setData('staffId', s.id || s.mondayId || ''); e.dataTransfer.setData('fromGroupId', group.id); e.dataTransfer.effectAllowed='move'; }}
-              className="w-full flex items-center gap-3 px-4 py-2.5 hover:opacity-80 text-left group cursor-grab active:cursor-grabbing">
-              <div className="flex-shrink-0">
-                <StatusBadge value={s.qualification} options={QUALIFICATION_OPTIONS} size="xs" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold truncate group-hover:underline" style={{ color: B.text }}>{s.name}</div>
-                <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                  {s.employmentStatus && s.employmentStatus !== 'Active' && (
-                    <StatusBadge value={s.employmentStatus} options={EMPLOYMENT_STATUS_OPTIONS} size="xs" />
-                  )}
-                  {s.position && <span className="text-xs truncate" style={{ color: B.muted }}>{s.position}</span>}
-                </div>
-              </div>
-              <ComplianceDot staff={s} />
-              <span className="text-gray-300 group-hover:text-gray-500">›</span>
-            </button>
-          ))
-        }
-      </div>
-    </div>
-  );
-}
-
-// ── Dashboard Stats ────────────────────────────────────────────────────────
-function DashboardStats({ groups }: { groups: StaffGroup[] }) {
-  const active = groups.filter(g=>g.isActive).flatMap(g=>g.staff);
-  const total = active.length;
-  const byQual: Record<string,number> = {};
-  let expired=0, warning=0;
-  for (const s of active) {
-    const q = s.qualification||'Unknown'; byQual[q]=(byQual[q]||0)+1;
-    const l = worstCompliance(s); if(l==='expired') expired++; else if(l==='warning') warning++;
-  }
-  const byStatus: Record<string,number> = {};
-  for (const s of active) { const st = s.employmentStatus||'Active'; byStatus[st]=(byStatus[st]||0)+1; }
-  const rooms   = groups.filter(g=>g.isActive && !/(float|casual|hero|mat leave)/i.test(g.title)).length;
-  const floats  = groups.filter(g=>g.isActive && /float/i.test(g.title)).flatMap(g=>g.staff).length;
-  const casuals = groups.filter(g=>g.isActive && /casual/i.test(g.title)).flatMap(g=>g.staff).length;
-
-  function Card({ value, label, bg, accent }: { value: string|number; label: string; bg: string; accent?: string }) {
-    return (
-      <div className="rounded-2xl p-4 flex flex-col gap-1" style={{ backgroundColor: bg, border: `1px solid ${B.border}` }}>
-        <div className="text-2xl font-bold" style={{ color: accent||B.text }}>{value}</div>
-        <div className="text-xs font-medium" style={{ color: B.muted }}>{label}</div>
-      </div>
-    );
+      await apiPatch(`staff-accidents?id=${id}`, { status });
+      setAccidents(prev => prev.map(a => a.id === id ? { ...a, status } : a));
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to update', 'error');
+    }
   }
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Card value={total}   label="Active Staff"       bg={B.white} accent={B.green} />
-        <Card value={rooms}   label="Rooms"              bg={B.bg} />
-        <Card value={expired} label="Expired Compliance" bg={expired>0?'#fee2e2':B.bg} accent={expired>0?'#991b1b':undefined} />
-        <Card value={warning} label="Expiring <= 90d"    bg={warning>0?'#fef9c3':B.bg} accent={warning>0?'#92400e':undefined} />
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
+          <AlertTriangle size={14} className="text-orange-500" />
+          Workplace Accidents ({accidents.length})
+        </h4>
+        <button onClick={openAdd} className="flex items-center gap-1 text-xs font-medium text-orange-700 bg-orange-50 hover:bg-orange-100 px-2.5 py-1.5 rounded-lg transition-colors">
+          <Plus size={12} />
+          Record
+        </button>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <Card value={floats}  label="Float Staff"        bg={B.bg} />
-        <Card value={casuals} label="Internal Casuals"   bg={B.bg} />
-        <div className="rounded-2xl p-4" style={{ backgroundColor: B.white, border: `1px solid ${B.border}` }}>
-          <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: B.muted }}>By Qualification</div>
-          <div className="flex flex-wrap gap-1">
-            {QUALIFICATION_OPTIONS.filter(o=>byQual[o.value]).map(o=>(
-              <div key={o.value} className="flex items-center gap-1">
-                <StatusBadge value={o.value} options={QUALIFICATION_OPTIONS} size="xs" />
-                <span className="text-xs font-bold" style={{ color: B.text }}>{byQual[o.value]}</span>
+
+      {loading ? (
+        <div className="text-xs text-gray-400 animate-pulse py-3 text-center">Loading...</div>
+      ) : accidents.length === 0 ? (
+        <div className="text-xs text-gray-400 py-3 text-center italic">No accident records for this staff member</div>
+      ) : (
+        <div className="space-y-2">
+          {accidents.map(acc => (
+            <div key={acc.id} className="border border-gray-100 rounded-xl overflow-hidden">
+              <button
+                className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 text-left"
+                onClick={() => setExpanded(expanded === acc.id ? null : acc.id)}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-semibold text-gray-800">
+                      {new Date(acc.incident_date).toLocaleDateString('en-AU')}
+                    </span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${INJURY_COLORS[acc.injury_type] || 'bg-gray-100 text-gray-700'}`}>
+                      {acc.injury_type}
+                    </span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ACCIDENT_STATUS_COLORS[acc.status] || 'bg-gray-100 text-gray-700'}`}>
+                      {acc.status}
+                    </span>
+                    {acc.medical_attention && <span className="text-xs text-orange-600 font-medium">Medical</span>}
+                    {acc.worker_comp_claim && <span className="text-xs text-red-600 font-medium">W/C</span>}
+                  </div>
+                </div>
+                <button onClick={e => { e.stopPropagation(); openEdit(acc); }} className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg">
+                  <Pencil size={12} />
+                </button>
+                {expanded === acc.id ? <ChevronDown size={14} className="text-gray-400 flex-shrink-0" /> : <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />}
+              </button>
+              {expanded === acc.id && (
+                <div className="px-3 pb-3 space-y-2 bg-gray-50 border-t border-gray-100">
+                  <div className="pt-2">
+                    <InlineSelect
+                      value={acc.status}
+                      options={['New', 'Notification Only', 'Medical Treatment', 'Light Duties', 'Active Certificate', 'Case Closed', 'Not Reporting']}
+                      onChange={v => handleStatusChange(acc.id, v)}
+                      getColor={s => ACCIDENT_STATUS_COLORS[s] || 'bg-gray-100 text-gray-600'}
+                    />
+                  </div>
+                  {acc.time_of_injury && <div className="text-xs text-gray-600"><span className="font-medium">Time:</span> {acc.time_of_injury}</div>}
+                  {acc.specific_location && <div className="text-xs text-gray-600"><span className="font-medium">Location:</span> {acc.specific_location}</div>}
+                  {acc.circumstances && <div className="text-xs text-gray-600"><span className="font-medium">Circumstances:</span> {acc.circumstances}</div>}
+                  {acc.location_on_body && <div className="text-xs text-gray-600"><span className="font-medium">Body location:</span> {acc.location_on_body}</div>}
+                  {acc.first_aid_provided && <div className="text-xs text-gray-600"><span className="font-medium">First aid:</span> {acc.first_aid_provided}</div>}
+                  {acc.return_to_work_date && <div className="text-xs text-gray-600"><span className="font-medium">RTW date:</span> {new Date(acc.return_to_work_date).toLocaleDateString('en-AU')}</div>}
+                  <div className="flex gap-3 text-xs">
+                    {acc.medical_attention ? <CheckCircle size={14} className="text-orange-500" /> : <XCircle size={14} className="text-gray-300" />}
+                    <span className={acc.medical_attention ? 'text-orange-600 font-medium' : 'text-gray-400'}>Medical Attention</span>
+                    {acc.worker_comp_claim ? <CheckCircle size={14} className="text-red-500 ml-2" /> : <XCircle size={14} className="text-gray-300 ml-2" />}
+                    <span className={acc.worker_comp_claim ? 'text-red-600 font-medium' : 'text-gray-400'}>Workers' Comp</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editTarget ? 'Edit Accident Record' : 'Record Workplace Accident'} size="lg">
+        <form onSubmit={handleSave} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Incident Date *</label>
+              <input type="date" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.incident_date} onChange={e => setForm(f => ({ ...f, incident_date: e.target.value }))} required />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Time of Injury</label>
+              <input type="time" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.time_of_injury} onChange={e => setForm(f => ({ ...f, time_of_injury: e.target.value }))} />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Specific Location</label>
+              <input className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.specific_location} onChange={e => setForm(f => ({ ...f, specific_location: e.target.value }))} placeholder="Where exactly did it occur?" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Injury Type *</label>
+              <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.injury_type} onChange={e => setForm(f => ({ ...f, injury_type: e.target.value }))}>
+                {['Sprain/Strain', 'Cut/Laceration', 'Bruise', 'Fracture', 'Burn', 'Eye Injury', 'Back Injury', 'Other'].map(t => <option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Location on Body</label>
+              <input className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.location_on_body} onChange={e => setForm(f => ({ ...f, location_on_body: e.target.value }))} placeholder="e.g. Left wrist" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+              <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
+                {['New', 'Notification Only', 'Medical Treatment', 'Light Duties', 'Active Certificate', 'Case Closed', 'Not Reporting'].map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Return to Work Date</label>
+              <input type="date" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.return_to_work_date} onChange={e => setForm(f => ({ ...f, return_to_work_date: e.target.value }))} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Circumstances</label>
+            <textarea rows={3} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20 resize-none"
+              value={form.circumstances} onChange={e => setForm(f => ({ ...f, circumstances: e.target.value }))} placeholder="Describe how the injury occurred..." />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">First Aid Provided</label>
+            <textarea rows={2} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20 resize-none"
+              value={form.first_aid_provided} onChange={e => setForm(f => ({ ...f, first_aid_provided: e.target.value }))} />
+          </div>
+          <div className="flex gap-6">
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input type="checkbox" checked={form.medical_attention} onChange={e => setForm(f => ({ ...f, medical_attention: e.target.checked }))}
+                className="w-4 h-4 text-[#2d5c18] border-gray-300 rounded focus:ring-[#2d5c18]" />
+              Medical Attention Required
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input type="checkbox" checked={form.worker_comp_claim} onChange={e => setForm(f => ({ ...f, worker_comp_claim: e.target.checked }))}
+                className="w-4 h-4 text-[#2d5c18] border-gray-300 rounded focus:ring-[#2d5c18]" />
+              Worker's Comp Claim
+            </label>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={() => setModalOpen(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors">Cancel</button>
+            <button type="submit" className="px-5 py-2 bg-[#2d5c18] text-white text-sm font-medium rounded-xl hover:bg-[#2d5c18]/90 transition-colors">
+              {editTarget ? 'Save Changes' : 'Record Accident'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
+// ── Issues Section (inside Staff Profile Drawer) ───────────────────────────
+
+function IssuesSection({ staffId, staffName, centreId }: {
+  staffId: string; staffName: string; centreId: string;
+}) {
+  const [issues, setIssues] = useState<StaffIssue[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<StaffIssue | null>(null);
+
+  const emptyForm = {
+    issue_type: 'Performance',
+    severity: 'Minor',
+    date_raised: '',
+    raised_by: '',
+    description: '',
+    action_taken: '',
+    outcome: '',
+    status: 'Open',
+    follow_up_date: '',
+    hr_involved: false,
+  };
+  const [form, setForm] = useState<typeof emptyForm>(emptyForm);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await apiGet(`staff-issues?staffId=${staffId}`);
+      setIssues((data as StaffIssue[]) || []);
+    } catch { setIssues([]); }
+    finally { setLoading(false); }
+  }, [staffId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  function openAdd() {
+    setForm(emptyForm);
+    setEditTarget(null);
+    setModalOpen(true);
+  }
+
+  function openEdit(issue: StaffIssue) {
+    setForm({
+      issue_type: issue.issue_type,
+      severity: issue.severity,
+      date_raised: issue.date_raised,
+      raised_by: issue.raised_by || '',
+      description: issue.description,
+      action_taken: issue.action_taken || '',
+      outcome: issue.outcome || '',
+      status: issue.status,
+      follow_up_date: issue.follow_up_date || '',
+      hr_involved: issue.hr_involved || false,
+    });
+    setEditTarget(issue);
+    setModalOpen(true);
+  }
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.date_raised || !form.description.trim()) { showToast('Date and description are required', 'error'); return; }
+    const payload = { ...form, staff_id: staffId, staff_name: staffName, centre_id: centreId };
+    try {
+      if (editTarget) {
+        await apiPatch(`staff-issues?id=${editTarget.id}`, payload);
+        showToast('Issue updated');
+      } else {
+        await apiPost('staff-issues', payload);
+        showToast('Issue logged');
+      }
+      setModalOpen(false);
+      load();
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to save', 'error');
+    }
+  }
+
+  async function handleStatusChange(id: string, status: string) {
+    try {
+      await apiPatch(`staff-issues?id=${id}`, { status });
+      setIssues(prev => prev.map(i => i.id === id ? { ...i, status } : i));
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to update', 'error');
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
+          <AlertCircle size={14} className="text-red-500" />
+          HR Issues ({issues.length})
+        </h4>
+        <button onClick={openAdd} className="flex items-center gap-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-1.5 rounded-lg transition-colors">
+          <Plus size={12} />
+          Log Issue
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-gray-400 animate-pulse py-3 text-center">Loading...</div>
+      ) : issues.length === 0 ? (
+        <div className="text-xs text-gray-400 py-3 text-center italic">No HR issues for this staff member</div>
+      ) : (
+        <div className="space-y-2">
+          {issues.map(issue => (
+            <div key={issue.id} className="border border-gray-100 rounded-xl overflow-hidden">
+              <button
+                className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 text-left"
+                onClick={() => setExpanded(expanded === issue.id ? null : issue.id)}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-semibold text-gray-800">
+                      {new Date(issue.date_raised).toLocaleDateString('en-AU')}
+                    </span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ISSUE_TYPE_COLORS[issue.issue_type] || 'bg-gray-100 text-gray-700'}`}>
+                      {issue.issue_type}
+                    </span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${SEVERITY_COLORS[issue.severity] || 'bg-gray-100 text-gray-700'}`}>
+                      {issue.severity}
+                    </span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ISSUE_STATUS_COLORS[issue.status] || 'bg-gray-100 text-gray-700'}`}>
+                      {issue.status}
+                    </span>
+                    {issue.hr_involved && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">HR</span>}
+                  </div>
+                </div>
+                <button onClick={e => { e.stopPropagation(); openEdit(issue); }} className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg">
+                  <Pencil size={12} />
+                </button>
+                {expanded === issue.id ? <ChevronDown size={14} className="text-gray-400 flex-shrink-0" /> : <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />}
+              </button>
+              {expanded === issue.id && (
+                <div className="px-3 pb-3 space-y-2 bg-gray-50 border-t border-gray-100">
+                  <div className="pt-2">
+                    <InlineSelect
+                      value={issue.status}
+                      options={['Open', 'Under Review', 'Action Taken', 'Resolved', 'Escalated']}
+                      onChange={v => handleStatusChange(issue.id, v)}
+                      getColor={s => ISSUE_STATUS_COLORS[s] || 'bg-gray-100 text-gray-600'}
+                    />
+                  </div>
+                  {issue.raised_by && <div className="text-xs text-gray-600"><span className="font-medium">Raised by:</span> {issue.raised_by}</div>}
+                  <div className="text-xs text-gray-600"><span className="font-medium">Description:</span> {issue.description}</div>
+                  {issue.action_taken && <div className="text-xs text-gray-600"><span className="font-medium">Action taken:</span> {issue.action_taken}</div>}
+                  {issue.outcome && <div className="text-xs text-gray-600"><span className="font-medium">Outcome:</span> {issue.outcome}</div>}
+                  {issue.follow_up_date && <div className="text-xs text-gray-600"><span className="font-medium">Follow-up:</span> {new Date(issue.follow_up_date).toLocaleDateString('en-AU')}</div>}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editTarget ? 'Edit HR Issue' : 'Log HR Issue'} size="lg">
+        <form onSubmit={handleSave} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Issue Type *</label>
+              <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.issue_type} onChange={e => setForm(f => ({ ...f, issue_type: e.target.value }))}>
+                {['Performance', 'Conduct', 'Attendance', 'Grievance', 'Bullying/Harassment', 'WHS Concern', 'Other'].map(t => <option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Severity</label>
+              <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.severity} onChange={e => setForm(f => ({ ...f, severity: e.target.value }))}>
+                {['Minor', 'Moderate', 'Serious'].map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Date Raised *</label>
+              <input type="date" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.date_raised} onChange={e => setForm(f => ({ ...f, date_raised: e.target.value }))} required />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Raised By</label>
+              <input className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.raised_by} onChange={e => setForm(f => ({ ...f, raised_by: e.target.value }))} placeholder="Name of person raising" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+              <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
+                {['Open', 'Under Review', 'Action Taken', 'Resolved', 'Escalated'].map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Follow-up Date</label>
+              <input type="date" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+                value={form.follow_up_date} onChange={e => setForm(f => ({ ...f, follow_up_date: e.target.value }))} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Description *</label>
+            <textarea rows={3} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20 resize-none"
+              value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Describe the issue..." required />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Action Taken</label>
+            <textarea rows={2} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20 resize-none"
+              value={form.action_taken} onChange={e => setForm(f => ({ ...f, action_taken: e.target.value }))} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Outcome</label>
+            <textarea rows={2} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20 resize-none"
+              value={form.outcome} onChange={e => setForm(f => ({ ...f, outcome: e.target.value }))} />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+            <input type="checkbox" checked={form.hr_involved} onChange={e => setForm(f => ({ ...f, hr_involved: e.target.checked }))}
+              className="w-4 h-4 text-[#2d5c18] border-gray-300 rounded focus:ring-[#2d5c18]" />
+            HR Involved
+          </label>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={() => setModalOpen(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors">Cancel</button>
+            <button type="submit" className="px-5 py-2 bg-[#2d5c18] text-white text-sm font-medium rounded-xl hover:bg-[#2d5c18]/90 transition-colors">
+              {editTarget ? 'Save Changes' : 'Log Issue'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
+// ── Staff Profile Drawer ───────────────────────────────────────────────────
+
+function StaffProfileDrawer({
+  staff,
+  centreId,
+  groups,
+  initialTab,
+  onClose,
+  onSaved,
+}: {
+  staff: StaffMemberRow;
+  centreId: string;
+  groups: Array<{ id: string; title: string; isActive: boolean }>;
+  initialTab?: 'profile' | 'accidents' | 'issues';
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [tab, setTab] = useState<'profile' | 'accidents' | 'issues'>(initialTab || 'profile');
+  const [local, setLocal] = useState<StaffMemberRow>({ ...staff });
+  const [saving, setSaving] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editForm, setEditForm] = useState<StaffMemberRow>({ ...staff });
+
+  async function handleSaveProfile() {
+    setSaving(true);
+    try {
+      const fields: Record<string, string | null | boolean | number> = {
+        employment_status: editForm.employment_status || 'Active',
+        position: editForm.position || null,
+        position_category: editForm.position_category || null,
+        qualification: editForm.qualification || null,
+        days_per_week: editForm.days_per_week || null,
+        min_hours_pw: editForm.min_hours_pw || null,
+        email: editForm.email || null,
+        mobile: editForm.mobile || null,
+        wwcc_number: editForm.wwcc_number || null,
+        wwcc_expiry: editForm.wwcc_expiry || null,
+        first_aid_code: editForm.first_aid_code || null,
+        first_aid_expiry: editForm.first_aid_expiry || null,
+        cpr_code: editForm.cpr_code || null,
+        cpr_expiry: editForm.cpr_expiry || null,
+        anaphylaxis_code: editForm.anaphylaxis_code || null,
+        anaphylaxis_expiry: editForm.anaphylaxis_expiry || null,
+        child_protection_renewal: editForm.child_protection_renewal || null,
+        start_date: editForm.start_date || null,
+        end_date: editForm.end_date || null,
+      };
+      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'update_staff', staffId: staff.id, fields });
+      setLocal({ ...local, ...editForm });
+      setEditMode(false);
+      showToast('Staff profile updated');
+      onSaved();
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to save', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleMoveRoom(groupId: string) {
+    if (!groupId) return;
+    setSaving(true);
+    try {
+      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'move_staff', staffId: staff.id, groupId, centreId });
+      showToast('Staff moved to new room');
+      onSaved();
+      onClose();
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to move', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleStatusQuickChange(status: string) {
+    try {
+      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'update_staff', staffId: staff.id, fields: { employment_status: status } });
+      setLocal(prev => ({ ...prev, employment_status: status }));
+      showToast('Status updated');
+      onSaved();
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to update', 'error');
+    }
+  }
+
+  const compItems = [
+    { label: 'WWCC', expiry: local.wwcc_expiry, code: local.wwcc_number },
+    { label: 'First Aid', expiry: local.first_aid_expiry, code: local.first_aid_code },
+    { label: 'CPR', expiry: local.cpr_expiry, code: local.cpr_code },
+    { label: 'Anaphylaxis', expiry: local.anaphylaxis_expiry, code: local.anaphylaxis_code },
+    { label: 'Child Protection', expiry: local.child_protection_renewal },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/30" />
+      <div
+        className="relative w-full max-w-lg bg-white h-full overflow-y-auto shadow-2xl flex flex-col border-l border-gray-200"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="sticky top-0 z-10 bg-white px-5 pt-4 pb-3 border-b border-gray-100">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex-1 min-w-0">
+              <h2 className="text-base font-bold text-gray-900">{local.name}</h2>
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                <InlineSelect
+                  value={local.employment_status || 'Active'}
+                  options={['Active', 'On Leave', 'Resigned', 'Exited', 'Inactive', 'PPL', 'Long Service', 'Probation', 'Casual']}
+                  onChange={handleStatusQuickChange}
+                  getColor={v => STATUS_COLORS[v] || 'bg-gray-100 text-gray-600'}
+                />
+                {local.qualification && (
+                  <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">{local.qualification}</span>
+                )}
+                {local.position && (
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ROLE_COLORS[local.position] || 'bg-gray-100 text-gray-700'}`}>{local.position}</span>
+                )}
+                {saving && <span className="text-xs text-gray-400 animate-pulse">Saving...</span>}
               </div>
+            </div>
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 flex-shrink-0">
+              <X size={16} />
+            </button>
+          </div>
+          {/* Tabs */}
+          <div className="flex gap-1 mt-3">
+            {(['profile', 'accidents', 'issues'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`flex-1 py-1.5 text-xs font-semibold rounded-lg capitalize transition-colors ${tab === t ? 'bg-[#2d5c18] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              >
+                {t}
+              </button>
             ))}
           </div>
+        </div>
+
+        <div className="flex-1 px-5 py-4 space-y-5">
+          {/* ── Profile Tab ── */}
+          {tab === 'profile' && (
+            <>
+              {/* Move to room */}
+              <section>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-2 text-gray-400">Room / Group</h3>
+                <select
+                  onChange={e => { if (e.target.value) handleMoveRoom(e.target.value); }}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none"
+                  defaultValue=""
+                >
+                  <option value="">Move to room...</option>
+                  {groups.filter(g => g.isActive).map(g => (
+                    <option key={g.id} value={g.id}>{g.title}</option>
+                  ))}
+                </select>
+              </section>
+
+              {/* Employment */}
+              {!editMode ? (
+                <section>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Employment</h3>
+                    <button onClick={() => { setEditForm({ ...local }); setEditMode(true); }}
+                      className="flex items-center gap-1 text-xs text-[#2d5c18] hover:bg-[#2d5c18]/10 px-2 py-1 rounded-lg">
+                      <Pencil size={12} /> Edit
+                    </button>
+                  </div>
+                  <div className="rounded-xl overflow-hidden border border-gray-100">
+                    {[
+                      { label: 'Status', value: local.employment_status || 'Active' },
+                      { label: 'Position', value: local.position },
+                      { label: 'Qualification', value: local.qualification },
+                      { label: 'Category', value: local.position_category },
+                      { label: 'Days/Week', value: local.days_per_week },
+                      { label: 'Min Hours/wk', value: local.min_hours_pw },
+                      { label: 'Start Date', value: fmtDate(local.start_date) },
+                      { label: 'End Date', value: local.end_date },
+                    ].filter(r => r.value && r.value !== '—').map((row, i, arr) => (
+                      <div key={row.label} className={`flex items-center justify-between px-3 py-2 text-sm ${i < arr.length - 1 ? 'border-b border-gray-50' : ''}`}>
+                        <span className="text-gray-500">{row.label}</span>
+                        <span className="font-medium text-gray-900">{row.value}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Contact */}
+                  {(local.email || local.mobile) && (
+                    <div className="mt-3 rounded-xl border border-gray-100 overflow-hidden">
+                      {local.email && (
+                        <div className="flex items-center justify-between px-3 py-2 text-sm border-b border-gray-50">
+                          <span className="text-gray-500">Email</span>
+                          <a href={`mailto:${local.email}`} className="text-[#2d5c18] hover:underline text-xs">{local.email}</a>
+                        </div>
+                      )}
+                      {local.mobile && (
+                        <div className="flex items-center justify-between px-3 py-2 text-sm">
+                          <span className="text-gray-500">Mobile</span>
+                          <a href={`tel:${local.mobile}`} className="text-[#2d5c18] hover:underline">{local.mobile}</a>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </section>
+              ) : (
+                <section>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Edit Profile</h3>
+                    <button onClick={() => setEditMode(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                          value={editForm.employment_status || 'Active'} onChange={e => setEditForm(f => ({ ...f, employment_status: e.target.value }))}>
+                          {['Active', 'On Leave', 'Resigned', 'Exited', 'Inactive', 'PPL', 'Long Service', 'Probation', 'Casual'].map(s => <option key={s}>{s}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Position</label>
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                          value={editForm.position || ''} onChange={e => setEditForm(f => ({ ...f, position: e.target.value }))}>
+                          <option value="">Select...</option>
+                          {Object.keys(ROLE_COLORS).map(r => <option key={r}>{r}</option>)}
+                          {['Early Childhood Teacher', 'Assistant Director', 'Centre Director', 'Chef', 'Internal Casual'].map(r => <option key={r}>{r}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Qualification</label>
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                          value={editForm.qualification || ''} onChange={e => setEditForm(f => ({ ...f, qualification: e.target.value }))}>
+                          <option value="">Select...</option>
+                          {['ECT', 'WT ECT', 'Diploma', 'Certificate 3', 'Trainee', 'ISS', 'Chef', 'No Qualification'].map(q => <option key={q}>{q}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Category</label>
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                          value={editForm.position_category || ''} onChange={e => setEditForm(f => ({ ...f, position_category: e.target.value }))}>
+                          <option value="">Select...</option>
+                          {['Full Time', 'Part Time', 'Casual', 'As Required'].map(c => <option key={c}>{c}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Days/Week</label>
+                        <input className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                          value={editForm.days_per_week || ''} onChange={e => setEditForm(f => ({ ...f, days_per_week: e.target.value }))} placeholder="e.g. Mon-Fri" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Min Hours/wk</label>
+                        <input className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                          value={editForm.min_hours_pw || ''} onChange={e => setEditForm(f => ({ ...f, min_hours_pw: e.target.value }))} placeholder="e.g. 38" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Email</label>
+                        <input type="email" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                          value={editForm.email || ''} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Mobile</label>
+                        <input className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                          value={editForm.mobile || ''} onChange={e => setEditForm(f => ({ ...f, mobile: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Start Date</label>
+                        <input type="date" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                          value={editForm.start_date || ''} onChange={e => setEditForm(f => ({ ...f, start_date: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">End Date</label>
+                        <input type="date" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                          value={editForm.end_date || ''} onChange={e => setEditForm(f => ({ ...f, end_date: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div className="border-t border-gray-100 pt-3">
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <ShieldCheck size={13} className="text-gray-400" />
+                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Certifications</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        {[
+                          { label: 'WWCC Number', field: 'wwcc_number' as const, type: 'text' },
+                          { label: 'WWCC Expiry', field: 'wwcc_expiry' as const, type: 'date' },
+                          { label: 'First Aid Code', field: 'first_aid_code' as const, type: 'text' },
+                          { label: 'First Aid Expiry', field: 'first_aid_expiry' as const, type: 'date' },
+                          { label: 'CPR Code', field: 'cpr_code' as const, type: 'text' },
+                          { label: 'CPR Expiry', field: 'cpr_expiry' as const, type: 'date' },
+                          { label: 'Anaphylaxis Code', field: 'anaphylaxis_code' as const, type: 'text' },
+                          { label: 'Anaphylaxis Expiry', field: 'anaphylaxis_expiry' as const, type: 'date' },
+                          { label: 'Child Protection', field: 'child_protection_renewal' as const, type: 'date' },
+                        ].map(({ label, field, type }) => (
+                          <div key={field}>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+                            <input
+                              type={type}
+                              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+                              value={editForm[field] || ''}
+                              onChange={e => setEditForm(f => ({ ...f, [field]: e.target.value }))}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-3 pt-2">
+                      <button onClick={() => setEditMode(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+                      <button onClick={handleSaveProfile} disabled={saving}
+                        className="px-5 py-2 bg-[#2d5c18] text-white text-sm font-medium rounded-xl hover:bg-[#2d5c18]/90 transition-colors disabled:opacity-60">
+                        {saving ? 'Saving...' : 'Save Profile'}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              {/* Compliance */}
+              <section>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-2 text-gray-400 flex items-center gap-1.5">
+                  <ShieldCheck size={12} />
+                  Compliance
+                </h3>
+                <div className="rounded-xl overflow-hidden border border-gray-100">
+                  {compItems.map((item, i) => {
+                    const days = item.expiry ? certDays(item.expiry) : null;
+                    const isExpired = days !== null && days < 0;
+                    const isWarning = days !== null && days >= 0 && days < 90;
+                    const dotColor = isExpired ? '#ef4444' : isWarning ? '#f59e0b' : item.expiry ? '#22c55e' : '#d1d5db';
+                    return (
+                      <div key={item.label}
+                        className={`flex items-start gap-3 px-3 py-2.5 text-sm ${i < compItems.length - 1 ? 'border-b border-gray-50' : ''}`}
+                        style={{ backgroundColor: isExpired ? '#fff5f5' : isWarning ? '#fffbeb' : 'white' }}
+                      >
+                        <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 mt-1" style={{ backgroundColor: dotColor }} />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-xs text-gray-800">{item.label}</div>
+                          {item.code && <div className="text-xs text-gray-500">{item.code}</div>}
+                          {item.expiry
+                            ? <div className={`text-xs font-medium ${isExpired ? 'text-red-700' : isWarning ? 'text-amber-700' : 'text-green-700'}`}>
+                                {fmtDate(item.expiry)}
+                                {days !== null && days < 0 && ` · Expired ${Math.abs(days)}d ago`}
+                                {days !== null && days >= 0 && days < 90 && ` · ${days}d remaining`}
+                              </div>
+                            : <div className="text-xs text-gray-400">Not recorded</div>
+                          }
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </>
+          )}
+
+          {/* ── Accidents Tab ── */}
+          {tab === 'accidents' && (
+            <AccidentsSection staffId={staff.id} staffName={staff.name} centreId={centreId} />
+          )}
+
+          {/* ── Issues Tab ── */}
+          {tab === 'issues' && (
+            <IssuesSection staffId={staff.id} staffName={staff.name} centreId={centreId} />
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-// ── All Centres view ───────────────────────────────────────────────────────
-function AllCentresView({ centreIds, onSelectCentre }: { centreIds: string[], onSelectCentre: (id: string) => void }) {
-  const [summaries, setSummaries] = useState<CentreSummary[]>(() =>
-    centreIds.map(id => ({ centreId:id, centreName: CENTRES.find(c=>c.id===id)?.name??id, status:'loading' as const, totalActive:0,rooms:0,floats:0,casuals:0,expiredCount:0,warningCount:0,byQual:{} }))
-  );
+// ── Staff Card (room view) ─────────────────────────────────────────────────
 
-  useEffect(() => {
-    centreIds.forEach(id => {
-      fetch(`/api/staffing-structure?centreId=${id}`)
-        .then(r=>r.ok?r.json():r.json().then((j:{error?:string})=>{throw new Error(j.error||'Error');}))
-        .then((data: BoardData) => {
-          const ag = data.groups.filter(g=>g.isActive);
-          const all = ag.flatMap(g=>g.staff);
-          const byQual: Record<string,number>={};
-          let expiredCount=0,warningCount=0;
-          for(const s of all){const q=s.qualification||'Unknown';byQual[q]=(byQual[q]||0)+1;const l=worstCompliance(s);if(l==='expired')expiredCount++;else if(l==='warning')warningCount++;}
-          setSummaries(prev=>prev.map(s=>s.centreId===id?{centreId:id,centreName:CENTRES.find(c=>c.id===id)?.name??id,status:'ok',totalActive:all.length,rooms:ag.filter(g=>!/(float|casual|hero|mat leave)/i.test(g.title)).length,floats:ag.filter(g=>/float/i.test(g.title)).flatMap(g=>g.staff).length,casuals:ag.filter(g=>/casual/i.test(g.title)).flatMap(g=>g.staff).length,expiredCount,warningCount,byQual}:s));
-        })
-        .catch((e:Error)=>setSummaries(prev=>prev.map(s=>s.centreId===id?{...s,status:'error',error:e.message}:s)));
-    });
-  }, [centreIds.join(',')]);
-
-  const loaded = summaries.filter(s=>s.status==='ok');
-  const tot = { staff:loaded.reduce((n,s)=>n+s.totalActive,0), expired:loaded.reduce((n,s)=>n+s.expiredCount,0), warning:loaded.reduce((n,s)=>n+s.warningCount,0), floats:loaded.reduce((n,s)=>n+s.floats,0), casuals:loaded.reduce((n,s)=>n+s.casuals,0) };
-  const loading = summaries.filter(s=>s.status==='loading').length;
+function StaffCard({
+  staff,
+  onSelect,
+  onStatusChange,
+}: {
+  staff: StaffMemberRow;
+  onSelect: (tab?: 'profile' | 'accidents' | 'issues') => void;
+  onStatusChange: (staffId: string, status: string) => void;
+}) {
+  const isResigned = staff.employment_status === 'Resigned';
+  const isExited = staff.employment_status === 'Exited';
 
   return (
-    <div className="space-y-5">
-      {loading>0 && <div className="text-xs px-3 py-2 rounded-xl animate-pulse" style={{ backgroundColor:B.bg,color:B.muted }}>Loading {loading}/{centreIds.length} centres...</div>}
-      <div>
-        <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: B.muted }}>Network Total</div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          {[
-            {v:loaded.length,l:'Centres Loaded',accent:B.green},
-            {v:tot.staff,l:'Total Active Staff',accent:B.green},
-            {v:tot.expired,l:'Expired Compliance',accent:tot.expired>0?'#991b1b':undefined,bg:tot.expired>0?'#fee2e2':B.bg},
-            {v:tot.warning,l:'Expiring <= 90d',accent:tot.warning>0?'#92400e':undefined,bg:tot.warning>0?'#fef9c3':B.bg},
-            {v:tot.floats+tot.casuals,l:'Float + Casual'},
-          ].map(({v,l,accent,bg})=>(
-            <div key={l} className="rounded-2xl p-4 flex flex-col gap-1" style={{ backgroundColor:bg||B.white, border:`1px solid ${B.border}` }}>
-              <div className="text-2xl font-bold" style={{ color:accent||B.text }}>{v}</div>
-              <div className="text-xs" style={{ color: B.muted }}>{l}</div>
-            </div>
-          ))}
+    <div
+      className={`bg-white rounded-2xl border shadow-sm p-3.5 flex flex-col gap-2 transition-all ${
+        isResigned ? 'border-amber-200 bg-amber-50/30' : isExited ? 'border-gray-100 opacity-70' : 'border-gray-100'
+      }`}
+    >
+      {/* Name row */}
+      <div className="flex items-start justify-between gap-2">
+        <button className="flex-1 min-w-0 text-left" onClick={() => onSelect('profile')}>
+          <div className="text-sm font-bold text-gray-900 hover:text-[#2d5c18] truncate">{staff.name}</div>
+          {staff.qualification && (
+            <span className="text-xs text-indigo-600 font-medium">{staff.qualification}</span>
+          )}
+        </button>
+        <div className="flex gap-1">
+          <button onClick={() => onSelect('accidents')} className="p-1 rounded-lg hover:bg-orange-50 text-gray-400 hover:text-orange-500" title="Accidents">
+            <Stethoscope size={13} />
+          </button>
+          <button onClick={() => onSelect('issues')} className="p-1 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500" title="Issues">
+            <AlertCircle size={13} />
+          </button>
+          <button onClick={() => onSelect('profile')} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600" title="Edit">
+            <Pencil size={13} />
+          </button>
         </div>
       </div>
-      <div>
-        <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: B.muted }}>By Centre</div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {summaries.map(s=>(
-            <div key={s.centreId} className="rounded-2xl border overflow-hidden cursor-pointer hover:shadow-md transition-shadow" style={{ borderColor:B.border, backgroundColor:B.white }} onClick={()=>onSelectCentre(s.centreId)}>
-              <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor:B.border, backgroundColor:B.bg }}>
-                <h3 className="font-bold text-sm" style={{ color:B.text }}>{s.centreName}</h3>
-                <div className="flex gap-1">
-                  {s.status==='loading' && <span className="text-xs animate-pulse" style={{ color:B.muted }}>Loading...</span>}
-                  {s.expiredCount>0 && <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ backgroundColor:'#fee2e2',color:'#991b1b' }}>{s.expiredCount} expired</span>}
-                  {s.warningCount>0 && <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ backgroundColor:'#fef9c3',color:'#92400e' }}>{s.warningCount} expiring</span>}
-                </div>
-              </div>
-              {s.status==='ok' && (
-                <div className="px-4 py-3 space-y-3">
-                  <div className="grid grid-cols-3 gap-2 text-center">
-                    <div><div className="text-xl font-bold" style={{ color:B.green }}>{s.totalActive}</div><div className="text-xs" style={{ color:B.muted }}>Staff</div></div>
-                    <div><div className="text-xl font-bold" style={{ color:B.text }}>{s.rooms}</div><div className="text-xs" style={{ color:B.muted }}>Rooms</div></div>
-                    <div><div className="text-xl font-bold" style={{ color:B.text }}>{s.floats+s.casuals}</div><div className="text-xs" style={{ color:B.muted }}>Float/Cas</div></div>
-                  </div>
-                  <div className="flex flex-wrap gap-1 pt-1 border-t" style={{ borderColor:B.border }}>
-                    {QUALIFICATION_OPTIONS.filter(o=>s.byQual[o.value]).map(o=>(
-                      <div key={o.value} className="flex items-center gap-1">
-                        <StatusBadge value={o.value} options={QUALIFICATION_OPTIONS} size="xs" />
-                        <span className="text-xs font-bold" style={{ color:B.text }}>{s.byQual[o.value]}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {s.status==='loading' && <div className="px-4 py-3 space-y-2">{[1,2].map(i=><div key={i} className="h-4 rounded animate-pulse" style={{ backgroundColor:B.border }} />)}</div>}
-              {s.status==='error' && <div className="px-4 py-3 text-xs" style={{ color:'#ef4444' }}>{s.error}</div>}
-            </div>
-          ))}
+
+      {/* Position badge */}
+      {staff.position && (
+        <span className={`self-start text-xs font-medium px-2 py-0.5 rounded-full ${ROLE_COLORS[staff.position] || 'bg-gray-100 text-gray-700'}`}>
+          {staff.position}
+        </span>
+      )}
+
+      {/* Status */}
+      <InlineSelect
+        value={staff.employment_status || 'Active'}
+        options={['Active', 'On Leave', 'Resigned', 'Exited', 'Inactive', 'PPL', 'Long Service', 'Probation', 'Casual']}
+        onChange={v => onStatusChange(staff.id, v)}
+        getColor={v => STATUS_COLORS[v] || 'bg-gray-100 text-gray-600'}
+      />
+
+      {/* Days worked */}
+      {staff.days_per_week && (
+        <div className="text-xs text-gray-500">
+          <span className="font-medium">Days:</span> {staff.days_per_week}
+          {staff.min_hours_pw && <span className="ml-2 text-gray-400">{staff.min_hours_pw}h/wk</span>}
         </div>
+      )}
+
+      {/* Compliance dots */}
+      <div className="flex items-center gap-1.5 border-t border-gray-50 pt-2 mt-1">
+        <ShieldCheck size={11} className="text-gray-300 flex-shrink-0" />
+        <CertDot expiry={staff.wwcc_expiry} />
+        <span className="text-xs text-gray-300">WWCC</span>
+        <CertDot expiry={staff.first_aid_expiry} />
+        <span className="text-xs text-gray-300">FA</span>
+        <CertDot expiry={staff.cpr_expiry} />
+        <span className="text-xs text-gray-300">CPR</span>
+        <CertDot expiry={staff.anaphylaxis_expiry} />
+        <span className="text-xs text-gray-300">Ana</span>
       </div>
     </div>
+  );
+}
+
+// ── Add Staff Modal ────────────────────────────────────────────────────────
+
+function AddStaffModal({
+  centreId,
+  groups,
+  prefilledGroupId,
+  onClose,
+  onSaved,
+}: {
+  centreId: string;
+  groups: Array<{ id: string; title: string; isActive: boolean }>;
+  prefilledGroupId?: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState({
+    name: '',
+    groupId: prefilledGroupId || groups.filter(g => g.isActive)[0]?.id || '',
+    qualification: '',
+    position: '',
+    employment_status: 'Active',
+  });
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!form.name.trim()) { showToast('Name is required', 'error'); return; }
+    setSaving(true);
+    try {
+      await apiPost(`staffing-structure?centreId=${centreId}`, {
+        action: 'create_staff',
+        centreId,
+        groupId: form.groupId,
+        name: form.name.trim(),
+        qualification: form.qualification,
+        position: form.position,
+        employment_status: form.employment_status,
+      });
+      showToast('Staff member added');
+      onSaved();
+      onClose();
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to add', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal isOpen onClose={onClose} title="Add Staff Member" size="md">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Full Name *</label>
+          <input
+            autoFocus
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+            value={form.name}
+            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Room</label>
+            <select
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+              value={form.groupId}
+              onChange={e => setForm(f => ({ ...f, groupId: e.target.value }))}
+            >
+              {groups.filter(g => g.isActive).map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+            <select
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+              value={form.employment_status}
+              onChange={e => setForm(f => ({ ...f, employment_status: e.target.value }))}
+            >
+              {['Active', 'On Leave', 'Resigned', 'Exited', 'Inactive', 'PPL', 'Probation', 'Casual'].map(s => <option key={s}>{s}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Position</label>
+            <select
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+              value={form.position}
+              onChange={e => setForm(f => ({ ...f, position: e.target.value }))}
+            >
+              <option value="">Select...</option>
+              {['Room Leader', 'Educator', 'Educational Leader', 'Assistant Director', 'Centre Director', 'Trainee', 'Float', 'Internal Casual', 'Early Childhood Teacher', 'Chef'].map(p => <option key={p}>{p}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Qualification</label>
+            <select
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+              value={form.qualification}
+              onChange={e => setForm(f => ({ ...f, qualification: e.target.value }))}
+            >
+              <option value="">Select...</option>
+              {['ECT', 'WT ECT', 'Diploma', 'Certificate 3', 'Trainee', 'ISS', 'No Qualification'].map(q => <option key={q}>{q}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 pt-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+          <button onClick={handleSave} disabled={saving}
+            className="px-5 py-2 bg-[#2d5c18] text-white text-sm font-medium rounded-xl hover:bg-[#2d5c18]/90 transition-colors disabled:opacity-60">
+            {saving ? 'Adding...' : 'Add Staff'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Open Positions Modal ───────────────────────────────────────────────────
+
+function OpenPositionModal({
+  centreId,
+  groups,
+  existing,
+  onClose,
+  onSaved,
+}: {
+  centreId: string;
+  groups: Array<{ id: string; title: string }>;
+  existing?: OpenPosition;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState({
+    title: existing?.title || '',
+    qualification_required: existing?.qualification_required || '',
+    room_id: existing?.room_id || '',
+    status: existing?.status || 'Open',
+    notes: existing?.notes || '',
+  });
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!form.title.trim()) { showToast('Title is required', 'error'); return; }
+    setSaving(true);
+    try {
+      const payload = { ...form, centre_id: centreId };
+      if (existing) {
+        await apiPatch(`open-positions?id=${existing.id}`, payload);
+        showToast('Position updated');
+      } else {
+        await apiPost('open-positions', payload);
+        showToast('Position added');
+      }
+      onSaved();
+      onClose();
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to save', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal isOpen onClose={onClose} title={existing ? 'Edit Open Position' : 'Add Open Position'} size="md">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Position Title *</label>
+          <input
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+            value={form.title}
+            onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+            placeholder="e.g. Diploma Educator, Room Leader"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Qualification Required</label>
+          <input
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+            value={form.qualification_required}
+            onChange={e => setForm(f => ({ ...f, qualification_required: e.target.value }))}
+            placeholder="e.g. Diploma ECE, Certificate III"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Room (optional)</label>
+            <select
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+              value={form.room_id}
+              onChange={e => setForm(f => ({ ...f, room_id: e.target.value }))}
+            >
+              <option value="">Any room</option>
+              {groups.map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+            <select
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+              value={form.status}
+              onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
+            >
+              {['Open', 'On Hold', 'Offered', 'Filled'].map(s => <option key={s}>{s}</option>)}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+          <textarea
+            rows={2}
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none resize-none"
+            value={form.notes}
+            onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+          />
+        </div>
+        <div className="flex justify-end gap-3 pt-1">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+          <button onClick={handleSave} disabled={saving}
+            className="px-5 py-2 bg-[#2d5c18] text-white text-sm font-medium rounded-xl hover:bg-[#2d5c18]/90 transition-colors disabled:opacity-60">
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Resignation Modal ──────────────────────────────────────────────────────
+
+function ResignationModal({
+  staffName,
+  onConfirm,
+  onCancel,
+}: {
+  staffName: string;
+  onConfirm: (data: { lastDay: string; terminationType: string; reason: string; notes: string }) => void;
+  onCancel: () => void;
+}) {
+  const [lastDay, setLastDay] = useState('');
+  const [terminationType, setTerminationType] = useState('Voluntary Resignation');
+  const [reason, setReason] = useState('');
+  const [notes, setNotes] = useState('');
+
+  return (
+    <Modal isOpen onClose={onCancel} title="Mark as Resigned" size="sm">
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600">
+          Marking <span className="font-semibold text-gray-900">{staffName}</span> as resigned.
+          Their card stays visible with amber highlight until their last day.
+        </p>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Last Day *</label>
+          <input type="date" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+            value={lastDay} onChange={e => setLastDay(e.target.value)} />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Termination Type</label>
+          <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
+            value={terminationType} onChange={e => setTerminationType(e.target.value)}>
+            {['Voluntary Resignation', 'Transfer to TGA Service', 'Termination', 'End of Contract', 'Other'].map(t => <option key={t}>{t}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Reason</label>
+          <textarea rows={2} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none resize-none"
+            value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Relocating, career change..." />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Notes (optional)</label>
+          <textarea rows={2} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none resize-none"
+            value={notes} onChange={e => setNotes(e.target.value)} />
+        </div>
+        <div className="flex justify-end gap-3 pt-1">
+          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+          <button
+            onClick={() => {
+              if (!lastDay) { showToast('Please select a last day', 'error'); return; }
+              onConfirm({ lastDay, terminationType, reason, notes });
+            }}
+            className="flex items-center gap-2 px-5 py-2 bg-amber-600 text-white text-sm font-medium rounded-xl hover:bg-amber-700 transition-colors"
+          >
+            <UserMinus size={14} />
+            Confirm Resignation
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
 // ── Main Page ──────────────────────────────────────────────────────────────
+
 const ALL = '__all__';
 
 export default function StaffingStructurePage() {
   const user = getUser();
   const accessible = useMemo(() => {
     if (!user) return [];
-    if (user.role==='admin'||user.role==='ceo') return CENTRES.filter(c=>STAFFING_BOARD_IDS[c.id]);
-    if (user.role==='area_manager') return CENTRES.filter(c=>STAFFING_BOARD_IDS[c.id]);
-    return CENTRES.filter(c=>c.id===user.centreId&&STAFFING_BOARD_IDS[c.id]);
+    if (user.role === 'admin' || user.role === 'ceo') return CENTRES;
+    if (user.role === 'area_manager') return CENTRES;
+    return CENTRES.filter(c => c.id === user.centreId);
   }, [user]);
 
   const multiAccess = accessible.length > 1;
   const [centreId, setCentreId] = useState('');
-  useEffect(() => { if (accessible.length>0&&!centreId) setCentreId(multiAccess?ALL:accessible[0].id); }, [accessible]);
 
-  const [data, setData] = useState<BoardData|null>(null);
+  useEffect(() => {
+    if (accessible.length > 0 && !centreId) {
+      setCentreId(multiAccess ? ALL : accessible[0].id);
+    }
+  }, [accessible]);
+
+  // Board data (per centre)
+  const [data, setData] = useState<BoardData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string|null>(null);
-  const [qualFilter, setQualFilter] = useState('all');
-  const [roomFilter, setRoomFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [search, setSearch] = useState('');
-  const [showExited, setShowExited] = useState(false);
-  const [selectedStaff, setSelectedStaff] = useState<StaffMember|null>(null);
-  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function loadData(id: string) {
-    if (id===ALL) { setData(null); return; }
+  // Open positions (per centre)
+  const [openPositions, setOpenPositions] = useState<OpenPosition[]>([]);
+
+  // UI state
+  const [search, setSearch] = useState('');
+  const [viewMode, setViewMode] = useState<'card' | 'list'>('card');
+  const [collapsedRooms, setCollapsedRooms] = useState<Set<string>>(new Set());
+  const [positionsCollapsed, setPositionsCollapsed] = useState(false);
+  const [exitedCollapsed, setExitedCollapsed] = useState(true);
+
+  // Modals
+  const [profileTarget, setProfileTarget] = useState<{ staff: StaffMemberRow; tab?: 'profile' | 'accidents' | 'issues' } | null>(null);
+  const [addStaffTarget, setAddStaffTarget] = useState<{ groupId?: string } | null>(null);
+  const [positionModal, setPositionModal] = useState<{ existing?: OpenPosition } | null>(null);
+  const [resignationPending, setResignationPending] = useState<{ staffId: string; staffName: string } | null>(null);
+
+  const loadData = useCallback((id: string) => {
+    if (id === ALL) { setData(null); return; }
     setLoading(true); setError(null); setData(null);
     fetch(`/api/staffing-structure?centreId=${id}`)
-      .then(r=>r.ok?r.json():r.json().then((j:{error?:string})=>{throw new Error(j.error||r.statusText);}))
-      .then((d:BoardData)=>{ setData(d); setLoading(false); })
-      .catch((e:Error)=>{ setError(e.message); setLoading(false); });
+      .then(r => r.ok ? r.json() : r.json().then((j: { error?: string }) => { throw new Error(j.error || r.statusText); }))
+      .then((d: BoardData) => { setData(d); setLoading(false); })
+      .catch((e: Error) => { setError(e.message); setLoading(false); });
+  }, []);
+
+  const loadPositions = useCallback((id: string) => {
+    if (id === ALL) { setOpenPositions([]); return; }
+    fetch(`/api/open-positions?centreId=${id}`)
+      .then(r => r.ok ? r.json() : Promise.resolve([]))
+      .then(d => setOpenPositions(Array.isArray(d) ? d : []))
+      .catch(() => setOpenPositions([]));
+  }, []);
+
+  useEffect(() => {
+    if (centreId) {
+      loadData(centreId);
+      loadPositions(centreId);
+    }
+  }, [centreId, loadData, loadPositions]);
+
+  const activeGroups = useMemo(() => data?.groups.filter(g => g.isActive) ?? [], [data]);
+  const inactiveGroups = useMemo(() => data?.groups.filter(g => !g.isActive) ?? [], [data]);
+  const exitedGroup = useMemo(() => inactiveGroups.find(g => /exited/i.test(g.title)), [inactiveGroups]);
+
+  const searchLower = search.toLowerCase().trim();
+  const filteredGroups = useMemo(() =>
+    activeGroups.map(g => ({
+      ...g,
+      staff: searchLower
+        ? g.staff.filter(s => s.name.toLowerCase().includes(searchLower) || (s.position || '').toLowerCase().includes(searchLower) || (s.qualification || '').toLowerCase().includes(searchLower))
+        : g.staff,
+    })).filter(g => !searchLower || g.staff.length > 0),
+    [activeGroups, searchLower]
+  );
+
+  // Compliance summary
+  const allActive = activeGroups.flatMap(g => g.staff);
+  const certAlerts = allActive.filter(s => {
+    const expiries = [s.wwcc_expiry, s.first_aid_expiry, s.cpr_expiry, s.anaphylaxis_expiry];
+    return expiries.some(e => e && certDays(e) < 90);
+  }).length;
+  const openPositionCount = openPositions.filter(p => p.status === 'Open' || p.status === 'On Hold').length;
+
+  function toggleRoom(id: string) {
+    setCollapsedRooms(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
-  useEffect(()=>{ if(centreId) loadData(centreId); },[centreId]);
+  function expandAll() { setCollapsedRooms(new Set()); }
 
-  const activeGroups   = useMemo(()=>data?.groups.filter(g=>g.isActive)??[], [data]);
-  const inactiveGroups = useMemo(()=>data?.groups.filter(g=>!g.isActive)??[], [data]);
-  const exitedGroup    = useMemo(()=>inactiveGroups.find(g=>/exited/i.test(g.title)), [inactiveGroups]);
-  const pendingGroups  = useMemo(()=>inactiveGroups.filter(g=>!(/exited/i.test(g.title))&&g.staff.length>0), [inactiveGroups]);
+  function collapseAll() {
+    setCollapsedRooms(new Set(activeGroups.map(g => g.id)));
+  }
 
-  const filteredGroups = useMemo(()=>
-    activeGroups
-      .filter(g=>roomFilter==='all'||g.id===roomFilter)
-      .map(g=>({...g, staff: g.staff.filter(s=>{
-        if (qualFilter!=='all'&&s.qualification!==qualFilter) return false;
-        if (statusFilter!=='all'&&(s.employmentStatus||'Active')!==statusFilter) return false;
-        if (search.trim()) { const q=search.toLowerCase(); if(!s.name.toLowerCase().includes(q)&&!s.position?.toLowerCase().includes(q)) return false; }
-        return true;
-      })}))
-      .filter(g=>g.staff.length>0||roomFilter==='all'||roomFilter===g.id)
-  , [activeGroups, roomFilter, qualFilter, statusFilter, search]);
+  async function handleStatusChange(staffId: string, status: string) {
+    if (status === 'Resigned' || status === 'Exited') {
+      const sm = allActive.find(s => s.id === staffId);
+      if (sm) {
+        setResignationPending({ staffId, staffName: sm.name });
+        return;
+      }
+    }
+    try {
+      await apiPost(`staffing-structure?centreId=${centreId}`, {
+        action: 'update_staff', staffId, fields: { employment_status: status },
+      });
+      loadData(centreId);
+      showToast('Status updated');
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to update', 'error');
+    }
+  }
 
-  const centreName = CENTRES.find(c=>c.id===centreId)?.name??'';
+  async function handleResignationConfirm(data: { lastDay: string; terminationType: string; reason: string; notes: string }) {
+    if (!resignationPending) return;
+    try {
+      await apiPost(`staffing-structure?centreId=${centreId}`, {
+        action: 'update_staff', staffId: resignationPending.staffId,
+        fields: { employment_status: 'Resigned', end_date: data.lastDay },
+      });
 
-  if (!user) return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor:B.bg }}><p style={{ color:B.muted }}>Please log in.</p></div>;
+      // Create backfill open position
+      const sm = allActive.find(s => s.id === resignationPending.staffId);
+      if (sm) {
+        await apiPost('open-positions', {
+          centre_id: centreId,
+          title: sm.position || 'Educator',
+          qualification_required: sm.qualification || '',
+          room_id: sm.group_id || undefined,
+          status: 'Open',
+          notes: `Backfill for ${resignationPending.staffName} — last day ${new Date(data.lastDay + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })}${data.notes ? `. ${data.notes}` : ''}`,
+        });
+      }
+
+      showToast(`${resignationPending.staffName} marked as resigned`);
+      loadData(centreId);
+      loadPositions(centreId);
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to process resignation', 'error');
+    } finally {
+      setResignationPending(null);
+    }
+  }
+
+  async function handlePositionStatusChange(posId: string, status: string) {
+    try {
+      await apiPatch(`open-positions?id=${posId}`, { status });
+      setOpenPositions(prev => prev.map(p => p.id === posId ? { ...p, status } : p));
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to update', 'error');
+    }
+  }
+
+  async function handleDeletePosition(posId: string) {
+    try {
+      await apiDelete(`open-positions?id=${posId}`);
+      setOpenPositions(prev => prev.filter(p => p.id !== posId));
+      showToast('Position deleted');
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to delete', 'error');
+    }
+  }
+
+  async function handleDeleteStaff(staffId: string, staffName: string) {
+    if (!confirm(`Delete ${staffName}? This cannot be undone.`)) return;
+    try {
+      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'delete_staff', staffId });
+      loadData(centreId);
+      showToast('Staff member deleted');
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to delete', 'error');
+    }
+  }
+
+  const centreName = CENTRES.find(c => c.id === centreId)?.name ?? '';
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F5FAF3]">
+        <p className="text-gray-500">Please log in.</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor:B.bg }}>
+    <div className="space-y-6 pb-10">
+      {/* Modals */}
+      {resignationPending && (
+        <ResignationModal
+          staffName={resignationPending.staffName}
+          onConfirm={handleResignationConfirm}
+          onCancel={() => setResignationPending(null)}
+        />
+      )}
+      {addStaffTarget !== null && data && (
+        <AddStaffModal
+          centreId={centreId}
+          groups={activeGroups.map(g => ({ id: g.id, title: g.title, isActive: g.isActive }))}
+          prefilledGroupId={addStaffTarget.groupId}
+          onClose={() => setAddStaffTarget(null)}
+          onSaved={() => loadData(centreId)}
+        />
+      )}
+      {positionModal !== null && (
+        <OpenPositionModal
+          centreId={centreId}
+          groups={activeGroups.map(g => ({ id: g.id, title: g.title }))}
+          existing={positionModal.existing}
+          onClose={() => setPositionModal(null)}
+          onSaved={() => loadPositions(centreId)}
+        />
+      )}
+      {profileTarget && (
+        <StaffProfileDrawer
+          staff={profileTarget.staff}
+          centreId={centreId}
+          groups={activeGroups.map(g => ({ id: g.id, title: g.title, isActive: g.isActive }))}
+          initialTab={profileTarget.tab}
+          onClose={() => setProfileTarget(null)}
+          onSaved={() => loadData(centreId)}
+        />
+      )}
+
       {/* Header */}
-      <div className="sticky top-0 z-40 px-4 py-3 border-b" style={{ backgroundColor:B.white, borderColor:B.border, boxShadow:'0 1px 4px rgba(0,0,0,0.04)' }}>
-        <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-bold" style={{ color:B.text }}>
-              Staffing Structure{centreId!==ALL&&centreName?` — ${centreName}`:centreId===ALL?' — All Centres':''}
-            </h1>
-            {data?.fetchedAt && <p className="text-xs mt-0.5" style={{ color:B.muted }}>
-              Supabase · {new Date(data.fetchedAt).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})}
-              {' · '}<button onClick={()=>loadData(centreId)} className="underline hover:no-underline">Refresh</button>
-            </p>}
-          </div>
-          <div className="flex items-center gap-2">
-            {centreId!==ALL && data && (
-              <button onClick={()=>setCreating(true)}
-                className="px-4 py-2 rounded-xl text-sm font-semibold text-white hover:opacity-90"
-                style={{ backgroundColor:B.green }}>+ Add Staff</button>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Staffing Structure</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Staff assigned by room — compliance, certifications &amp; HR
+            {data?.fetchedAt && (
+              <span className="ml-2 text-gray-400">
+                · {new Date(data.fetchedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
+                {' · '}<button onClick={() => loadData(centreId)} className="underline hover:no-underline">Refresh</button>
+              </span>
             )}
-            {multiAccess && (
-              <select value={centreId} onChange={e=>{setCentreId(e.target.value);setRoomFilter('all');setQualFilter('all');setStatusFilter('all');setSearch('');}}
-                className="border rounded-xl px-3 py-2 text-sm font-medium focus:outline-none" style={{ borderColor:B.border,backgroundColor:B.white,color:B.text }}>
-                <option value={ALL}>All Centres</option>
-                {accessible.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            )}
-          </div>
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {centreId !== ALL && data && (
+            <button
+              onClick={() => setAddStaffTarget({})}
+              className="flex items-center gap-1.5 px-4 py-2 bg-[#2d5c18] text-white text-sm font-semibold rounded-xl hover:bg-[#2d5c18]/90 transition-colors"
+            >
+              <Plus size={14} />
+              Add Staff
+            </button>
+          )}
+          {multiAccess && (
+            <select
+              value={centreId}
+              onChange={e => { setCentreId(e.target.value); setCollapsedRooms(new Set()); setSearch(''); }}
+              className="text-sm border border-gray-200 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+            >
+              <option value={ALL}>All Centres</option>
+              {accessible.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          )}
+          {!multiAccess && accessible.length === 1 && (
+            <div className="flex items-center px-3 py-2 bg-[#2d5c18]/10 rounded-xl text-sm text-[#2d5c18] font-medium">
+              {accessible[0].name}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-4 py-5 space-y-5">
-        {centreId===ALL && <AllCentresView centreIds={accessible.map(c=>c.id)} onSelectCentre={id=>{setCentreId(id);setRoomFilter('all');setQualFilter('all');setStatusFilter('all');setSearch('');}} />}
+      {/* Loading / Error */}
+      {loading && (
+        <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
+          <div className="text-sm text-gray-400 animate-pulse">Loading {centreName}...</div>
+        </div>
+      )}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-sm text-red-700">
+          <strong>Failed to load:</strong> {error}
+        </div>
+      )}
 
-        {centreId!==ALL && (
-          <>
-            {loading && <div className="rounded-2xl p-10 text-center" style={{ backgroundColor:B.white }}><div className="text-sm animate-pulse" style={{ color:B.muted }}>Loading {centreName}...</div></div>}
-            {error && <div className="rounded-2xl p-5 text-sm border" style={{ backgroundColor:'#fff5f5',borderColor:'#fca5a5',color:'#991b1b' }}><strong>Failed:</strong> {error}</div>}
+      {/* All centres view */}
+      {centreId === ALL && !loading && (
+        <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center">
+          <Users size={32} className="text-gray-300 mx-auto mb-3" />
+          <p className="text-gray-500 text-sm">Select a centre from the dropdown to view staffing.</p>
+        </div>
+      )}
 
-            {data && !loading && (
-              <>
-                <DashboardStats groups={data.groups} />
+      {/* Single centre view */}
+      {centreId !== ALL && data && !loading && (
+        <>
+          {/* Summary stats */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {[
+              { label: 'Active Staff', value: allActive.length, color: 'text-[#2d5c18]' },
+              { label: 'Rooms', value: activeGroups.length },
+              { label: 'Open Positions', value: openPositionCount, color: openPositionCount > 0 ? 'text-emerald-600' : undefined },
+              { label: 'Cert Alerts', value: certAlerts, color: certAlerts > 0 ? 'text-orange-600' : undefined },
+            ].map(s => (
+              <div key={s.label} className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4">
+                <div className={`text-2xl font-bold ${s.color || 'text-gray-900'}`}>{s.value}</div>
+                <div className="text-xs text-gray-500 font-medium mt-0.5">{s.label}</div>
+              </div>
+            ))}
+          </div>
 
-                {/* Filters */}
-                <div className="flex flex-wrap gap-2">
-                  <input type="text" placeholder="Search staff..." value={search} onChange={e=>setSearch(e.target.value)}
-                    className="border rounded-xl px-3 py-2 text-sm flex-1 min-w-40 focus:outline-none" style={{ borderColor:B.border }} />
-                  <select value={roomFilter} onChange={e=>setRoomFilter(e.target.value)}
-                    className="border rounded-xl px-3 py-2 text-sm focus:outline-none" style={{ borderColor:B.border }}>
-                    <option value="all">All Rooms</option>
-                    {activeGroups.map(g=><option key={g.id} value={g.id}>{g.title}</option>)}
-                  </select>
-                  <select value={qualFilter} onChange={e=>setQualFilter(e.target.value)}
-                    className="border rounded-xl px-3 py-2 text-sm focus:outline-none" style={{ borderColor:B.border }}>
-                    <option value="all">All Qualifications</option>
-                    {QUALIFICATION_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                  <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}
-                    className="border rounded-xl px-3 py-2 text-sm focus:outline-none" style={{ borderColor:B.border }}>
-                    <option value="all">All Statuses</option>
-                    {EMPLOYMENT_STATUS_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
+          {/* Compliance legend */}
+          <div className="flex items-center gap-4 text-xs text-gray-500">
+            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-red-500" /><span>Expired or &lt;30d</span></div>
+            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-amber-400" /><span>Expiring 30–90d</span></div>
+            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-green-400" /><span>Current (&gt;90d)</span></div>
+            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-gray-200" /><span>Not recorded</span></div>
+          </div>
+
+          {/* Search + Controls */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="relative flex-1 min-w-[200px] max-w-sm">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search staff by name, position or qualification..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setViewMode('card')}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-colors ${viewMode === 'card' ? 'bg-[#2d5c18] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              >
+                <LayoutGrid size={15} /> Cards
+              </button>
+              <button
+                onClick={() => setViewMode('list')}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-colors ${viewMode === 'list' ? 'bg-[#2d5c18] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              >
+                <List size={15} /> List
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={expandAll}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+              >
+                <ChevronsDown size={15} /> Expand All
+              </button>
+              <button
+                onClick={collapseAll}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+              >
+                <ChevronsUp size={15} /> Collapse All
+              </button>
+            </div>
+          </div>
+
+          {/* Open Positions Section */}
+          {(openPositions.length > 0 || true) && (
+            <div className="bg-white rounded-2xl border border-emerald-100 shadow-sm overflow-hidden">
+              <button
+                onClick={() => setPositionsCollapsed(c => !c)}
+                className="w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-emerald-50/50 transition-colors"
+              >
+                {positionsCollapsed ? <ChevronRight size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center">
+                  <Briefcase size={16} className="text-emerald-700" />
                 </div>
-
-                {/* Rooms grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredGroups.map(g=>(
-                    <RoomGroup key={g.id} group={g} centreId={centreId} onSelect={setSelectedStaff} onRoomUpdated={()=>loadData(centreId)}
-                      onDrop={async (staffId, _fromGroupId, toGroupId)=>{
-                        await fetch(`/api/staffing-structure?centreId=${centreId}`, {
-                          method: 'POST', headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ action: 'move_staff', staffId, groupId: toGroupId, centreId }),
-                        });
-                        loadData(centreId);
-                      }}
-                    />
-                  ))}
+                <div className="flex-1 flex items-center gap-3">
+                  <span className="text-sm font-semibold text-gray-900">Open Positions</span>
+                  {openPositionCount > 0 && (
+                    <span className="text-xs font-semibold px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">{openPositionCount} active</span>
+                  )}
                 </div>
+                <button
+                  onClick={e => { e.stopPropagation(); setPositionModal({}); }}
+                  className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  <Plus size={13} />
+                  Add Position
+                </button>
+              </button>
 
-                {/* Add room */}
-                <AddRoomButton centreId={centreId} onAdded={()=>loadData(centreId)} />
-
-                {/* Pending */}
-                {pendingGroups.length>0 && (
-                  <div className="rounded-2xl overflow-hidden border" style={{ borderColor:B.border,backgroundColor:B.white }}>
-                    <div className="px-4 py-3 border-b" style={{ borderColor:B.border }}>
-                      <h3 className="text-sm font-bold" style={{ color:B.muted }}>Pending / Onboarding</h3>
-                    </div>
-                    <div className="divide-y divide-gray-100">
-                      {pendingGroups.flatMap(g=>g.staff.map(s=>(
-                        <button key={s.mondayId||s.id} onClick={()=>setSelectedStaff(s)}
-                          className="w-full flex items-center gap-3 px-4 py-3 hover:opacity-80 text-left">
-                          <StatusBadge value={s.qualification} options={QUALIFICATION_OPTIONS} size="xs" />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-semibold truncate" style={{ color:B.text }}>{s.name}</div>
-                            <div className="text-xs" style={{ color:B.muted }}>{s.position||'—'}</div>
-                          </div>
-                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor:B.bg,color:B.muted,border:`1px solid ${B.border}` }}>{g.title}</span>
-                        </button>
-                      )))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Exited */}
-                {exitedGroup&&exitedGroup.staff.length>0 && (
-                  <div className="rounded-2xl overflow-hidden border" style={{ borderColor:B.border,backgroundColor:B.white }}>
-                    <button onClick={()=>setShowExited(o=>!o)} className="w-full flex items-center justify-between px-4 py-3 hover:opacity-80">
-                      <h3 className="text-sm font-bold" style={{ color:B.muted }}>Exited Staff ({exitedGroup.staff.length})</h3>
-                      <span style={{ color:B.muted }}>{showExited?'Hide':'Show'}</span>
-                    </button>
-                    {showExited && (
-                      <div className="border-t divide-y divide-gray-100" style={{ borderColor:B.border }}>
-                        {exitedGroup.staff.map(s=>(
-                          <button key={s.mondayId||s.id} onClick={()=>setSelectedStaff(s)}
-                            className="w-full flex items-center gap-3 px-4 py-3 hover:opacity-80 text-left opacity-60">
-                            <StatusBadge value={s.qualification} options={QUALIFICATION_OPTIONS} size="xs" />
+              {!positionsCollapsed && (
+                <div className="px-5 pb-5">
+                  {openPositions.length === 0 ? (
+                    <p className="text-sm text-gray-400 py-4 text-center">No open positions recorded</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {openPositions.map(pos => {
+                        const room = activeGroups.find(g => g.id === pos.room_id);
+                        return (
+                          <div
+                            key={pos.id}
+                            className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${pos.status === 'Filled' ? 'bg-gray-50 border-gray-100 opacity-60' : 'bg-white border-gray-100 hover:border-gray-200'}`}
+                          >
                             <div className="flex-1 min-w-0">
-                              <div className="text-sm font-medium truncate" style={{ color:B.muted }}>{s.name}</div>
-                              <div className="text-xs" style={{ color:B.muted }}>{[s.position,s.endDate&&s.endDate!=='Not Applicable'?`ended ${s.endDate}`:undefined].filter(Boolean).join(' · ')}</div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-semibold text-gray-900">{pos.title}</span>
+                                {room && <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{room.title}</span>}
+                              </div>
+                              {pos.qualification_required && (
+                                <div className="text-xs text-gray-500 mt-0.5">{pos.qualification_required}</div>
+                              )}
+                              {pos.notes && <div className="text-xs text-gray-400 italic mt-0.5">{pos.notes}</div>}
                             </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                            <InlineSelect
+                              value={pos.status}
+                              options={['Open', 'On Hold', 'Offered', 'Filled']}
+                              onChange={v => handlePositionStatusChange(pos.id, v)}
+                              getColor={v => POSITION_STATUS_COLORS[v] || 'bg-gray-100 text-gray-600'}
+                            />
+                            <button
+                              onClick={() => setPositionModal({ existing: pos })}
+                              className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                            >
+                              <Pencil size={13} />
+                            </button>
+                            <button
+                              onClick={() => handleDeletePosition(pos.id)}
+                              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Room Groups */}
+          <div className="space-y-4">
+            {filteredGroups.map(group => {
+              const isCollapsed = collapsedRooms.has(group.id) && !searchLower;
+              const staffCount = group.staff.length;
+
+              return (
+                <div key={group.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                  {/* Room header */}
+                  <div
+                    className="flex items-center justify-between px-4 py-3 border-l-4 cursor-pointer hover:opacity-90 transition-opacity"
+                    style={{ borderColor: group.color || '#4a7a3a', backgroundColor: (group.color || '#4a7a3a') + '18' }}
+                    onClick={() => !searchLower && toggleRoom(group.id)}
+                  >
+                    <div className="flex items-center gap-3">
+                      {!searchLower && (isCollapsed ? <ChevronRight size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />)}
+                      <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', backgroundColor: group.color || '#4a7a3a', flexShrink: 0 }} />
+                      <span className="text-sm font-bold text-gray-800">{group.title}</span>
+                      <span className="text-xs font-semibold text-gray-500">{staffCount} staff</span>
+                    </div>
+                    <button
+                      onClick={e => { e.stopPropagation(); setAddStaffTarget({ groupId: group.id }); }}
+                      className="flex items-center gap-1 text-xs text-[#2d5c18] hover:bg-[#2d5c18]/10 px-2 py-1 rounded-lg transition-colors font-medium"
+                    >
+                      <Plus size={12} />
+                      Add Staff
+                    </button>
                   </div>
-                )}
-              </>
-            )}
-          </>
-        )}
-      </div>
 
-      {selectedStaff && data && (
-        <StaffCard staff={selectedStaff} centreId={centreId} groups={data.groups}
-          onClose={()=>setSelectedStaff(null)}
-          onRefresh={()=>{ loadData(centreId); setSelectedStaff(null); }} />
+                  {!isCollapsed && (
+                    <div className="p-3">
+                      {group.staff.length === 0 ? (
+                        <p className="text-xs text-gray-400 py-2 pl-1">No staff in this room</p>
+                      ) : viewMode === 'list' ? (
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-gray-50 text-left text-xs font-semibold text-gray-500">
+                              <th className="px-3 py-2">Name</th>
+                              <th className="px-3 py-2">Position</th>
+                              <th className="px-3 py-2">Qualification</th>
+                              <th className="px-3 py-2">WWCC</th>
+                              <th className="px-3 py-2">Status</th>
+                              <th className="px-3 py-2"></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {group.staff.map(sm => (
+                              <tr key={sm.id} className="border-t border-gray-50 hover:bg-gray-50/50">
+                                <td className="px-3 py-2 font-medium text-gray-900">{sm.name}</td>
+                                <td className="px-3 py-2 text-gray-600">{sm.position || '—'}</td>
+                                <td className="px-3 py-2 text-gray-600">{sm.qualification || '—'}</td>
+                                <td className="px-3 py-2">
+                                  <CertDot expiry={sm.wwcc_expiry} />
+                                  {sm.wwcc_expiry && (
+                                    <span className={`ml-1 text-xs ${certDays(sm.wwcc_expiry) < 0 ? 'text-red-600' : certDays(sm.wwcc_expiry) < 90 ? 'text-amber-600' : 'text-green-600'}`}>
+                                      {new Date(sm.wwcc_expiry).toLocaleDateString('en-AU')}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[sm.employment_status || 'Active'] || 'bg-gray-100 text-gray-600'}`}>
+                                    {sm.employment_status || 'Active'}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2">
+
+                                  <div className="flex items-center gap-1">
+                                    <button onClick={() => setProfileTarget({ staff: sm, tab: 'profile' })} className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"><Pencil size={13} /></button>
+                                    <button onClick={() => setProfileTarget({ staff: sm, tab: 'accidents' })} className="p-1 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg"><Stethoscope size={13} /></button>
+                                    <button onClick={() => setProfileTarget({ staff: sm, tab: 'issues' })} className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg"><AlertCircle size={13} /></button>
+                                    <button onClick={() => handleDeleteStaff(sm.id, sm.name)} className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={13} /></button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {group.staff.map(sm => (
+                            <StaffCard
+                              key={sm.id}
+                              staff={sm}
+                              onSelect={tab => setProfileTarget({ staff: sm, tab })}
+                              onStatusChange={handleStatusChange}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Exited Staff */}
+          {exitedGroup && exitedGroup.staff.length > 0 && (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <button
+                onClick={() => setExitedCollapsed(c => !c)}
+                className="w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-gray-50 transition-colors"
+              >
+                {exitedCollapsed ? <ChevronRight size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+                <span className="text-sm font-semibold text-gray-500">Exited Staff</span>
+                <span className="text-xs font-medium px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">{exitedGroup.staff.length}</span>
+              </button>
+              {!exitedCollapsed && (
+                <div className="px-5 pb-5">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 opacity-70">
+                    {exitedGroup.staff.map(sm => (
+                      <StaffCard
+                        key={sm.id}
+                        staff={sm}
+                        onSelect={tab => setProfileTarget({ staff: sm, tab })}
+                        onStatusChange={handleStatusChange}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
-      {creating && data && (
-        <CreateStaffModal centreId={centreId} groups={data.groups}
-          onSave={()=>loadData(centreId)} onClose={()=>setCreating(false)} />
-      )}
-    </div>
-  );
-}
-
-// ── Add Room Button ────────────────────────────────────────────────────────
-function AddRoomButton({ centreId, onAdded }: { centreId: string; onAdded: () => void }) {
-  const [adding, setAdding] = useState(false);
-  const [title, setTitle] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  async function handleAdd() {
-    if (!title.trim()) return;
-    setSaving(true);
-    await fetch(`/api/staffing-structure?centreId=${centreId}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'create_room', centreId, title: title.trim() }),
-    });
-    setSaving(false); setAdding(false); setTitle(''); onAdded();
-  }
-
-  if (!adding) return (
-    <button onClick={()=>setAdding(true)}
-      className="w-full py-3 rounded-2xl border-2 border-dashed text-sm font-medium hover:opacity-80 transition-opacity"
-      style={{ borderColor:B.border, color:B.muted }}>+ Add Room</button>
-  );
-
-  return (
-    <div className="rounded-2xl border p-4 flex items-center gap-3" style={{ borderColor:B.border,backgroundColor:B.white }}>
-      <input autoFocus value={title} onChange={e=>setTitle(e.target.value)}
-        onKeyDown={e=>{ if(e.key==='Enter') handleAdd(); if(e.key==='Escape'){setAdding(false);setTitle('');} }}
-        placeholder="Room name..." className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none" style={{ borderColor:B.border }} />
-      <button onClick={handleAdd} disabled={saving} className="px-4 py-2 rounded-xl text-sm font-semibold text-white hover:opacity-90" style={{ backgroundColor:saving?'#9ca3af':B.green }}>
-        {saving?'Adding...':'Add'}
-      </button>
-      <button onClick={()=>{setAdding(false);setTitle('');}} className="px-3 py-2 rounded-xl text-sm border hover:opacity-80" style={{ borderColor:B.border,color:B.muted }}>Cancel</button>
     </div>
   );
 }
