@@ -226,7 +226,7 @@ async function migrateCentre(centreId, skipFiles = false) {
         name:                    item.name,
         qualification:           col(cv, 'status'),
         position:                col(cv, 'dropdown'),
-        position_category:       col(cv, 'text_mm2xj3x9'),
+        position_category:       col(cv, 'text_mm2xj3x9') || col(cv, 'text_mm2xhty9'),
         ratio_50:                col(cv, 'status2'),
         start_date:              parseDate(col(cv, 'date')),
         end_date:                col(cv, 'text9'),
@@ -236,8 +236,8 @@ async function migrateCentre(centreId, skipFiles = false) {
         probationary_date:       parseDate(col(cv, 'date40')),
         email:                   col(cv, 'email20'),
         mobile:                  col(cv, 'mobile20'),
-        seek_url:                col(cv, 'text_mm2xjkez'),
-        action:                  col(cv, 'color_mkv9yjjd'),
+        seek_url:                col(cv, 'text_mm2xjkez') || col(cv, 'text_mm2x1sxq'),
+        action:                  col(cv, 'color_mkv9yjjd') || col(cv, 'color_mkv9vd6s'),
         wwcc_number:             col(cv, 'wwccnum20'),
         wwcc_expiry:             parseDate(col(cv, 'wwccexp20')),
         first_aid_code:          col(cv, 'first_aid_code'),
@@ -247,6 +247,9 @@ async function migrateCentre(centreId, skipFiles = false) {
         anaphylaxis_code:        col(cv, 'anaphylaxis_code'),
         anaphylaxis_expiry:      parseDate(col(cv, 'date35')),
         child_protection_renewal:parseDate(col(cv, 'date__1')),
+        // NOTE: date_of_qualification and campus columns need to be added to Supabase schema
+        // date_of_qualification:   parseDate(col(cv, 'dateq20')),
+        // campus:                  col(cv, 'status8'),
       };
 
       const [upserted] = await sbUpsert('staff_members', [staffRow], 'monday_id');
