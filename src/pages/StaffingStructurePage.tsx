@@ -1426,8 +1426,8 @@ function StaffCard({
           {canResign && (
             <button
               onClick={() => onStatusChange(staff.id, 'Resigned')}
-              className="px-2 py-0.5 rounded-full text-xs font-medium transition-colors hover:opacity-80"
-              style={{ border: '1px solid #dc2626', color: '#dc2626', fontSize: '11px', padding: '2px 8px' }}
+              className="rounded-full text-xs font-medium transition-colors hover:opacity-80"
+              style={{ border: '1px solid #dc2626', color: '#dc2626', borderRadius: 9999, fontSize: '11px', padding: '2px 10px' }}
               title="Resign"
             >
               Resign
@@ -1481,6 +1481,147 @@ function StaffCard({
         <span className="text-xs" style={{ color: '#596570' }}>Ana</span>
       </div>
     </div>
+  );
+}
+
+// ── Room Management Modals ───────────────────────────────────────────────
+
+const ROOM_PRESET_COLORS = [
+  '#2d5c18', '#16a34a', '#22c55e', '#84cc16',
+  '#d97706', '#f59e0b', '#eab308',
+  '#dc2626', '#ef4444', '#f97316',
+  '#3b82f6', '#0ea5e9', '#06b6d4',
+  '#6366f1', '#8b5cf6', '#a855f7',
+  '#ec4899', '#f43f5e', '#9ca3af',
+];
+
+function AddRoomModal({ onClose, onSave }: { onClose: () => void; onSave: (title: string, color: string) => void }) {
+  const [title, setTitle] = useState('');
+  const [color, setColor] = useState('#2d5c18');
+
+  return (
+    <Modal isOpen onClose={onClose} title="Add Room" size="sm">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Room Name *</label>
+          <input
+            autoFocus
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            placeholder="e.g. Nursery Room 1"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Room Color</label>
+          <div className="flex flex-wrap gap-2">
+            {ROOM_PRESET_COLORS.map(c => (
+              <button
+                key={c}
+                onClick={() => setColor(c)}
+                className="w-7 h-7 rounded-full transition-transform hover:scale-110"
+                style={{
+                  backgroundColor: c,
+                  border: color === c ? '2px solid #050505' : '2px solid transparent',
+                  boxShadow: color === c ? '0 0 0 2px #fff inset' : 'none',
+                }}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 pt-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors">Cancel</button>
+          <button
+            onClick={() => { if (!title.trim()) { showToast('Room name is required', 'error'); return; } onSave(title.trim(), color); onClose(); }}
+            className="px-5 py-2 bg-[#2d5c18] text-white text-sm font-medium rounded-xl hover:bg-[#2d5c18]/90 transition-colors"
+          >
+            Create Room
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function EditRoomModal({ initialTitle, initialColor, onClose, onSave }: {
+  groupId: string; initialTitle: string; initialColor: string; onClose: () => void; onSave: (title: string, color: string) => void;
+}) {
+  const [title, setTitle] = useState(initialTitle);
+  const [color, setColor] = useState(initialColor);
+
+  return (
+    <Modal isOpen onClose={onClose} title="Edit Room" size="sm">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Room Name *</label>
+          <input
+            autoFocus
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Room Color</label>
+          <div className="flex flex-wrap gap-2">
+            {ROOM_PRESET_COLORS.map(c => (
+              <button
+                key={c}
+                onClick={() => setColor(c)}
+                className="w-7 h-7 rounded-full transition-transform hover:scale-110"
+                style={{
+                  backgroundColor: c,
+                  border: color === c ? '2px solid #050505' : '2px solid transparent',
+                  boxShadow: color === c ? '0 0 0 2px #fff inset' : 'none',
+                }}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 pt-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors">Cancel</button>
+          <button
+            onClick={() => { if (!title.trim()) { showToast('Room name is required', 'error'); return; } onSave(title.trim(), color); }}
+            className="px-5 py-2 bg-[#2d5c18] text-white text-sm font-medium rounded-xl hover:bg-[#2d5c18]/90 transition-colors"
+          >
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function DeleteRoomModal({ title, staffCount, onClose, onConfirm }: {
+  title: string; staffCount: number; onClose: () => void; onConfirm: () => void;
+}) {
+  return (
+    <Modal isOpen onClose={onClose} title="Delete Room" size="sm">
+      <div className="space-y-4">
+        <p className="text-sm" style={{ color: '#596570' }}>
+          Are you sure you want to delete <span className="font-semibold" style={{ color: '#050505' }}>{title}</span>?
+        </p>
+        {staffCount > 0 ? (
+          <div className="text-xs px-3 py-2 rounded-lg" style={{ backgroundColor: '#fff5f5', color: '#dc2626', border: '1px solid #fca5a5' }}>
+            This room has {staffCount} staff member{staffCount !== 1 ? 's' : ''}. Move all staff out before deleting.
+          </div>
+        ) : (
+          <div className="text-xs px-3 py-2 rounded-lg" style={{ backgroundColor: '#fffbeb', color: '#92400e', border: '1px solid #fde68a' }}>
+            This room is empty. Deleting it cannot be undone.
+          </div>
+        )}
+        <div className="flex justify-end gap-3 pt-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors">Cancel</button>
+          <button
+            onClick={() => { if (staffCount > 0) { showToast('Move all staff out before deleting', 'error'); return; } onConfirm(); }}
+            className="px-5 py-2 text-white text-sm font-medium rounded-xl transition-colors"
+            style={{ backgroundColor: staffCount > 0 ? '#d1d5db' : '#dc2626', cursor: staffCount > 0 ? 'not-allowed' : 'pointer' }}
+          >
+            Delete Room
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -2006,6 +2147,11 @@ export default function StaffingStructurePage() {
   const [resignationPending, setResignationPending] = useState<{ staffId: string; staffName: string } | null>(null);
   const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
 
+  // Room management modals
+  const [addRoomOpen, setAddRoomOpen] = useState(false);
+  const [editRoomTarget, setEditRoomTarget] = useState<{ groupId: string; title: string; color: string } | null>(null);
+  const [deleteRoomTarget, setDeleteRoomTarget] = useState<{ groupId: string; title: string; staffCount: number } | null>(null);
+
   // Load all-centres summary data
   const loadAllCentresSummary = useCallback(async () => {
     if (!multiAccess) return;
@@ -2224,6 +2370,36 @@ export default function StaffingStructurePage() {
     }
   }
 
+  async function handleCreateRoom(title: string, color: string) {
+    try {
+      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'create_room', centreId, title, color });
+      showToast('Room created');
+      loadData(centreId);
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to create room', 'error');
+    }
+  }
+
+  async function handleUpdateRoom(groupId: string, title: string, color: string) {
+    try {
+      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'update_room', centreId, groupId, title, color });
+      showToast('Room updated');
+      loadData(centreId);
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to update room', 'error');
+    }
+  }
+
+  async function handleDeleteRoom(groupId: string) {
+    try {
+      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'delete_room', centreId, groupId });
+      showToast('Room deleted');
+      loadData(centreId);
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to delete room', 'error');
+    }
+  }
+
   async function handleDeleteStaff(staffId: string, staffName: string) {
     if (!confirm(`Delete ${staffName}? This cannot be undone.`)) return;
     try {
@@ -2284,6 +2460,29 @@ export default function StaffingStructurePage() {
           onSaved={() => loadData(centreId)}
         />
       )}
+      {addRoomOpen && (
+        <AddRoomModal
+          onClose={() => setAddRoomOpen(false)}
+          onSave={handleCreateRoom}
+        />
+      )}
+      {editRoomTarget && (
+        <EditRoomModal
+          groupId={editRoomTarget.groupId}
+          initialTitle={editRoomTarget.title}
+          initialColor={editRoomTarget.color}
+          onClose={() => setEditRoomTarget(null)}
+          onSave={(title, color) => { handleUpdateRoom(editRoomTarget.groupId, title, color); setEditRoomTarget(null); }}
+        />
+      )}
+      {deleteRoomTarget && (
+        <DeleteRoomModal
+          title={deleteRoomTarget.title}
+          staffCount={deleteRoomTarget.staffCount}
+          onClose={() => setDeleteRoomTarget(null)}
+          onConfirm={() => { handleDeleteRoom(deleteRoomTarget.groupId); setDeleteRoomTarget(null); }}
+        />
+      )}
 
       {/* Header */}
       <div className="mb-2">
@@ -2311,14 +2510,24 @@ export default function StaffingStructurePage() {
               </button>
             )}
             {centreId !== ALL && data && (
-              <button
-                onClick={() => setAddStaffTarget({})}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg transition-colors"
-                style={{ backgroundColor: '#2d5c18', color: '#fff' }}
-              >
-                <Plus size={14} />
-                Add Staff
-              </button>
+              <>
+                <button
+                  onClick={() => setAddRoomOpen(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg transition-colors"
+                  style={{ backgroundColor: '#F5FAF3', color: '#2d5c18', border: '1px solid #D0E8B8' }}
+                >
+                  <Plus size={14} />
+                  Add Room
+                </button>
+                <button
+                  onClick={() => setAddStaffTarget({})}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg transition-colors"
+                  style={{ backgroundColor: '#2d5c18', color: '#fff' }}
+                >
+                  <Plus size={14} />
+                  Add Staff
+                </button>
+              </>
             )}
             {multiAccess && (
               <select
@@ -2662,17 +2871,34 @@ export default function StaffingStructurePage() {
                     <div className="flex items-center gap-3">
                       {!searchLower && (isCollapsed ? <ChevronRight size={14} style={{ color: '#596570' }} /> : <ChevronDown size={14} style={{ color: '#596570' }} />)}
                       <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', backgroundColor: group.color || '#2d5c18', flexShrink: 0 }} />
-                      <span className="text-sm font-bold" style={{ color: '#050505' }}>{group.title}</span>
+                      <button
+                        onClick={e => { e.stopPropagation(); setEditRoomTarget({ groupId: group.id, title: group.title, color: group.color || '#808080' }); }}
+                        className="text-sm font-bold hover:underline"
+                        style={{ color: '#050505' }}
+                        title="Click to rename"
+                      >
+                        {group.title}
+                      </button>
                       <span className="text-xs font-semibold" style={{ color: '#596570' }}>{staffCount} staff</span>
                     </div>
-                    <button
-                      onClick={e => { e.stopPropagation(); setAddStaffTarget({ groupId: group.id }); }}
-                      className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg transition-colors font-medium"
-                      style={{ color: '#2d5c18', backgroundColor: '#e8f5e0', border: '1px solid #D0E8B8' }}
-                    >
-                      <Plus size={12} />
-                      Add Staff
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={e => { e.stopPropagation(); setDeleteRoomTarget({ groupId: group.id, title: group.title, staffCount }); }}
+                        className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg transition-colors font-medium"
+                        style={{ color: staffCount === 0 ? '#596570' : '#d1d5db', backgroundColor: staffCount === 0 ? '#F5FAF3' : 'transparent', border: staffCount === 0 ? '1px solid #E2F1DA' : 'none', cursor: staffCount === 0 ? 'pointer' : 'not-allowed' }}
+                        title={staffCount === 0 ? 'Delete room' : 'Move all staff out of this room before deleting'}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); setAddStaffTarget({ groupId: group.id }); }}
+                        className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg transition-colors font-medium"
+                        style={{ color: '#2d5c18', backgroundColor: '#e8f5e0', border: '1px solid #D0E8B8' }}
+                      >
+                        <Plus size={12} />
+                        Add Staff
+                      </button>
+                    </div>
                   </div>
 
                   {!isCollapsed && (
