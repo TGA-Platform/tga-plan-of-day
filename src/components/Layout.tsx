@@ -54,6 +54,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 </>
               )}
               <Link to="/staffing" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Staff</Link>
+              <Link to="/staff-accidents" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity text-xs opacity-70">Accidents</Link>
+              <Link to="/staff-issues" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity text-xs opacity-70">HR Issues</Link>
               <span style={{ color: '#D0E8B8' }}>|</span>
               <a href="/guide" target="_blank" rel="noopener noreferrer" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Guide</a>
               <span style={{ color: '#D0E8B8' }}>|</span>
