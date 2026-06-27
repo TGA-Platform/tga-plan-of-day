@@ -865,6 +865,7 @@ function StaffProfileDrawer({
   const [tab, setTab] = useState<'profile' | 'accidents' | 'issues'>(initialTab || 'profile');
   const [local, setLocal] = useState<StaffMemberRow>({ ...staff });
   const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editForm, setEditForm] = useState<StaffMemberRow>({ ...staff });
 
@@ -894,7 +895,8 @@ function StaffProfileDrawer({
       };
       await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'update_staff', staffId: staff.id, fields });
       setLocal({ ...local, ...editForm });
-      setEditMode(false);
+      setSaveSuccess(true);
+      setTimeout(() => { setSaveSuccess(false); setEditMode(false); }, 1200);
       showToast('Staff profile updated');
       onSaved();
     } catch (err) {
@@ -934,10 +936,17 @@ function StaffProfileDrawer({
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/30" />
+      <div className="absolute inset-0 bg-black/40 transition-opacity" />
       <div
-        className="relative w-full max-w-lg h-full overflow-y-auto flex flex-col"
-        style={{ backgroundColor: '#ffffff', boxShadow: '-4px 0 24px rgba(0,0,0,0.08)', borderLeft: '1px solid #E2F1DA' }}
+        className="relative w-[480px] max-w-full h-full overflow-y-auto flex flex-col"
+        style={{
+          backgroundColor: '#ffffff',
+          boxShadow: '-4px 0 24px rgba(0,0,0,0.12)',
+          borderLeft: '1px solid #E2F1DA',
+          transform: 'translateX(0)',
+          transition: 'transform 0.25s ease',
+          animation: 'slideInFromRight 0.25s ease',
+        }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -966,16 +975,27 @@ function StaffProfileDrawer({
             </button>
           </div>
           {/* Tabs */}
-          <div className="flex gap-1 mt-3">
+          <div className="flex mt-3" style={{ borderBottom: '2px solid #E2F1DA' }}>
             {(['profile', 'accidents', 'issues'] as const).map(t => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
-                className="flex-1 py-1.5 text-xs font-semibold rounded-lg capitalize transition-colors"
+                className="flex-1 py-2 text-xs font-semibold capitalize transition-colors"
                 style={tab === t
-                  ? { backgroundColor: '#2d5c18', color: '#ffffff' }
-                  : { backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }
+                  ? {
+                      backgroundColor: '#ffffff',
+                      color: '#2d5c18',
+                      fontWeight: 700,
+                      borderBottom: '2px solid #2d5c18',
+                      marginBottom: '-2px',
+                    }
+                  : {
+                      backgroundColor: 'transparent',
+                      color: '#596570',
+                    }
                 }
+                onMouseEnter={e => { if (tab !== t) (e.currentTarget as HTMLButtonElement).style.color = '#050505'; }}
+                onMouseLeave={e => { if (tab !== t) (e.currentTarget as HTMLButtonElement).style.color = '#596570'; }}
               >
                 {t}
               </button>
@@ -1152,51 +1172,84 @@ function StaffProfileDrawer({
                     </div>
                     <div className="flex justify-end gap-3 pt-2">
                       <button onClick={() => setEditMode(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
-                      <button onClick={handleSaveProfile} disabled={saving}
-                        className="px-5 py-2 bg-[#2d5c18] text-white text-sm font-medium rounded-xl hover:bg-[#2d5c18]/90 transition-colors disabled:opacity-60">
-                        {saving ? 'Saving...' : 'Save Profile'}
+                      <button
+                        onClick={handleSaveProfile}
+                        disabled={saving || saveSuccess}
+                        className="px-5 py-2 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-80 flex items-center gap-1.5"
+                        style={{ backgroundColor: saveSuccess ? '#16a34a' : '#2d5c18' }}
+                      >
+                        {saveSuccess ? (
+                          <><CheckCircle size={14} /> Saved!</>
+                        ) : saving ? (
+                          'Saving...'
+                        ) : (
+                          'Save Profile'
+                        )}
                       </button>
                     </div>
                   </div>
                 </section>
               )}
 
-              {/* Compliance & Documents */}
+              {/* Compliance Checklist */}
               <section>
-                <h3 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: '#596570' }}>
+                <h3 className="text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-1.5" style={{ color: '#596570' }}>
                   <ShieldCheck size={12} />
-                  Compliance Certificates
+                  Compliance Checklist
                 </h3>
                 <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #E2F1DA' }}>
-                  <DocRow
-                    label="WWCC"
-                    expiry={local.wwcc_expiry}
-                    code={local.wwcc_number}
-                    url={local.certDocs?.find(d => /wwcc/i.test(d.label))?.url}
-                  />
-                  <DocRow
-                    label="First Aid"
-                    expiry={local.first_aid_expiry}
-                    code={local.first_aid_code}
-                    url={local.certDocs?.find(d => /first.?aid/i.test(d.label))?.url}
-                  />
-                  <DocRow
-                    label="CPR"
-                    expiry={local.cpr_expiry}
-                    code={local.cpr_code}
-                    url={local.certDocs?.find(d => /cpr/i.test(d.label))?.url}
-                  />
-                  <DocRow
-                    label="Anaphylaxis"
-                    expiry={local.anaphylaxis_expiry}
-                    code={local.anaphylaxis_code}
-                    url={local.certDocs?.find(d => /anaphylaxis/i.test(d.label))?.url}
-                  />
-                  <DocRow
-                    label="Child Protection"
-                    expiry={local.child_protection_renewal}
-                    url={local.certDocs?.find(d => /child.?prot/i.test(d.label))?.url}
-                  />
+                  {([
+                    { label: 'WWCC', expiry: local.wwcc_expiry, extra: local.wwcc_number ? `#${local.wwcc_number}` : null },
+                    { label: 'First Aid', expiry: local.first_aid_expiry, extra: local.first_aid_code || null },
+                    { label: 'CPR', expiry: local.cpr_expiry, extra: local.cpr_code || null },
+                    { label: 'Anaphylaxis', expiry: local.anaphylaxis_expiry, extra: local.anaphylaxis_code || null },
+                    { label: 'Qualification', expiry: null, extra: local.qualification || null },
+                  ] as Array<{ label: string; expiry?: string | null; extra?: string | null }>).map((item, i, arr) => {
+                    const days = item.expiry ? certDays(item.expiry) : null;
+                    let statusDot: string;
+                    let statusLabel: string;
+                    let statusColor: string;
+                    if (item.label === 'Qualification') {
+                      if (item.extra) {
+                        statusDot = '#16a34a'; statusLabel = 'On file'; statusColor = '#16a34a';
+                      } else {
+                        statusDot = '#dc2626'; statusLabel = 'Missing'; statusColor = '#dc2626';
+                      }
+                    } else if (days === null || days === Infinity) {
+                      statusDot = '#dc2626'; statusLabel = 'Missing'; statusColor = '#dc2626';
+                    } else if (days < 0) {
+                      statusDot = '#dc2626'; statusLabel = 'Expired'; statusColor = '#dc2626';
+                    } else if (days < 90) {
+                      statusDot = '#d97706'; statusLabel = 'Expiring soon'; statusColor = '#d97706';
+                    } else {
+                      statusDot = '#16a34a'; statusLabel = 'Valid'; statusColor = '#16a34a';
+                    }
+                    return (
+                      <div
+                        key={item.label}
+                        className="flex items-center gap-3 px-3 py-2.5"
+                        style={{ borderBottom: i < arr.length - 1 ? '1px solid #F5FAF3' : 'none' }}
+                      >
+                        {/* Status dot */}
+                        <span
+                          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: statusDot }}
+                        />
+                        {/* Label */}
+                        <span className="text-sm font-medium flex-1" style={{ color: '#050505' }}>{item.label}</span>
+                        {/* Extra (number/code) */}
+                        {item.extra && item.label !== 'Qualification' && (
+                          <span className="text-xs" style={{ color: '#596570' }}>{item.extra}</span>
+                        )}
+                        {/* Expiry date */}
+                        {item.expiry && (
+                          <span className="text-xs" style={{ color: '#596570' }}>{fmtDate(item.expiry)}</span>
+                        )}
+                        {/* Status label */}
+                        <span className="text-xs font-semibold" style={{ color: statusColor }}>{statusLabel}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
 
@@ -1237,6 +1290,7 @@ function StaffProfileDrawer({
                   { label: 'Staff Record', expiry: null, hasDoc: !!local.docs?.find(d => /record/i.test(d.label)) },
                   { label: 'Job Description', expiry: null, hasDoc: !!local.docs?.find(d => /job.?desc/i.test(d.label)) },
                   { label: 'Food Handler', expiry: null, hasDoc: !!local.docs?.find(d => /food/i.test(d.label)) },
+
                 ];
                 const scores = checks.map(c => {
                   if (c.expiry) {

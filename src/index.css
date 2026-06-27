@@ -19,6 +19,11 @@
   }
 }
 
+@keyframes slideInFromRight {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
 @media print {
   .no-print { display: none !important; }
   body { background: white; }
