@@ -24,6 +24,7 @@ interface StaffMemberRow {
   position?: string;
   position_category?: string;
   employment_status?: string;
+  role_in_room?: string;
   centre_id: string;
   group_id?: string;
   group_title?: string;
@@ -1483,6 +1484,143 @@ function StaffCard({
   );
 }
 
+// ── Qualification colour map ─────────────────────────────────────────────
+
+const QUALIFICATION_COLORS: Record<string, string> = {
+  'ECT': '#3b82f6',
+  'WT ECT': '#3b82f6',
+  'Diploma': '#22c55e',
+  'Certificate 3': '#eab308',
+  'Trainee': '#f97316',
+  'ISS': '#9ca3af',
+  'Chef': '#9ca3af',
+  'No Qualification': '#9ca3af',
+};
+
+function getQualificationColor(q?: string | null): string {
+  if (!q) return '#9ca3af';
+  const key = Object.keys(QUALIFICATION_COLORS).find(k => q.toLowerCase().includes(k.toLowerCase()));
+  return key ? QUALIFICATION_COLORS[key] : '#9ca3af';
+}
+
+// ── Staffing Overview Chart ────────────────────────────────────────────────
+
+function StaffingOverviewChart({
+  groups,
+  openPositions,
+}: {
+  groups: Array<{ id: string; title: string; color: string; isActive: boolean; staff: StaffMemberRow[] }>;
+  openPositions: OpenPosition[];
+}) {
+  // Filter staff to Active + On Leave only
+  const chartGroups = useMemo(() => {
+    return groups
+      .filter(g => g.isActive)
+      .map(g => ({
+        ...g,
+        staff: g.staff.filter(s => {
+          const status = s.employment_status || 'Active';
+          return status === 'Active' || status === 'On Leave';
+        }),
+      }))
+      .filter(g => g.staff.length > 0);
+  }, [groups]);
+
+  const maxCount = useMemo(() => {
+    return Math.max(...chartGroups.map(g => g.staff.length), 1);
+  }, [chartGroups]);
+
+  const openCount = useMemo(() => {
+    return openPositions.filter(p => p.status === 'Open' || p.status === 'On Hold').length;
+  }, [openPositions]);
+
+  const floatCount = useMemo(() => {
+    return groups.flatMap(g => g.staff).filter(s => {
+      const status = s.employment_status || 'Active';
+      if (status !== 'Active' && status !== 'On Leave') return false;
+      const isFloatGroup = s.group_title && /float/i.test(s.group_title);
+      const isFloatRole = s.role_in_room && /float/i.test(s.role_in_room);
+      return isFloatGroup || isFloatRole;
+    }).length;
+  }, [groups]);
+
+  const legendItems = [
+    { label: 'ECT / WT ECT', color: '#3b82f6' },
+    { label: 'Diploma', color: '#22c55e' },
+    { label: 'Certificate 3', color: '#eab308' },
+    { label: 'Trainee', color: '#f97316' },
+    { label: 'Other / No Qual', color: '#9ca3af' },
+  ];
+
+  function truncate(str: string, len: number) {
+    return str.length > len ? str.slice(0, len) + '…' : str;
+  }
+
+  return (
+    <div style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, padding: 20 }}>
+      <h2 className="text-sm font-bold mb-4" style={{ color: '#050505' }}>Staffing Overview</h2>
+      <div className="flex flex-col lg:flex-row gap-6">
+        {/* Section 1: Staff by Room */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-end gap-3" style={{ height: 160 }}>
+            {chartGroups.map(group => {
+              const barHeightPct = (group.staff.length / maxCount) * 100;
+              return (
+                <div key={group.id} className="flex flex-col items-center flex-1 min-w-0">
+                  {/* Total count above bar */}
+                  <span className="text-xs font-bold mb-1" style={{ color: '#050505' }}>{group.staff.length}</span>
+                  {/* Stacked bar */}
+                  <div
+                    className="w-full flex flex-col-reverse rounded-t-md overflow-hidden"
+                    style={{ height: `${barHeightPct}%`, minHeight: 4 }}
+                  >
+                    {group.staff.map((s, i) => (
+                      <div
+                        key={`${s.id}-${i}`}
+                        className="w-full flex-1"
+                        style={{ backgroundColor: getQualificationColor(s.qualification), minHeight: 2 }}
+                        title={`${s.name} — ${s.qualification || 'No Qualification'}`}
+                      />
+                    ))}
+                  </div>
+                  {/* Room label */}
+                  <span className="text-[10px] font-medium mt-1.5 text-center truncate w-full" style={{ color: '#596570' }}>
+                    {truncate(group.title, 12)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {/* Legend */}
+          <div className="flex flex-wrap items-center gap-3 mt-4">
+            {legendItems.map(item => (
+              <div key={item.label} className="flex items-center gap-1.5">
+                <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: item.color }} />
+                <span className="text-[10px] font-medium" style={{ color: '#596570' }}>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div className="hidden lg:block w-px" style={{ backgroundColor: '#E2F1DA' }} />
+
+        {/* Section 2: Overview Stats */}
+        <div className="flex flex-row lg:flex-col gap-4 lg:min-w-[140px]">
+          <div className="flex-1 lg:flex-none px-4 py-3 rounded-xl" style={{ backgroundColor: '#fffbeb', border: '1px solid #fde68a' }}>
+            <div className="text-2xl font-bold" style={{ color: '#d97706' }}>{openCount}</div>
+            <div className="text-[10px] font-semibold uppercase tracking-wide mt-0.5" style={{ color: '#92400e' }}>Open Positions</div>
+          </div>
+          <div className="flex-1 lg:flex-none px-4 py-3 rounded-xl" style={{ backgroundColor: '#f3e8ff', border: '1px solid #d8b4fe' }}>
+            <div className="text-2xl font-bold" style={{ color: '#9333ea' }}>{floatCount}</div>
+            <div className="text-[10px] font-semibold uppercase tracking-wide mt-0.5" style={{ color: '#6b21a8' }}>Float Staff</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Add Staff Modal ────────────────────────────────────────────────────────
 
 function AddStaffModal({
@@ -2309,6 +2447,9 @@ export default function StaffingStructurePage() {
       {/* Single centre view */}
       {centreId !== ALL && data && !loading && (
         <>
+          {/* Staffing Overview Chart */}
+          <StaffingOverviewChart groups={data.groups} openPositions={openPositions} />
+
           {/* Summary stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {[
