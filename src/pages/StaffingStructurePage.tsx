@@ -893,7 +893,7 @@ function IssuesSection({ staffId, staffName, centreId }: {
 
 // ── Document Row ─────────────────────────────────────────────────────────
 
-function DocRow({ label, url, expiry, code }: { label: string; url?: string; expiry?: string | null; code?: string | null }) {
+function DocRow({ label, url, expiry, code, onUpload }: { label: string; url?: string; expiry?: string | null; code?: string | null; onUpload?: () => void }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const days = expiry ? certDays(expiry) : null;
   const isExpired = days !== null && days < 0;
@@ -933,7 +933,17 @@ function DocRow({ label, url, expiry, code }: { label: string; url?: string; exp
             </button>
           </div>
         )}
-        {!url && (
+        {!url && onUpload && (
+          <button
+            onClick={onUpload}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg cursor-pointer flex-shrink-0"
+            style={{ backgroundColor: '#e8f5e0', color: '#2d5c18', border: '1px solid #D0E8B8' }}
+          >
+            <Plus size={11} />
+            Upload
+          </button>
+        )}
+        {!url && !onUpload && (
           <span className="text-xs px-2 py-0.5 rounded-full flex-shrink-0" style={{ backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}>
             No file
           </span>
@@ -971,6 +981,8 @@ function StaffProfileDrawer({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editForm, setEditForm] = useState<StaffMemberRow>({ ...staff });
+  const [uploadModal, setUploadModal] = useState<{ open: boolean; label: string; docType: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   async function handleSaveProfile() {
     setSaving(true);
@@ -1035,7 +1047,43 @@ function StaffProfileDrawer({
     }
   }
 
+  async function handleUpload(file: File, label: string, docType: string) {
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('staff_id', staff.id);
+      formData.append('label', label);
+      formData.append('doc_type', docType);
+      formData.append('file', file);
 
+      const r = await fetch('/api/staffing-upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `Upload failed: ${r.status}`);
+      }
+
+      const result = await r.json();
+      showToast('Document uploaded');
+
+      // Refresh local state with new doc
+      const newDoc = { id: result.id, label, url: result.url };
+      if (docType === 'main') {
+        setLocal(prev => ({ ...prev, docs: [...(prev.docs || []), newDoc] }));
+      } else {
+        setLocal(prev => ({ ...prev, certDocs: [...(prev.certDocs || []), newDoc] }));
+      }
+      onSaved();
+    } catch (err) {
+      showToast((err as Error).message || 'Upload failed', 'error');
+    } finally {
+      setUploading(false);
+      setUploadModal(null);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
@@ -1384,7 +1432,7 @@ function StaffProfileDrawer({
                   ].map(({ key, label }) => {
                     const doc = local.docs?.find(d => d.label.toLowerCase().includes(key) || key.split('_').some(k => d.label.toLowerCase().includes(k)));
                     return (
-                      <DocRow key={key} label={label} url={doc?.url} />
+                      <DocRow key={key} label={label} url={doc?.url} onUpload={() => setUploadModal({ open: true, label, docType: 'main' })} />
                     );
                   })}
                 </div>
@@ -1472,6 +1520,32 @@ function StaffProfileDrawer({
           )}
         </div>
       </div>
+
+      {/* Upload Modal */}
+      {uploadModal?.open && (
+        <Modal isOpen onClose={() => setUploadModal(null)} title={`Upload ${uploadModal.label}`} size="sm">
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Select File</label>
+              <input
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.webp"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file && uploadModal) {
+                    handleUpload(file, uploadModal.label, uploadModal.docType);
+                  }
+                }}
+                className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+              />
+              <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG up to 20MB</p>
+            </div>
+            {uploading && (
+              <div className="text-xs text-gray-500 animate-pulse">Uploading...</div>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
