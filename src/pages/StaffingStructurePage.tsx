@@ -2157,7 +2157,7 @@ function ResignationModal({
   onCancel,
 }: {
   staffName: string;
-  onConfirm: (data: { lastDay: string; terminationType: string; reason: string; notes: string; resignationReceivedDate: string }) => void;
+  onConfirm: (data: { lastDay: string; terminationType: string; reason: string; notes: string; resignationReceivedDate: string; resignationFile?: File | null }) => void;
   onCancel: () => void;
 }) {
   const today = new Date().toISOString().split('T')[0];
@@ -2166,6 +2166,7 @@ function ResignationModal({
   const [terminationType, setTerminationType] = useState('Voluntary Resignation');
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
+  const [resignationFile, setResignationFile] = useState<File | null>(null);
 
   const daysNotice = resignationReceivedDate && lastDay
     ? Math.max(0, Math.round((new Date(lastDay).getTime() - new Date(resignationReceivedDate).getTime()) / 86400000))
@@ -2225,12 +2226,23 @@ function ResignationModal({
             style={{ border: '1px solid #E2F1DA' }}
             value={notes} onChange={e => setNotes(e.target.value)} placeholder="Any additional details..." />
         </div>
+        <div>
+          <label className="block text-xs font-medium mb-1" style={{ color: '#596570' }}>Resignation Letter / Document (optional)</label>
+          <input
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.webp"
+            onChange={e => setResignationFile(e.target.files?.[0] || null)}
+            className="w-full text-sm rounded-lg px-3 py-2 focus:outline-none"
+            style={{ border: '1px solid #E2F1DA' }}
+          />
+          <p className="text-xs text-gray-400 mt-1">Upload resignation letter or termination document</p>
+        </div>
         <div className="flex justify-end gap-3 pt-1">
           <button onClick={onCancel} className="px-4 py-2 text-sm" style={{ color: '#596570' }}>Cancel</button>
           <button
             onClick={() => {
               if (!lastDay) { showToast('Please select a last day', 'error'); return; }
-              onConfirm({ lastDay, terminationType, reason, notes, resignationReceivedDate });
+              onConfirm({ lastDay, terminationType, reason, notes, resignationReceivedDate, resignationFile });
             }}
             className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg transition-colors"
             style={{ backgroundColor: '#d97706', color: '#fff' }}
@@ -2448,7 +2460,7 @@ export default function StaffingStructurePage() {
     }
   }
 
-  async function handleResignationConfirm(data: { lastDay: string; terminationType: string; reason: string; notes: string; resignationReceivedDate: string }) {
+  async function handleResignationConfirm(data: { lastDay: string; terminationType: string; reason: string; notes: string; resignationReceivedDate: string; resignationFile?: File | null }) {
     if (!resignationPending) return;
     const { staffId, staffName } = resignationPending;
     const sm = allActive.find(s => s.id === staffId);
@@ -2457,7 +2469,21 @@ export default function StaffingStructurePage() {
       (new Date(data.lastDay).getTime() - new Date(data.resignationReceivedDate).getTime()) / 86400000
     ));
     try {
-      // 1. Update staff status + end_date
+      // 1. Upload resignation file if provided
+      if (data.resignationFile) {
+        try {
+          const formData = new FormData();
+          formData.append('staff_id', staffId);
+          formData.append('label', 'Resignation Letter');
+          formData.append('doc_type', 'subitem');
+          formData.append('file', data.resignationFile);
+          await fetch('/api/staffing-upload', { method: 'POST', body: formData });
+        } catch {
+          // non-fatal — continue even if upload fails
+        }
+      }
+
+      // 2. Update staff status + end_date
       await apiPost(`staffing-structure?centreId=${centreId}`, {
         action: 'update_staff', staffId,
         fields: {
@@ -2466,7 +2492,7 @@ export default function StaffingStructurePage() {
         },
       });
 
-      // 2. Create backfill open position (best-effort)
+      // 3. Create backfill open position (best-effort)
       if (sm) {
         try {
           await apiPost('open-positions', {
@@ -2482,7 +2508,7 @@ export default function StaffingStructurePage() {
         }
       }
 
-      // 3. Create offboarding record in Supabase (best-effort)
+      // 4. Create offboarding record in Supabase (best-effort)
       try {
         const centreName = CENTRES.find(c => c.id === centreId)?.name ?? centreId;
         await apiPost('staff-offboarding', {
