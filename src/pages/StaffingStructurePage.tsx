@@ -3121,14 +3121,6 @@ export default function StaffingStructurePage() {
                       >
                         <Trash2 size={12} />
                       </button>
-                      <button
-                        onClick={e => { e.stopPropagation(); setAddStaffTarget({ groupId: group.id }); }}
-                        className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg transition-colors font-medium"
-                        style={{ color: '#2d5c18', backgroundColor: '#e8f5e0', border: '1px solid #D0E8B8' }}
-                      >
-                        <Plus size={12} />
-                        Add Staff
-                      </button>
                     </div>
                   </div>
 
