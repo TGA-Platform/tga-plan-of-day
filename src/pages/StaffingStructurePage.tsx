@@ -875,6 +875,7 @@ function StaffProfileDrawer({
   initialTab,
   onClose,
   onSaved,
+  onResign,
 }: {
   staff: StaffMemberRow;
   centreId: string;
@@ -882,6 +883,7 @@ function StaffProfileDrawer({
   initialTab?: 'profile' | 'accidents' | 'issues';
   onClose: () => void;
   onSaved: () => void;
+  onResign?: (staffId: string) => void;
 }) {
   const [tab, setTab] = useState<'profile' | 'accidents' | 'issues'>(initialTab || 'profile');
   const [local, setLocal] = useState<StaffMemberRow>({ ...staff });
@@ -991,9 +993,20 @@ function StaffProfileDrawer({
                 {saving && <span className="text-xs text-gray-400 animate-pulse">Saving...</span>}
               </div>
             </div>
-            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full flex-shrink-0" style={{ color: '#596570' }}>
-              <X size={16} />
-            </button>
+            <div className="flex items-center gap-2">
+              {(local.employment_status === 'Active' || local.employment_status === 'On Leave' || local.employment_status === 'Probation' || local.employment_status === 'Casual') && (
+                <button
+                  onClick={() => { onClose(); onResign?.(staff.id); }}
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors hover:opacity-80"
+                  style={{ border: '1px solid #dc2626', color: '#dc2626' }}
+                >
+                  Resign
+                </button>
+              )}
+              <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full flex-shrink-0" style={{ color: '#596570' }}>
+                <X size={16} />
+              </button>
+            </div>
           </div>
           {/* Tabs */}
           <div className="flex mt-3" style={{ borderBottom: '2px solid #E2F1DA' }}>
@@ -1398,7 +1411,6 @@ function StaffCard({
 }) {
   const isResigned = staff.employment_status === 'Resigned';
   const isExited = staff.employment_status === 'Exited';
-  const canResign = staff.employment_status === 'Active' || staff.employment_status === 'On Leave' || staff.employment_status === 'Probation' || staff.employment_status === 'Casual';
 
   return (
     <div
@@ -1426,16 +1438,6 @@ function StaffCard({
           )}
         </button>
         <div className="flex gap-1">
-          {canResign && (
-            <button
-              onClick={() => onStatusChange(staff.id, 'Resigned')}
-              className="rounded-full text-xs font-medium transition-colors hover:opacity-80"
-              style={{ border: '1px solid #dc2626', color: '#dc2626', borderRadius: 9999, fontSize: '11px', padding: '2px 10px' }}
-              title="Resign"
-            >
-              Resign
-            </button>
-          )}
           <button onClick={() => onSelect('accidents')} className="p-1 rounded-lg hover:bg-orange-50 text-gray-400 hover:text-orange-500" title="Accidents">
             <Stethoscope size={13} />
           </button>
@@ -2332,16 +2334,20 @@ export default function StaffingStructurePage() {
         },
       });
 
-      // 2. Create backfill open position
+      // 2. Create backfill open position (best-effort)
       if (sm) {
-        await apiPost('open-positions', {
-          centre_id: centreId,
-          title: sm.position || 'Educator',
-          qualification_required: sm.qualification || '',
-          room_id: sm.group_id || undefined,
-          status: 'Open',
-          notes: `Backfill for ${staffName} — last day ${formattedDate}${data.notes ? `. ${data.notes}` : ''}`,
-        });
+        try {
+          await apiPost('open-positions', {
+            centre_id: centreId,
+            title: sm.position || 'Educator',
+            qualification_required: sm.qualification || '',
+            room_id: sm.group_id || undefined,
+            status: 'Open',
+            notes: `Backfill for ${staffName} — last day ${formattedDate}${data.notes ? `. ${data.notes}` : ''}`,
+          });
+        } catch {
+          // non-fatal — open-positions endpoint may not exist yet
+        }
       }
 
       // 3. Create offboarding record in Supabase (best-effort)
@@ -2488,6 +2494,7 @@ export default function StaffingStructurePage() {
           initialTab={profileTarget.tab}
           onClose={() => setProfileTarget(null)}
           onSaved={() => loadData(centreId)}
+          onResign={(staffId) => handleStatusChange(staffId, 'Resigned')}
         />
       )}
       {addRoomOpen && (
