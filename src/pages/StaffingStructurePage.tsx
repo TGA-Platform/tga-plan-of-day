@@ -1716,6 +1716,82 @@ function ResignationModal({
 
 const ALL = '__all__';
 
+// ── All Centres Summary Card ────────────────────────────────────────────────
+
+interface CentreSummary {
+  centreId: string;
+  centreName: string;
+  activeStaff: number;
+  openPositions: number;
+  complianceHealth: 'green' | 'amber' | 'red';
+  certAlerts: number;
+  loading: boolean;
+  error?: string;
+}
+
+function ComplianceIndicator({ health }: { health: 'green' | 'amber' | 'red' }) {
+  const config = {
+    green: { label: 'Compliant', bg: '#dcfce7', color: '#166534', dot: '#16a34a' },
+    amber: { label: 'Some Alerts', bg: '#fffbeb', color: '#92400e', dot: '#d97706' },
+    red:   { label: 'Action Needed', bg: '#fef2f2', color: '#991b1b', dot: '#dc2626' },
+  }[health];
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-1 rounded-full" style={{ backgroundColor: config.bg, color: config.color }}>
+      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: config.dot }} />
+      {config.label}
+    </span>
+  );
+}
+
+function CentreSummaryCard({ summary, onSelect }: { summary: CentreSummary; onSelect: () => void }) {
+  if (summary.loading) {
+    return (
+      <div className="p-5 animate-pulse" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+        <div className="h-4 bg-gray-200 rounded mb-3 w-3/4" />
+        <div className="grid grid-cols-2 gap-2">
+          <div className="h-10 bg-gray-100 rounded" />
+          <div className="h-10 bg-gray-100 rounded" />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <button
+      onClick={onSelect}
+      className="text-left w-full p-5 transition-all hover:shadow-md"
+      style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
+    >
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <h3 className="text-sm font-bold" style={{ color: '#050505' }}>{summary.centreName}</h3>
+        <ComplianceIndicator health={summary.complianceHealth} />
+      </div>
+      {summary.error ? (
+        <p className="text-xs" style={{ color: '#dc2626' }}>Failed to load</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-xl px-3 py-2" style={{ backgroundColor: '#F5FAF3', border: '1px solid #E2F1DA' }}>
+            <div className="text-lg font-bold" style={{ color: '#2d5c18' }}>{summary.activeStaff}</div>
+            <div className="text-xs" style={{ color: '#596570' }}>Active Staff</div>
+          </div>
+          <div className="rounded-xl px-3 py-2" style={{ backgroundColor: summary.openPositions > 0 ? '#fffbeb' : '#F5FAF3', border: `1px solid ${summary.openPositions > 0 ? '#fde68a' : '#E2F1DA'}` }}>
+            <div className="text-lg font-bold" style={{ color: summary.openPositions > 0 ? '#d97706' : '#596570' }}>{summary.openPositions}</div>
+            <div className="text-xs" style={{ color: '#596570' }}>Open Positions</div>
+          </div>
+        </div>
+      )}
+      {summary.certAlerts > 0 && (
+        <div className="mt-2 text-xs flex items-center gap-1.5" style={{ color: '#d97706' }}>
+          <AlertTriangle size={12} />
+          {summary.certAlerts} cert{summary.certAlerts === 1 ? '' : 's'} expiring / expired
+        </div>
+      )}
+      <div className="mt-3 flex items-center gap-1 text-xs font-medium" style={{ color: '#2d5c18' }}>
+        View staffing <ChevronRight size={12} />
+      </div>
+    </button>
+  );
+}
+
 export default function StaffingStructurePage() {
   const user = getUser();
   const accessible = useMemo(() => {
@@ -1727,6 +1803,10 @@ export default function StaffingStructurePage() {
 
   const multiAccess = accessible.length > 1;
   const [centreId, setCentreId] = useState('');
+
+  // All-centres summary state
+  const [centreSummaries, setCentreSummaries] = useState<CentreSummary[]>([]);
+  const [summariesLoading, setSummariesLoading] = useState(false);
 
   useEffect(() => {
     if (accessible.length > 0 && !centreId) {
@@ -1755,6 +1835,54 @@ export default function StaffingStructurePage() {
   const [positionModal, setPositionModal] = useState<{ existing?: OpenPosition } | null>(null);
   const [resignationPending, setResignationPending] = useState<{ staffId: string; staffName: string } | null>(null);
 
+  // Load all-centres summary data
+  const loadAllCentresSummary = useCallback(async () => {
+    if (!multiAccess) return;
+    setSummariesLoading(true);
+    const initial: CentreSummary[] = accessible.map(c => ({
+      centreId: c.id,
+      centreName: c.name,
+      activeStaff: 0,
+      openPositions: 0,
+      complianceHealth: 'green' as const,
+      certAlerts: 0,
+      loading: true,
+    }));
+    setCentreSummaries(initial);
+    setSummariesLoading(false);
+
+    // Fetch each centre in parallel
+    await Promise.all(accessible.map(async (centre) => {
+      try {
+        const [boardData, posData] = await Promise.all([
+          fetch(`/api/staffing-structure?centreId=${centre.id}`).then(r => r.ok ? r.json() as Promise<BoardData> : Promise.reject()),
+          fetch(`/api/open-positions?centreId=${centre.id}`).then(r => r.ok ? r.json() : Promise.resolve([])),
+        ]);
+        const activeGroups = (boardData as BoardData).groups.filter(g => g.isActive);
+        const activeStaff = activeGroups.flatMap(g => g.staff);
+        const certAlerts = activeStaff.filter(s => {
+          const expiries = [s.wwcc_expiry, s.first_aid_expiry, s.cpr_expiry, s.anaphylaxis_expiry];
+          return expiries.some(e => e && certDays(e) < 90);
+        }).length;
+        const expiredCerts = activeStaff.filter(s => {
+          const expiries = [s.wwcc_expiry, s.first_aid_expiry, s.cpr_expiry, s.anaphylaxis_expiry];
+          return expiries.some(e => e && certDays(e) < 0);
+        }).length;
+        const openPos = Array.isArray(posData) ? (posData as OpenPosition[]).filter(p => p.status === 'Open' || p.status === 'On Hold').length : 0;
+        const health: 'green' | 'amber' | 'red' = expiredCerts > 0 ? 'red' : certAlerts > 0 ? 'amber' : 'green';
+        setCentreSummaries(prev => prev.map(s =>
+          s.centreId === centre.id
+            ? { ...s, loading: false, activeStaff: activeStaff.length, openPositions: openPos, certAlerts, complianceHealth: health }
+            : s
+        ));
+      } catch {
+        setCentreSummaries(prev => prev.map(s =>
+          s.centreId === centre.id ? { ...s, loading: false, error: 'Failed' } : s
+        ));
+      }
+    }));
+  }, [accessible, multiAccess]);
+
   const loadData = useCallback((id: string) => {
     if (id === ALL) { setData(null); return; }
     setLoading(true); setError(null); setData(null);
@@ -1776,8 +1904,11 @@ export default function StaffingStructurePage() {
     if (centreId) {
       loadData(centreId);
       loadPositions(centreId);
+      if (centreId === ALL) {
+        loadAllCentresSummary();
+      }
     }
-  }, [centreId, loadData, loadPositions]);
+  }, [centreId, loadData, loadPositions, loadAllCentresSummary]);
 
   const activeGroups = useMemo(() => data?.groups.filter(g => g.isActive) ?? [], [data]);
   const inactiveGroups = useMemo(() => data?.groups.filter(g => !g.isActive) ?? [], [data]);
@@ -1941,7 +2072,7 @@ export default function StaffingStructurePage() {
 
   return (
     <Layout>
-    <div className="space-y-6 pb-10">
+    <div className="space-y-6 pb-10" style={{ maxWidth: '1400px', margin: '0 auto' }}>
       {/* Modals */}
       {resignationPending && (
         <ResignationModal
@@ -1995,6 +2126,15 @@ export default function StaffingStructurePage() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            {centreId !== ALL && multiAccess && (
+              <button
+                onClick={() => { setCentreId(ALL); setCollapsedRooms(new Set()); setSearch(''); }}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg transition-colors"
+                style={{ backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}
+              >
+                ← All Centres
+              </button>
+            )}
             {centreId !== ALL && data && (
               <button
                 onClick={() => setAddStaffTarget({})}
@@ -2038,11 +2178,67 @@ export default function StaffingStructurePage() {
       )}
 
       {/* All centres view */}
-      {centreId === ALL && !loading && (
-        <div className="p-8 text-center rounded-2xl" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
-          <Users size={32} className="mx-auto mb-3" style={{ color: '#E2F1DA' }} />
-          <p className="text-sm" style={{ color: '#596570' }}>Select a centre from the dropdown to view staffing.</p>
-        </div>
+      {centreId === ALL && (
+        <>
+          {/* All Centres Header */}
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="text-base font-bold" style={{ color: '#050505' }}>All Centres Overview</h2>
+              <p className="text-xs mt-0.5" style={{ color: '#596570' }}>Select a centre to view its staffing structure</p>
+            </div>
+            <button
+              onClick={loadAllCentresSummary}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg"
+              style={{ backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}
+            >
+              Refresh All
+            </button>
+          </div>
+          {/* Centre cards — use accessible list so cards always appear even before summary data loads */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {accessible.map(centre => {
+              const summary = centreSummaries.find(s => s.centreId === centre.id);
+              return (
+                <div
+                  key={centre.id}
+                  className="flex flex-col justify-between p-5 transition-all"
+                  style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
+                >
+                  <div className="mb-4">
+                    <h3 className="text-lg font-bold" style={{ color: '#050505' }}>{centre.name}</h3>
+                    {summary && !summary.loading && !summary.error && (
+                      <div className="flex gap-3 mt-2">
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#e8f5e0', color: '#2d5c18' }}>
+                          {summary.activeStaff} staff
+                        </span>
+                        {summary.openPositions > 0 && (
+                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fffbeb', color: '#d97706' }}>
+                            {summary.openPositions} open
+                          </span>
+                        )}
+                        {summary.certAlerts > 0 && (
+                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fff7ed', color: '#ea580c' }}>
+                            {summary.certAlerts} cert alerts
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {summary?.loading && (
+                      <div className="mt-2 h-4 bg-gray-100 rounded animate-pulse w-2/3" />
+                    )}
+                  </div>
+                  <button
+                    onClick={() => { setCentreId(centre.id); setCollapsedRooms(new Set()); setSearch(''); }}
+                    className="w-full flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg transition-colors hover:opacity-90"
+                    style={{ backgroundColor: '#2d5c18', color: '#ffffff' }}
+                  >
+                    View Staffing →
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {/* Single centre view */}
