@@ -2998,8 +2998,9 @@ export default function StaffingStructurePage() {
             if (loaded.length === 0) return null;
             const totalStaff = loaded.reduce((sum, s) => sum + s.activeStaff, 0);
             const totalOpen = loaded.reduce((sum, s) => sum + s.openPositions, 0);
-            const totalCompliant = loaded.reduce((sum, s) => sum + s.compliantStaff, 0);
-            const overallPct = totalStaff > 0 ? Math.round((totalCompliant / totalStaff) * 100) : 0;
+            // Average compliance across all centres (weighted by staff count)
+            const totalComplianceScore = loaded.reduce((sum, s) => sum + (s.compliancePct * s.activeStaff), 0);
+            const overallPct = totalStaff > 0 ? Math.round(totalComplianceScore / totalStaff) : 0;
             const overallColor = complianceColor(overallPct);
             return (
               <div className="flex flex-wrap items-center gap-4 px-5 py-3 rounded-xl" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA' }}>
@@ -3014,8 +3015,8 @@ export default function StaffingStructurePage() {
                 </div>
                 <div className="w-px h-4" style={{ backgroundColor: '#E2F1DA' }} />
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium" style={{ color: '#596570' }}>Compliance</span>
-                  <span className="text-sm font-bold" style={{ color: overallColor }}>{totalCompliant}/{totalStaff} — {overallPct}%</span>
+                  <span className="text-xs font-medium" style={{ color: '#596570' }}>Avg Compliance</span>
+                  <span className="text-sm font-bold" style={{ color: overallColor }}>{overallPct}%</span>
                 </div>
               </div>
             );
@@ -3046,7 +3047,7 @@ export default function StaffingStructurePage() {
                         </div>
                         <div className="text-center px-2 py-2 rounded-lg" style={{ backgroundColor: complianceBg(summary.compliancePct) }}>
                           <div className="text-sm font-bold" style={{ color: complianceColor(summary.compliancePct) }}>
-                            {summary.activeStaff > 0 ? `${summary.compliantStaff}/${summary.activeStaff}` : '—'}
+                            {summary.activeStaff > 0 ? `${summary.compliancePct}%` : '—'}
                           </div>
                           <div className="text-[10px] font-medium" style={{ color: '#596570' }}>compliant</div>
                         </div>
