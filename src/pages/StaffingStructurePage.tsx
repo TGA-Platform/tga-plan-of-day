@@ -983,6 +983,7 @@ function StaffProfileDrawer({
   const [editMode, setEditMode] = useState(false);
   const [editForm, setEditForm] = useState<StaffMemberRow>({ ...staff });
   const [uploadModal, setUploadModal] = useState<{ open: boolean; label: string; docType: string } | null>(null);
+  const [certUploadModal, setCertUploadModal] = useState<{ open: boolean; certType: string; label: string } | null>(null);
   const [uploading, setUploading] = useState(false);
 
   async function handleSaveProfile() {
@@ -1083,6 +1084,68 @@ function StaffProfileDrawer({
     } finally {
       setUploading(false);
       setUploadModal(null);
+    }
+  }
+
+  async function handleCertUpload(file: File, certType: string, expiryDate: string, code: string) {
+    setUploading(true);
+    try {
+      // 1. Upload the file
+      const formData = new FormData();
+      formData.append('staff_id', staff.id);
+      formData.append('label', certType);
+      formData.append('doc_type', 'subitem');
+      formData.append('file', file);
+
+      const r = await fetch('/api/staffing-upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `Upload failed: ${r.status}`);
+      }
+
+      const result = await r.json();
+
+      // 2. Update the staff record with expiry date and code
+      const fields: Record<string, string | null> = {};
+      if (certType === 'WWC') {
+        fields.wwcc_expiry = expiryDate || null;
+        fields.wwcc_number = code || null;
+      } else if (certType === 'First Aid') {
+        fields.first_aid_expiry = expiryDate || null;
+        fields.first_aid_code = code || null;
+      } else if (certType === 'CPR') {
+        fields.cpr_expiry = expiryDate || null;
+        fields.cpr_code = code || null;
+      } else if (certType === 'Anaphylaxis') {
+        fields.anaphylaxis_expiry = expiryDate || null;
+        fields.anaphylaxis_code = code || null;
+      } else if (certType === 'Child Protection') {
+        fields.child_protection_renewal = expiryDate || null;
+      }
+
+      if (Object.keys(fields).length > 0) {
+        await apiPost(`staffing-structure?centreId=${centreId}`, {
+          action: 'update_staff',
+          staffId: staff.id,
+          fields,
+        });
+      }
+
+      showToast('Certificate uploaded and recorded');
+
+      // Refresh local state
+      const newDoc = { id: result.id, label: certType, url: result.url };
+      setLocal(prev => ({ ...prev, certDocs: [...(prev.certDocs || []), newDoc], ...fields }));
+      onSaved();
+    } catch (err) {
+      showToast((err as Error).message || 'Upload failed', 'error');
+    } finally {
+      setUploading(false);
+      setCertUploadModal(null);
     }
   }
 
@@ -1403,6 +1466,14 @@ function StaffProfileDrawer({
                           {extra && <span className="text-xs" style={{ color: '#596570' }}>{extra}</span>}
                           {expiry && <span className="text-xs" style={{ color: '#596570' }}>{fmtDate(expiry)}</span>}
                           <span className="text-xs font-semibold" style={{ color: statusColor }}>{statusLabel}</span>
+                          <button
+                            onClick={() => setCertUploadModal({ open: true, certType: item.label, label: item.label })}
+                            className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg"
+                            style={{ backgroundColor: '#e8f5e0', color: '#2d5c18', border: '1px solid #D0E8B8' }}
+                          >
+                            <Plus size={11} />
+                            {item.hasItem ? 'Update' : 'Add'}
+                          </button>
                         </div>
                       );
                     });
@@ -1523,6 +1594,13 @@ function StaffProfileDrawer({
             )}
           </div>
         </Modal>
+      )}
+      {certUploadModal?.open && (
+        <CertUploadModal
+          certType={certUploadModal.certType}
+          onConfirm={handleCertUpload}
+          onClose={() => setCertUploadModal(null)}
+        />
       )}
     </div>
   );
@@ -2256,6 +2334,78 @@ function ResignationModal({
           >
             <UserMinus size={14} />
             Confirm Resignation
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Certification Upload Modal ─────────────────────────────────────────────
+
+function CertUploadModal({
+  certType,
+  onConfirm,
+  onClose,
+}: {
+  certType: string;
+  onConfirm: (file: File, certType: string, expiryDate: string, code: string) => void;
+  onClose: () => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [expiryDate, setExpiryDate] = useState('');
+  const [code, setCode] = useState('');
+
+  const needsCode = certType === 'WWC' || certType === 'First Aid' || certType === 'CPR' || certType === 'Anaphylaxis';
+  const codeLabel = certType === 'WWC' ? 'WWCC Number' : certType === 'First Aid' ? 'First Aid Code' : certType === 'CPR' ? 'CPR Code' : certType === 'Anaphylaxis' ? 'Anaphylaxis Code' : 'Code';
+
+  return (
+    <Modal isOpen onClose={onClose} title={`Upload ${certType} Certificate`} size="md">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Certificate File *</label>
+          <input
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.webp"
+            onChange={e => setFile(e.target.files?.[0] || null)}
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+          />
+          <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG up to 20MB</p>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Expiry Date *</label>
+          <input
+            type="date"
+            value={expiryDate}
+            onChange={e => setExpiryDate(e.target.value)}
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+          />
+        </div>
+        {needsCode && (
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">{codeLabel}</label>
+            <input
+              type="text"
+              value={code}
+              onChange={e => setCode(e.target.value)}
+              placeholder={`Enter ${codeLabel.toLowerCase()}`}
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+            />
+          </div>
+        )}
+        <div className="flex justify-end gap-3 pt-1">
+          <button onClick={onClose} className="px-4 py-2 text-sm" style={{ color: '#596570' }}>Cancel</button>
+          <button
+            onClick={() => {
+              if (!file) { showToast('Please select a file', 'error'); return; }
+              if (!expiryDate) { showToast('Please enter an expiry date', 'error'); return; }
+              onConfirm(file, certType, expiryDate, code);
+            }}
+            className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg transition-colors"
+            style={{ backgroundColor: '#2d5c18', color: '#fff' }}
+          >
+            <CheckCircle size={14} />
+            Upload & Record
           </button>
         </div>
       </div>
