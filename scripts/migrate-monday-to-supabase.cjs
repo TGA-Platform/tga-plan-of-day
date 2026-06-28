@@ -48,37 +48,46 @@ const BOARD_IDS = {
 
 const INACTIVE_GROUPS = /^(open positions?|on hold|offered|exited staff|resigned)$/i;
 
-const MAIN_FILE_COLS = [
-  { id: 'files0',              label: 'Qualification Certificate', type: 'main' },
-  { id: 'files20',             label: 'Transcripts',              type: 'main' },
-  { id: 'certifications20',    label: 'Additional Certifications',type: 'main' },
-  { id: 'files4',              label: 'Induction Checklist',      type: 'main' },
-  { id: 'files7__1',           label: 'Policy Kit',               type: 'main' },
-  { id: 'files4__1',           label: 'Employment Kit',           type: 'main' },
-  { id: 'dup__of_files121__1', label: 'Staff Record',             type: 'main' },
-  { id: 'resp',                label: 'Key Responsibilities',      type: 'main' },
-];
+// Map Monday file column titles to canonical labels we store in staff_documents.
+// Keys are lowercased; multiple Monday titles can map to the same canonical label.
+const FILE_TITLE_MAP = {
+  // main item file columns
+  'qualification': 'Qualification Certificate',
+  'qualification certificate': 'Qualification Certificate',
+  'transcript': 'Transcripts',
+  'transcripts': 'Transcripts',
+  'additional certifications': 'Additional Certifications',
+  'induction checklist': 'Induction Checklist',
+  'upskilling plan': 'Upskilling Plan',
+  'policy kit': 'Policy Kit',
+  'employment kit': 'Employment Kit',
+  'staff record': 'Staff Record',
+  'key responsibilities': 'Key Responsibilities',
 
-const SUBITEM_FILE_COLS = [
-  { id: 'files__1',      label: 'Staff Record',               type: 'subitem' },
-  { id: 'files5__1',     label: 'RP/NS/EL Consent',           type: 'subitem' },
-  { id: 'files0__1',     label: 'Fire Warden',                type: 'subitem' },
-  { id: 'files3__1',     label: 'WWC',                        type: 'subitem' },
-  { id: 'files04__1',    label: 'Qualifications',             type: 'subitem' },
-  { id: 'files34__1',    label: 'Transcript & CP',            type: 'subitem' },
-  { id: 'files8__1',     label: 'First Aid',                  type: 'subitem' },
-  { id: 'files9__1',     label: 'CPR',                        type: 'subitem' },
-  { id: 'files02__1',    label: 'Anaphylaxis',                type: 'subitem' },
-  { id: 'file_mm3xjn0z', label: 'Child Safety',               type: 'subitem' },
-  { id: 'files7__1',     label: 'Child Protection Refresher', type: 'subitem' },
-  { id: 'files1__1',     label: 'Food Handling Certificate',  type: 'subitem' },
-  { id: 'files93__1',    label: 'Position Description',       type: 'subitem' },
-  { id: 'files14__1',    label: 'Additional Responsibilities',type: 'subitem' },
-  { id: 'files2__1',     label: 'Client Report',              type: 'subitem' },
-  { id: 'files30__1',    label: 'Training Contract',          type: 'subitem' },
-  { id: 'files29__1',    label: 'Training Plan',              type: 'subitem' },
-  { id: 'files77__1',    label: 'Working Towards ECT',        type: 'subitem' },
-];
+  // subitem file columns
+  'rp/ns/el consent': 'RP/NS/EL Consent',
+  'fire warden': 'Fire Warden',
+  'wwc': 'WWC',
+  'qualifications': 'Qualifications',
+  'transcript & cp': 'Transcript & CP',
+  'first aid': 'First Aid',
+  'cpr': 'CPR',
+  'anaphylaxis': 'Anaphylaxis',
+  'child safety': 'Child Safety',
+  'child protection refresher': 'Child Protection Refresher',
+  'food handling certificate': 'Food Handling Certificate',
+  'position description': 'Position Description',
+  'additional responsibilities': 'Additional Responsibilities',
+  'client report': 'Client Report',
+  'training contract': 'Training Contract',
+  'training plan': 'Training Plan',
+  'working towards ect': 'Working Towards ECT',
+};
+
+function canonicalLabel(title) {
+  if (!title) return null;
+  return FILE_TITLE_MAP[title.trim().toLowerCase()] || null;
+}
 
 function col(cv, id) { return (cv.find(c => c.id === id)?.text || '').trim() || null; }
 function parseDate(v) { return v && v.length === 10 ? v : null; }
@@ -103,8 +112,8 @@ async function fetchBoard(boardId) {
       groups { id title color
         items_page(limit: 500) {
           items { id name
-            column_values { id text }
-            subitems { id name column_values { id text } }
+            column_values { id text column { title type } }
+            subitems { id name column_values { id text column { title type } } }
           }
         }
       }
@@ -168,6 +177,7 @@ async function getAssetPublicUrl(assetId) {
 }
 
 // Download a Monday file server-side using public_url (signed S3)
+const DOWNLOAD_TIMEOUT_MS = 60_000;
 async function downloadFile(mondayUrl) {
   // Extract asset ID and get fresh signed S3 URL
   const assetId = extractAssetId(mondayUrl);
@@ -176,11 +186,17 @@ async function downloadFile(mondayUrl) {
     const publicUrl = await getAssetPublicUrl(assetId);
     if (publicUrl) downloadUrl = publicUrl;
   }
-  const r = await fetch(downloadUrl);
-  if (!r.ok) throw new Error(`Download failed ${r.status}: ${downloadUrl}`);
-  const buffer = await r.arrayBuffer();
-  const mime = r.headers.get('content-type') || 'application/octet-stream';
-  return { buffer: Buffer.from(buffer), mime };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  try {
+    const r = await fetch(downloadUrl, { signal: controller.signal });
+    if (!r.ok) throw new Error(`Download failed ${r.status}: ${downloadUrl}`);
+    const buffer = await r.arrayBuffer();
+    const mime = r.headers.get('content-type') || 'application/octet-stream';
+    return { buffer: Buffer.from(buffer), mime };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function safeName(str) {
@@ -251,27 +267,36 @@ async function migrateCentre(centreId, skipFiles = false) {
         campus:                  col(cv, 'status8'),
       };
 
-      const [upserted] = await sbUpsert('staff_members', [staffRow], 'monday_id');
-      const staffId = upserted?.id;
+      await sbUpsert('staff_members', [staffRow], 'monday_id');
+      // Re-lookup the staff record by monday_id to ensure we have the current ID
+      const staffLookup = await sbGet(`/staff_members?monday_id=eq.${item.id}&select=id&limit=1`);
+      const staffId = staffLookup[0]?.id;
       if (!staffId) { errors++; continue; }
       staffMigrated++;
 
       if (skipFiles) continue;
 
-      // Collect all document URLs for this staff member
+      // Skip file downloads for inactive/exited groups
+      if (!isActive) continue;
+
+      // Collect all document URLs for this staff member dynamically
       const docEntries = [];
 
-      // Main item docs
-      for (const colDef of MAIN_FILE_COLS) {
-        const url = (cv.find(c => c.id === colDef.id)?.text || '').trim();
-        if (url) docEntries.push({ label: colDef.label, type: colDef.type, url });
+      // Main item file columns
+      for (const c of (cv || [])) {
+        if (c.column?.type !== 'file') continue;
+        const url = (c.text || '').trim();
+        const label = canonicalLabel(c.column.title);
+        if (url && label) docEntries.push({ label, type: 'main', url });
       }
 
-      // Subitem docs
+      // Subitem file columns
       for (const sub of (item.subitems || [])) {
-        for (const colDef of SUBITEM_FILE_COLS) {
-          const url = (sub.column_values?.find(c => c.id === colDef.id)?.text || '').trim();
-          if (url) docEntries.push({ label: colDef.label, type: colDef.type, url });
+        for (const c of (sub.column_values || [])) {
+          if (c.column?.type !== 'file') continue;
+          const url = (c.text || '').trim();
+          const label = canonicalLabel(c.column.title);
+          if (url && label) docEntries.push({ label, type: 'subitem', url });
         }
       }
 
@@ -285,8 +310,21 @@ async function migrateCentre(centreId, skipFiles = false) {
           const storagePath = `${centreId}/${staffId}/${safeName(doc.label)}${ext ? '' : ''}${safeName(origName)}`;
 
           // Check if already exists in staff_documents
-          const existing = await sbGet(`/staff_documents?staff_id=eq.${staffId}&monday_url=eq.${encodeURIComponent(doc.url)}&limit=1`);
-          if (existing.length > 0) { docsSkipped++; continue; }
+          const existing = await sbGet(`/staff_documents?monday_url=eq.${encodeURIComponent(doc.url)}&limit=1`);
+          if (existing.length > 0) {
+            if (existing[0].staff_id !== staffId) {
+              // Orphaned doc — re-link to current staff record
+              await fetch(`${SB}/staff_documents?id=eq.${existing[0].id}`, {
+                method: 'PATCH',
+                headers: { ...SB_HEADERS, Prefer: 'return=minimal' },
+                body: JSON.stringify({ staff_id: staffId }),
+              });
+              docsMigrated++;
+            } else {
+              docsSkipped++;
+            }
+            continue;
+          }
 
           // Download
           const { buffer, mime } = await downloadFile(doc.url);
