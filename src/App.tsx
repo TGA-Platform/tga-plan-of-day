@@ -13,6 +13,7 @@ import SettingsPage from './pages/SettingsPage';
 import MorningBriefingPage from './pages/MorningBriefingPage';
 import ReportingPage from './pages/ReportingPage';
 import StaffingStructurePage from './pages/StaffingStructurePage';
+import ComplianceConfigPage from './pages/ComplianceConfigPage';
 import ErrorBoundary from './components/ErrorBoundary';
 
 function RequireAuth({ children }: { children: React.ReactElement }) {
@@ -129,6 +130,7 @@ export default function App() {
         />
         <Route path="/reporting" element={<RequireAuth><ReportingPage /></RequireAuth>} />
         <Route path="/staffing" element={<RequireAuth><StaffingStructurePage /></RequireAuth>} />
+        <Route path="/compliance-config" element={<RequireAuth><ComplianceConfigPage /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
