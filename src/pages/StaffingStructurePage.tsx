@@ -286,8 +286,13 @@ function certDays(dateStr?: string | null): number {
 }
 
 function isStaffCompliant(s: StaffMemberRow): boolean {
-  const certs = [s.wwcc_expiry, s.first_aid_expiry, s.cpr_expiry, s.anaphylaxis_expiry];
-  return certs.every(e => !!e && certDays(e) >= 0);
+  const compliance = calculateCompliance(s);
+  return compliance.status === 'compliant';
+}
+
+function getStaffComplianceScore(s: StaffMemberRow): number {
+  const compliance = calculateCompliance(s);
+  return compliance.score;
 }
 
 function complianceColor(pct: number): string {
@@ -1690,18 +1695,19 @@ function StaffCard({
         </div>
       )}
 
-      {/* Compliance dots */}
-      <div className="flex items-center gap-1.5 pt-2 mt-1" style={{ borderTop: '1px solid #E2F1DA' }}>
-        <ShieldCheck size={11} style={{ color: '#E2F1DA' }} className="flex-shrink-0" />
-        <CertDot expiry={staff.wwcc_expiry} />
-        <span className="text-xs" style={{ color: '#596570' }}>WWCC</span>
-        <CertDot expiry={staff.first_aid_expiry} />
-        <span className="text-xs" style={{ color: '#596570' }}>FA</span>
-        <CertDot expiry={staff.cpr_expiry} />
-        <span className="text-xs" style={{ color: '#596570' }}>CPR</span>
-        <CertDot expiry={staff.anaphylaxis_expiry} />
-        <span className="text-xs" style={{ color: '#596570' }}>Ana</span>
-      </div>
+      {/* Compliance score */}
+      {(() => {
+        const compliance = calculateCompliance(staff);
+        return (
+          <div className="flex items-center gap-2 pt-2 mt-1" style={{ borderTop: '1px solid #E2F1DA' }}>
+            <ShieldCheck size={11} style={{ color: compliance.score >= 90 ? '#16a34a' : compliance.score >= 70 ? '#d97706' : '#dc2626' }} className="flex-shrink-0" />
+            <span className="text-xs font-semibold" style={{ color: compliance.score >= 90 ? '#16a34a' : compliance.score >= 70 ? '#d97706' : '#dc2626' }}>
+              {compliance.score}%
+            </span>
+            <span className="text-xs" style={{ color: '#596570' }}>compliant</span>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -2509,17 +2515,25 @@ export default function StaffingStructurePage() {
         ]);
         const activeGroups = (boardData as BoardData).groups.filter(g => g.isActive);
         const activeStaff = activeGroups.flatMap(g => g.staff);
+        
+        // Calculate compliance using new dynamic system
+        const staffComplianceScores = activeStaff.map(s => getStaffComplianceScore(s));
+        const compliancePct = activeStaff.length > 0 
+          ? Math.round(staffComplianceScores.reduce((a, b) => a + b, 0) / activeStaff.length)
+          : 100;
+        const compliantStaff = activeStaff.filter(isStaffCompliant).length;
+        
+        // Count expiring/expired certs for alerts
         const certAlerts = activeStaff.filter(s => {
-          const expiries = [s.wwcc_expiry, s.first_aid_expiry, s.cpr_expiry, s.anaphylaxis_expiry];
-          return expiries.some(e => e && certDays(e) < 90);
+          const compliance = calculateCompliance(s);
+          return compliance.items.some(i => i.category === 'certification' && i.status === 'expiring');
         }).length;
         const expiredCerts = activeStaff.filter(s => {
-          const expiries = [s.wwcc_expiry, s.first_aid_expiry, s.cpr_expiry, s.anaphylaxis_expiry];
-          return expiries.some(e => e && certDays(e) < 0);
+          const compliance = calculateCompliance(s);
+          return compliance.items.some(i => i.category === 'certification' && i.status === 'expired');
         }).length;
+        
         const openPos = Array.isArray(posData) ? (posData as OpenPosition[]).filter(p => p.status === 'Open' || p.status === 'On Hold').length : 0;
-        const compliantStaff = activeStaff.filter(isStaffCompliant).length;
-        const compliancePct = activeStaff.length > 0 ? Math.round((compliantStaff / activeStaff.length) * 100) : 100;
         const health: 'green' | 'amber' | 'red' = expiredCerts > 0 ? 'red' : certAlerts > 0 ? 'amber' : 'green';
         setCentreSummaries(prev => prev.map(s =>
           s.centreId === centre.id
