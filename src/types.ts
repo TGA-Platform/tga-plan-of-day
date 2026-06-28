@@ -94,8 +94,8 @@ export interface RoomRatioStatus {
 // ── Staffing Structure (Monday.com) ──────────────────────────────────────────
 
 export type StaffQualification =
-  | 'ECT' | 'WT ECT' | 'Diploma' | 'Certificate 3' | 'Trainee'
-  | 'ISS' | 'Chef' | 'Resigned' | 'PPL' | string;
+  | 'ECT' | 'WT ECT' | 'Diploma' | 'WT Diploma' | 'Certificate 3' | 'Trainee'
+  | 'ISS' | 'Chef' | 'No Qualification' | string;
 
 export interface StaffDocument {
   label: string;

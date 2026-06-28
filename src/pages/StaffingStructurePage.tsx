@@ -9,6 +9,14 @@ import { getUser } from '../auth';
 import { CENTRES } from '../config';
 import Layout from '../components/Layout';
 import { calculateCompliance } from '../compliance-requirements';
+import {
+  EMPLOYMENT_STATUS_OPTIONS,
+  POSITION_OPTIONS,
+  QUALIFICATION_VALUES,
+  EMPLOYMENT_STATUS_VALUES,
+  POSITION_VALUES,
+  POSITION_CATEGORY_VALUES,
+} from '../staffingConfig';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -200,30 +208,13 @@ interface BoardData {
 
 
 
-const ROLE_COLORS: Record<string, string> = {
-  'Room Leader': 'bg-blue-100 text-blue-700',
-  'Educator': 'bg-green-100 text-green-700',
-  'Educational Leader': 'bg-purple-100 text-purple-700',
-  'Assistant Director': 'bg-orange-100 text-orange-700',
-  'Centre Director': 'bg-red-100 text-red-700',
-  'Trainee': 'bg-yellow-100 text-yellow-700',
-  'Float': 'bg-gray-100 text-gray-700',
-  'Internal Casual': 'bg-pink-100 text-pink-700',
-  'Early Childhood Teacher': 'bg-indigo-100 text-indigo-700',
-  'Educator Casual': 'bg-teal-100 text-teal-700',
-};
+const ROLE_COLORS: Record<string, string> = Object.fromEntries(
+  POSITION_OPTIONS.map(o => [o.value, `bg-[${o.color}] text-[${o.border}]`])
+);
 
-const STATUS_COLORS: Record<string, string> = {
-  'Active': 'bg-green-100 text-green-700',
-  'On Leave': 'bg-yellow-100 text-yellow-700',
-  'Resigned': 'bg-amber-100 text-amber-700',
-  'Exited': 'bg-gray-100 text-gray-600',
-  'Inactive': 'bg-gray-100 text-gray-600',
-  'PPL': 'bg-blue-100 text-blue-700',
-  'Long Service': 'bg-purple-100 text-purple-700',
-  'Probation': 'bg-orange-100 text-orange-700',
-  'Casual': 'bg-pink-100 text-pink-700',
-};
+const STATUS_COLORS: Record<string, string> = Object.fromEntries(
+  EMPLOYMENT_STATUS_OPTIONS.map(o => [o.value, `bg-[${o.color}] text-[${o.border}]`])
+);
 
 const POSITION_STATUS_COLORS: Record<string, string> = {
   'Open': 'bg-emerald-100 text-emerald-700',
@@ -1177,7 +1168,7 @@ function StaffProfileDrawer({
               <div className="flex flex-wrap gap-1.5 mt-1.5">
                 <InlineSelect
                   value={local.employment_status || 'Active'}
-                  options={['Active', 'On Leave', 'Resigned', 'Exited', 'Inactive', 'PPL', 'Long Service', 'Probation', 'Casual']}
+                  options={EMPLOYMENT_STATUS_VALUES}
                   onChange={handleStatusQuickChange}
                   getColor={v => STATUS_COLORS[v] || 'bg-gray-100 text-gray-600'}
                 />
@@ -1191,7 +1182,7 @@ function StaffProfileDrawer({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {(local.employment_status === 'Active' || local.employment_status === 'On Leave' || local.employment_status === 'Probation' || local.employment_status === 'Casual') && (
+              {(local.employment_status === 'Active' || local.employment_status === 'On Leave' || local.employment_status === 'Probation') && (
                 <button
                   onClick={() => { onClose(); onResign?.(staff.id); }}
                   className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors hover:opacity-80"
@@ -1313,7 +1304,7 @@ function StaffProfileDrawer({
                         <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
                         <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
                           value={editForm.employment_status || 'Active'} onChange={e => setEditForm(f => ({ ...f, employment_status: e.target.value }))}>
-                          {['Active', 'On Leave', 'Resigned', 'Exited', 'Inactive', 'PPL', 'Long Service', 'Probation', 'Casual'].map(s => <option key={s}>{s}</option>)}
+                          {EMPLOYMENT_STATUS_VALUES.map(s => <option key={s}>{s}</option>)}
                         </select>
                       </div>
                       <div>
@@ -1321,8 +1312,7 @@ function StaffProfileDrawer({
                         <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
                           value={editForm.position || ''} onChange={e => setEditForm(f => ({ ...f, position: e.target.value }))}>
                           <option value="">Select...</option>
-                          {Object.keys(ROLE_COLORS).map(r => <option key={r}>{r}</option>)}
-                          {['Early Childhood Teacher', 'Assistant Director', 'Centre Director', 'Chef', 'Internal Casual'].map(r => <option key={r}>{r}</option>)}
+                          {POSITION_VALUES.map(r => <option key={r}>{r}</option>)}
                         </select>
                       </div>
                       <div>
@@ -1330,7 +1320,7 @@ function StaffProfileDrawer({
                         <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
                           value={editForm.qualification || ''} onChange={e => setEditForm(f => ({ ...f, qualification: e.target.value }))}>
                           <option value="">Select...</option>
-                          {['ECT', 'WT ECT', 'Diploma', 'Certificate 3', 'Trainee', 'ISS', 'Chef', 'No Qualification'].map(q => <option key={q}>{q}</option>)}
+                          {QUALIFICATION_VALUES.map(q => <option key={q}>{q}</option>)}
                         </select>
                       </div>
                       <div>
@@ -1338,7 +1328,7 @@ function StaffProfileDrawer({
                         <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none"
                           value={editForm.position_category || ''} onChange={e => setEditForm(f => ({ ...f, position_category: e.target.value }))}>
                           <option value="">Select...</option>
-                          {['Full Time', 'Part Time', 'Casual', 'As Required'].map(c => <option key={c}>{c}</option>)}
+                          {POSITION_CATEGORY_VALUES.map(c => <option key={c}>{c}</option>)}
                         </select>
                       </div>
                       <div>
@@ -1682,7 +1672,7 @@ function StaffCard({
       {/* Status */}
       <InlineSelect
         value={staff.employment_status || 'Active'}
-        options={['Active', 'On Leave', 'Resigned', 'Exited', 'Inactive', 'PPL', 'Long Service', 'Probation', 'Casual']}
+        options={EMPLOYMENT_STATUS_VALUES}
         onChange={v => onStatusChange(staff.id, v)}
         getColor={v => STATUS_COLORS[v] || 'bg-gray-100 text-gray-600'}
       />
@@ -2062,7 +2052,7 @@ function AddStaffModal({
               value={form.employment_status}
               onChange={e => setForm(f => ({ ...f, employment_status: e.target.value }))}
             >
-              {['Active', 'On Leave', 'Resigned', 'Exited', 'Inactive', 'PPL', 'Probation', 'Casual'].map(s => <option key={s}>{s}</option>)}
+              {EMPLOYMENT_STATUS_VALUES.map(s => <option key={s}>{s}</option>)}
             </select>
           </div>
           <div>
@@ -2073,7 +2063,7 @@ function AddStaffModal({
               onChange={e => setForm(f => ({ ...f, position: e.target.value }))}
             >
               <option value="">Select...</option>
-              {['Room Leader', 'Educator', 'Educational Leader', 'Assistant Director', 'Centre Director', 'Trainee', 'Float', 'Internal Casual', 'Early Childhood Teacher', 'Chef'].map(p => <option key={p}>{p}</option>)}
+              {POSITION_VALUES.map(p => <option key={p}>{p}</option>)}
             </select>
           </div>
           <div>
@@ -2084,7 +2074,7 @@ function AddStaffModal({
               onChange={e => setForm(f => ({ ...f, qualification: e.target.value }))}
             >
               <option value="">Select...</option>
-              {['ECT', 'WT ECT', 'Diploma', 'Certificate 3', 'Trainee', 'ISS', 'No Qualification'].map(q => <option key={q}>{q}</option>)}
+              {QUALIFICATION_VALUES.map(q => <option key={q}>{q}</option>)}
             </select>
           </div>
         </div>

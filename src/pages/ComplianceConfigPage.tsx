@@ -11,25 +11,10 @@ import {
 import Layout from '../components/Layout';
 import { getUser } from '../auth';
 import { COMPLIANCE_REQUIREMENTS, type ComplianceRequirement } from '../compliance-requirements';
+import { POSITION_VALUES } from '../staffingConfig';
 
 // All known positions across TGA
-const ALL_POSITIONS = [
-  'Centre Director',
-  'Assistant Director',
-  'Educational Leader',
-  'Room Leader',
-  'Early Childhood Teacher',
-  'Educator',
-  'Educator Casual',
-  'Float',
-  'Internal Casual',
-  'Trainee',
-  'Childcare Trainee',
-  'Diploma Educator',
-  'Centre Support',
-  'Chef',
-  'ISS Support Worker',
-];
+const ALL_POSITIONS = POSITION_VALUES;
 
 // Categories with icons
 const CATEGORY_CONFIG = {
