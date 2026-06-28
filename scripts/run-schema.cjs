@@ -92,13 +92,35 @@ async function main() {
       CREATE TRIGGER staff_members_updated_at
         BEFORE UPDATE ON staff_members
         FOR EACH ROW EXECUTE FUNCTION update_staff_updated_at();
+
+      CREATE TABLE IF NOT EXISTS compliance_requirements (
+        id                          text PRIMARY KEY,
+        label                       text NOT NULL,
+        category                    text NOT NULL CHECK (category IN ('certification', 'document', 'check')),
+        required_for                text[] NOT NULL DEFAULT '{}',
+        required_for_qualifications text[] NOT NULL DEFAULT '{}',
+        expiry_field                text,
+        doc_pattern                 text,
+        is_mandatory                boolean NOT NULL DEFAULT true,
+        description                 text,
+        sort_order                  integer DEFAULT 0,
+        created_at                  timestamptz NOT NULL DEFAULT now(),
+        updated_at                  timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE INDEX IF NOT EXISTS compliance_requirements_category ON compliance_requirements(category);
+
+      DROP TRIGGER IF EXISTS compliance_requirements_updated_at ON compliance_requirements;
+      CREATE TRIGGER compliance_requirements_updated_at
+        BEFORE UPDATE ON compliance_requirements
+        FOR EACH ROW EXECUTE FUNCTION update_staff_updated_at();
     `;
 
     await client.query(schema);
     console.log('Schema created successfully.');
 
     // Verify
-    const res = await client.query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('staff_members','staff_documents','staff_rooms') ORDER BY table_name`);
+    const res = await client.query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('staff_members','staff_documents','staff_rooms','compliance_requirements') ORDER BY table_name`);
     console.log('Tables confirmed:', res.rows.map(r => r.table_name).join(', '));
 
   } finally {

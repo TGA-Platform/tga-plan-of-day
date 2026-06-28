@@ -3,7 +3,7 @@
  * Admin-only page to configure which documents/certifications are required for each position
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   ShieldCheck, Plus, Trash2, Save, X, ChevronDown, ChevronRight,
   CheckCircle, FileText, Award, Stethoscope
@@ -37,12 +37,40 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
 export default function ComplianceConfigPage() {
   const user = getUser();
   const [requirements, setRequirements] = useState<ComplianceRequirement[]>([...COMPLIANCE_REQUIREMENTS]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [selectedPositions, setSelectedPositions] = useState<string[]>([]);
   const [editingReq, setEditingReq] = useState<ComplianceRequirement | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['certification', 'document', 'check']));
-  // Future: search functionality
-  // const [searchPosition, setSearchPosition] = useState('');
+
+  // Load requirements from Supabase; seed defaults if empty
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/compliance-requirements')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((data: ComplianceRequirement[]) => {
+        if (cancelled) return;
+        if (data.length === 0) {
+          // Seed defaults to Supabase
+          return fetch('/api/compliance-requirements', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requirements: COMPLIANCE_REQUIREMENTS }),
+          }).then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+            .then(() => { setRequirements([...COMPLIANCE_REQUIREMENTS]); setLoading(false); });
+        }
+        setRequirements(data);
+        setLoading(false);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error('Failed to load compliance requirements:', err);
+        showToast('Failed to load requirements — using defaults', 'error');
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   // Filter requirements by selected positions
   const filteredRequirements = useMemo(() => {
@@ -77,11 +105,25 @@ export default function ComplianceConfigPage() {
     });
   };
 
-  const handleSave = () => {
-    // In a real implementation, this would save to an API/Supabase
-    // For now, we'll save to localStorage as a demo
-    localStorage.setItem('compliance_requirements', JSON.stringify(requirements));
-    showToast('Requirements saved successfully');
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const r = await fetch('/api/compliance-requirements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requirements }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      showToast('Requirements saved to Supabase');
+    } catch (err) {
+      console.error('Failed to save compliance requirements:', err);
+      showToast((err as Error).message || 'Failed to save requirements', 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = (id: string) => {
@@ -129,7 +171,8 @@ export default function ComplianceConfigPage() {
           <div className="flex gap-3">
             <button
               onClick={() => setIsCreating(true)}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg"
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg disabled:opacity-50"
               style={{ backgroundColor: '#2d5c18', color: '#fff' }}
             >
               <Plus size={14} />
@@ -137,11 +180,12 @@ export default function ComplianceConfigPage() {
             </button>
             <button
               onClick={handleSave}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg"
+              disabled={loading || saving}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg disabled:opacity-50"
               style={{ backgroundColor: '#e8f5e0', color: '#2d5c18', border: '1px solid #D0E8B8' }}
             >
               <Save size={14} />
-              Save Changes
+              {saving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
         </div>
@@ -179,6 +223,11 @@ export default function ComplianceConfigPage() {
         </div>
 
         {/* Requirements by Category */}
+        {loading && (
+          <div className="text-sm py-4 text-center" style={{ color: '#596570' }}>
+            Loading requirements…
+          </div>
+        )}
         <div className="space-y-4">
           {Object.entries(CATEGORY_CONFIG).map(([cat, config]) => {
             const items = grouped[cat] || [];
