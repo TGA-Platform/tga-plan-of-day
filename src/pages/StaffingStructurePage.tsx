@@ -1899,10 +1899,8 @@ function getQualificationColor(q?: string | null): string {
 
 function StaffingOverviewChart({
   groups,
-  openPositions,
 }: {
   groups: Array<{ id: string; title: string; color: string; isActive: boolean; staff: StaffMemberRow[] }>;
-  openPositions: OpenPosition[];
 }) {
   // Filter staff to Active + On Leave only
   const chartGroups = useMemo(() => {
@@ -1921,20 +1919,6 @@ function StaffingOverviewChart({
   const maxCount = useMemo(() => {
     return Math.max(...chartGroups.map(g => g.staff.length), 1);
   }, [chartGroups]);
-
-  const openCount = useMemo(() => {
-    return openPositions.filter(p => p.status === 'Open' || p.status === 'On Hold').length;
-  }, [openPositions]);
-
-  const floatCount = useMemo(() => {
-    return groups.flatMap(g => g.staff).filter(s => {
-      const status = s.employment_status || 'Active';
-      if (status !== 'Active' && status !== 'On Leave') return false;
-      const isFloatGroup = s.group_title && /float/i.test(s.group_title);
-      const isFloatRole = s.role_in_room && /float/i.test(s.role_in_room);
-      return isFloatGroup || isFloatRole;
-    }).length;
-  }, [groups]);
 
   const legendItems = [
     { label: 'ECT / WT ECT', color: '#3b82f6' },
@@ -1996,20 +1980,6 @@ function StaffingOverviewChart({
           </div>
         </div>
 
-        {/* Divider */}
-        <div className="hidden lg:block w-px" style={{ backgroundColor: '#E2F1DA' }} />
-
-        {/* Section 2: Overview Stats */}
-        <div className="flex flex-row lg:flex-col gap-4 lg:min-w-[140px]">
-          <div className="flex-1 lg:flex-none px-4 py-3 rounded-xl" style={{ backgroundColor: '#fffbeb', border: '1px solid #fde68a' }}>
-            <div className="text-2xl font-bold" style={{ color: '#d97706' }}>{openCount}</div>
-            <div className="text-[10px] font-semibold uppercase tracking-wide mt-0.5" style={{ color: '#92400e' }}>Open Positions</div>
-          </div>
-          <div className="flex-1 lg:flex-none px-4 py-3 rounded-xl" style={{ backgroundColor: '#f3e8ff', border: '1px solid #d8b4fe' }}>
-            <div className="text-2xl font-bold" style={{ color: '#9333ea' }}>{floatCount}</div>
-            <div className="text-[10px] font-semibold uppercase tracking-wide mt-0.5" style={{ color: '#6b21a8' }}>Float Staff</div>
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -3074,21 +3044,27 @@ export default function StaffingStructurePage() {
       {centreId !== ALL && data && !loading && (
         <>
           {/* Staffing Overview Chart */}
-          <StaffingOverviewChart groups={data.groups} openPositions={openPositions} />
+          <StaffingOverviewChart groups={data.groups} />
 
           {/* Summary stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            {[
-              { label: 'Active Staff', value: allActive.length, valueColor: '#2d5c18' },
-              { label: 'Rooms', value: activeGroups.length, valueColor: '#050505' },
-              { label: 'Open Positions', value: openPositionCount, valueColor: openPositionCount > 0 ? '#16a34a' : '#050505' },
-              { label: 'Cert Alerts', value: certAlerts, valueColor: certAlerts > 0 ? '#d97706' : '#050505' },
-            ].map(s => (
-              <div key={s.label} className="px-5 py-4" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
-                <div className="text-2xl font-bold" style={{ color: s.valueColor }}>{s.value}</div>
-                <div className="text-xs font-medium mt-0.5" style={{ color: '#596570' }}>{s.label}</div>
-              </div>
-            ))}
+            {(() => {
+              const staffComplianceScores = allActive.map(s => getStaffComplianceScore(s));
+              const centreCompliancePct = allActive.length > 0 
+                ? Math.round(staffComplianceScores.reduce((a, b) => a + b, 0) / allActive.length)
+                : 100;
+              return [
+                { label: 'Active Staff', value: allActive.length, valueColor: '#2d5c18' },
+                { label: 'Rooms', value: activeGroups.length, valueColor: '#050505' },
+                { label: 'Compliance', value: `${centreCompliancePct}%`, valueColor: complianceColor(centreCompliancePct) },
+                { label: 'Cert Alerts', value: certAlerts, valueColor: certAlerts > 0 ? '#d97706' : '#050505' },
+              ].map(s => (
+                <div key={s.label} className="px-5 py-4" style={{ backgroundColor: '#ffffff', border: '1px solid #E2F1DA', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+                  <div className="text-2xl font-bold" style={{ color: s.valueColor }}>{s.value}</div>
+                  <div className="text-xs font-medium mt-0.5" style={{ color: '#596570' }}>{s.label}</div>
+                </div>
+              ));
+            })()}
           </div>
 
           {/* Compliance legend */}
