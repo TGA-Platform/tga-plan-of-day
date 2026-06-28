@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ChevronDown, ChevronRight, ShieldCheck, AlertTriangle,
   Pencil, Plus, Trash2, Briefcase, UserMinus, Search, List, LayoutGrid,
@@ -1833,9 +1834,17 @@ function EditRoomModal({ initialTitle, initialColor, initialAgeMin, initialAgeMa
   );
 }
 
-function DeleteRoomModal({ title, staffCount, onClose, onConfirm }: {
-  title: string; staffCount: number; onClose: () => void; onConfirm: () => void;
+function DeleteRoomModal({ title, staff, groups, onClose, onConfirm }: {
+  title: string;
+  staff: Array<{ id: string; name: string }>;
+  groups: Array<{ id: string; title: string }>;
+  onClose: () => void;
+  onConfirm: (targetGroupId: string | null) => void;
 }) {
+  const staffCount = staff.length;
+  const [targetGroupId, setTargetGroupId] = useState<string | null>(null);
+  const otherGroups = groups.filter(g => g.title !== title);
+
   return (
     <Modal isOpen onClose={onClose} title="Delete Room" size="sm">
       <div className="space-y-4">
@@ -1843,9 +1852,31 @@ function DeleteRoomModal({ title, staffCount, onClose, onConfirm }: {
           Are you sure you want to delete <span className="font-semibold" style={{ color: '#050505' }}>{title}</span>?
         </p>
         {staffCount > 0 ? (
-          <div className="text-xs px-3 py-2 rounded-lg" style={{ backgroundColor: '#fff5f5', color: '#dc2626', border: '1px solid #fca5a5' }}>
-            This room has {staffCount} staff member{staffCount !== 1 ? 's' : ''}. Move all staff out before deleting.
-          </div>
+          <>
+            <div className="text-xs px-3 py-2 rounded-lg" style={{ backgroundColor: '#fffbeb', color: '#92400e', border: '1px solid #fde68a' }}>
+              This room has {staffCount} staff member{staffCount !== 1 ? 's' : ''}. Choose another room to reassign them to, or delete them individually first.
+            </div>
+            {otherGroups.length === 0 ? (
+              <div className="text-xs px-3 py-2 rounded-lg" style={{ backgroundColor: '#fff5f5', color: '#dc2626', border: '1px solid #fca5a5' }}>
+                No other rooms exist. Create another room before deleting this one.
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-medium mb-1" style={{ color: '#596570' }}>Reassign staff to</label>
+                <select
+                  value={targetGroupId || ''}
+                  onChange={e => setTargetGroupId(e.target.value || null)}
+                  className="w-full text-sm rounded-lg px-3 py-2 focus:outline-none"
+                  style={{ border: '1px solid #E2F1DA', backgroundColor: '#ffffff' }}
+                >
+                  <option value="">Select a room...</option>
+                  {otherGroups.map(g => (
+                    <option key={g.id} value={g.id}>{g.title}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </>
         ) : (
           <div className="text-xs px-3 py-2 rounded-lg" style={{ backgroundColor: '#fffbeb', color: '#92400e', border: '1px solid #fde68a' }}>
             This room is empty. Deleting it cannot be undone.
@@ -1854,11 +1885,17 @@ function DeleteRoomModal({ title, staffCount, onClose, onConfirm }: {
         <div className="flex justify-end gap-3 pt-2">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors">Cancel</button>
           <button
-            onClick={() => { if (staffCount > 0) { showToast('Move all staff out before deleting', 'error'); return; } onConfirm(); }}
+            onClick={() => {
+              if (staffCount > 0) {
+                if (otherGroups.length === 0) { showToast('Create another room first', 'error'); return; }
+                if (!targetGroupId) { showToast('Select a room to reassign staff', 'error'); return; }
+              }
+              onConfirm(targetGroupId);
+            }}
             className="px-5 py-2 text-white text-sm font-medium rounded-xl transition-colors"
-            style={{ backgroundColor: staffCount > 0 ? '#d1d5db' : '#dc2626', cursor: staffCount > 0 ? 'not-allowed' : 'pointer' }}
+            style={{ backgroundColor: staffCount > 0 && !targetGroupId ? '#d1d5db' : '#dc2626', cursor: staffCount > 0 && !targetGroupId ? 'not-allowed' : 'pointer' }}
           >
-            Delete Room
+            {staffCount > 0 ? `Reassign ${staffCount} & Delete` : 'Delete Room'}
           </button>
         </div>
       </div>
@@ -2446,7 +2483,7 @@ export default function StaffingStructurePage() {
   // Room management modals
   const [addRoomOpen, setAddRoomOpen] = useState(false);
   const [editRoomTarget, setEditRoomTarget] = useState<{ groupId: string; title: string; color: string; age_min?: number | null; age_max?: number | null; capacity?: number | null } | null>(null);
-  const [deleteRoomTarget, setDeleteRoomTarget] = useState<{ groupId: string; title: string; staffCount: number } | null>(null);
+  const [deleteRoomTarget, setDeleteRoomTarget] = useState<{ groupId: string; title: string; staff: Array<{ id: string; name: string }> } | null>(null);
 
   // Load all-centres summary data
   const loadAllCentresSummary = useCallback(async () => {
@@ -2740,10 +2777,13 @@ export default function StaffingStructurePage() {
     }
   }
 
-  async function handleDeleteRoom(groupId: string) {
+  async function handleDeleteRoom(groupId: string, targetGroupId?: string | null) {
     try {
-      await apiPost(`staffing-structure?centreId=${centreId}`, { action: 'delete_room', centreId, groupId });
-      showToast('Room deleted');
+      const action = targetGroupId ? 'delete_room_with_reassign' : 'delete_room';
+      const body: Record<string, unknown> = { action, centreId, groupId };
+      if (targetGroupId) body.targetGroupId = targetGroupId;
+      await apiPost(`staffing-structure?centreId=${centreId}`, body);
+      showToast(targetGroupId ? 'Room deleted and staff reassigned' : 'Room deleted');
       loadData(centreId);
     } catch (err) {
       showToast((err as Error).message || 'Failed to delete room', 'error');
@@ -2855,9 +2895,10 @@ export default function StaffingStructurePage() {
       {deleteRoomTarget && (
         <DeleteRoomModal
           title={deleteRoomTarget.title}
-          staffCount={deleteRoomTarget.staffCount}
+          staff={deleteRoomTarget.staff}
+          groups={activeGroups.map(g => ({ id: g.id, title: g.title }))}
           onClose={() => setDeleteRoomTarget(null)}
-          onConfirm={() => { handleDeleteRoom(deleteRoomTarget.groupId); setDeleteRoomTarget(null); }}
+          onConfirm={(targetGroupId) => { handleDeleteRoom(deleteRoomTarget.groupId, targetGroupId); setDeleteRoomTarget(null); }}
         />
       )}
 
@@ -2886,6 +2927,14 @@ export default function StaffingStructurePage() {
                 ← All Centres
               </button>
             )}
+            <Link
+              to="/compliance-config"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg transition-colors"
+              style={{ backgroundColor: '#F5FAF3', color: '#596570', border: '1px solid #E2F1DA' }}
+            >
+              <ShieldCheck size={14} />
+              Compliance Config
+            </Link>
             {centreId !== ALL && data && (
               <>
                 <button
@@ -3300,10 +3349,10 @@ export default function StaffingStructurePage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={e => { e.stopPropagation(); setDeleteRoomTarget({ groupId: group.id, title: group.title, staffCount }); }}
+                        onClick={e => { e.stopPropagation(); setDeleteRoomTarget({ groupId: group.id, title: group.title, staff: group.staff.map(s => ({ id: s.id, name: s.name })) }); }}
                         className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg transition-colors font-medium"
-                        style={{ color: staffCount === 0 ? '#596570' : '#d1d5db', backgroundColor: staffCount === 0 ? '#F5FAF3' : 'transparent', border: staffCount === 0 ? '1px solid #E2F1DA' : 'none', cursor: staffCount === 0 ? 'pointer' : 'not-allowed' }}
-                        title={staffCount === 0 ? 'Delete room' : 'Move all staff out of this room before deleting'}
+                        style={{ color: '#596570', backgroundColor: '#F5FAF3', border: '1px solid #E2F1DA', cursor: 'pointer' }}
+                        title="Delete room"
                       >
                         <Trash2 size={12} />
                       </button>

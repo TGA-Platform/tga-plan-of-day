@@ -296,6 +296,30 @@ export default async function handler(req, res) {
           return res.json({ ok: true });
         }
 
+        // Delete room and reassign all staff to another room
+        case 'delete_room_with_reassign': {
+          const { centreId, groupId, targetGroupId } = body;
+          if (!centreId || !groupId || !targetGroupId) return res.status(400).json({ error: 'centreId, groupId and targetGroupId required' });
+          if (groupId === targetGroupId) return res.status(400).json({ error: 'Cannot reassign room to itself' });
+
+          // Verify target room exists
+          const targetRooms = await sbGet(`/staff_rooms?centre_id=eq.${centreId}&group_id=eq.${targetGroupId}`);
+          if (targetRooms.length === 0) return res.status(400).json({ error: 'Target room not found' });
+          const targetRoom = targetRooms[0];
+
+          // Move all staff to target room
+          await sbPatch(`/staff_members?centre_id=eq.${centreId}&group_id=eq.${groupId}`, {
+            group_id: targetGroupId,
+            group_title: targetRoom.title,
+            group_color: targetRoom.color || '#808080',
+            is_active_group: targetRoom.is_active ?? true,
+          });
+
+          // Delete the now-empty room
+          await sbDelete(`/staff_rooms?centre_id=eq.${centreId}&group_id=eq.${groupId}`);
+          return res.json({ ok: true, movedTo: targetGroupId });
+        }
+
         default:
           return res.status(400).json({ error: `Unknown action: ${action}` });
       }
