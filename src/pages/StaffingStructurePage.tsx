@@ -1534,11 +1534,13 @@ function StaffCard({
   staff,
   onSelect,
   onStatusChange,
+  onArchive,
   groupId,
 }: {
   staff: StaffMemberRow;
   onSelect: (tab?: 'profile' | 'accidents' | 'issues') => void;
   onStatusChange: (staffId: string, status: string) => void;
+  onArchive?: (staffId: string, staffName: string) => void;
   groupId?: string;
 }) {
   const isResigned = staff.employment_status === 'Resigned';
@@ -1579,6 +1581,11 @@ function StaffCard({
           <button onClick={() => onSelect('profile')} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600" title="Edit">
             <Pencil size={13} />
           </button>
+          {onArchive && !isResigned && !isExited && (
+            <button onClick={() => onArchive(staff.id, staff.name)} className="p-1 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500" title="Archive">
+              <Trash2 size={13} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -2317,6 +2324,7 @@ export default function StaffingStructurePage() {
   const [addStaffTarget, setAddStaffTarget] = useState<{ groupId?: string } | null>(null);
   const [positionModal, setPositionModal] = useState<{ existing?: OpenPosition } | null>(null);
   const [resignationPending, setResignationPending] = useState<{ staffId: string; staffName: string } | null>(null);
+  const [archivePending, setArchivePending] = useState<{ staffId: string; staffName: string } | null>(null);
   const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
 
   // Room management modals
@@ -2541,6 +2549,26 @@ export default function StaffingStructurePage() {
     }
   }
 
+  async function handleArchiveConfirm() {
+    if (!archivePending) return;
+    const { staffId, staffName } = archivePending;
+    try {
+      await apiPost(`staffing-structure?centreId=${centreId}`, {
+        action: 'update_staff', staffId,
+        fields: {
+          employment_status: 'Exited',
+          end_date: new Date().toISOString().split('T')[0],
+        },
+      });
+      showToast(`${staffName} archived to Exited Staff`);
+      loadData(centreId);
+    } catch (err) {
+      showToast((err as Error).message || 'Failed to archive', 'error');
+    } finally {
+      setArchivePending(null);
+    }
+  }
+
   async function handlePositionStatusChange(posId: string, status: string) {
     try {
       await apiPatch(`open-positions?id=${posId}`, { status });
@@ -2625,6 +2653,29 @@ export default function StaffingStructurePage() {
           onConfirm={handleResignationConfirm}
           onCancel={() => setResignationPending(null)}
         />
+      )}
+      {archivePending && (
+        <Modal isOpen onClose={() => setArchivePending(null)} title="Archive Staff Member" size="sm">
+          <div className="space-y-4">
+            <p className="text-sm" style={{ color: '#596570' }}>
+              Archive <span className="font-semibold" style={{ color: '#050505' }}>{archivePending.staffName}</span> to Exited Staff?
+            </p>
+            <p className="text-xs" style={{ color: '#596570' }}>
+              They will be moved to the "Exited Staff" section and their card will be greyed out.
+            </p>
+            <div className="flex justify-end gap-3 pt-1">
+              <button onClick={() => setArchivePending(null)} className="px-4 py-2 text-sm" style={{ color: '#596570' }}>Cancel</button>
+              <button
+                onClick={handleArchiveConfirm}
+                className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg transition-colors"
+                style={{ backgroundColor: '#dc2626', color: '#fff' }}
+              >
+                <Trash2 size={14} />
+                Archive
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
       {addStaffTarget !== null && data && (
         <AddStaffModal
@@ -3181,6 +3232,7 @@ export default function StaffingStructurePage() {
                               groupId={group.id}
                               onSelect={tab => setProfileTarget({ staff: sm, tab })}
                               onStatusChange={handleStatusChange}
+                              onArchive={(staffId, staffName) => setArchivePending({ staffId, staffName })}
                             />
                           ))}
                         </div>
