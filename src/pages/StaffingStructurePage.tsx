@@ -2637,16 +2637,20 @@ export default function StaffingStructurePage() {
       // 3. Create backfill open position (best-effort)
       if (sm) {
         try {
-          await apiPost('open-positions', {
+          const positionData = {
             centre_id: centreId,
             title: sm.position || 'Educator',
             qualification_required: sm.qualification || '',
-            room_id: sm.group_id || undefined,
+            room_id: sm.group_id || null,
             status: 'Open',
             notes: `${sm.position || 'Educator'}${sm.qualification ? ` (${sm.qualification})` : ''} — Replacement for ${staffName}. Last day ${formattedDate}${data.notes ? `. ${data.notes}` : ''}`,
-          });
-        } catch {
-          // non-fatal — open-positions endpoint may not exist yet
+          };
+          console.log('Creating open position:', positionData);
+          await apiPost('open-positions', positionData);
+          showToast('Open position created for backfill');
+        } catch (err) {
+          console.error('Failed to create open position:', err);
+          showToast('Warning: Open position not created — ' + ((err as Error).message || 'unknown error'), 'error');
         }
       }
 
