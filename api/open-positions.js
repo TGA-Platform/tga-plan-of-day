@@ -88,6 +88,7 @@ export default async function handler(req, res) {
     const body = req.body || {};
     try {
       const row = {
+        id: body.id || crypto.randomUUID(),
         centre_id: body.centre_id,
         room_id: body.room_id || null,
         title: body.title,
