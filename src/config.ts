@@ -317,6 +317,24 @@ export const CENTRES: Centre[] = [
     leaveUnitIds:    [447, 453, 410],
     nonRatioUnitIds: [394, 395, 396, 397, 398, 407, 408, 409],
   },
+  {
+    id: 'charlestown', name: 'Charlestown',
+    approvedPlaces: 122,
+    rooms: [
+      { id: 'ch_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 489, ownaRoomName: 'Explorers' },
+      { id: 'ch_1_2',  name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 490, ownaRoomName: 'Adventurers' },
+      { id: 'ch_2_3a', name: '2-3 Voyagers',    ageGroup: '2-3 yrs', ratio: 5,  deputyUnitId: 491, ownaRoomName: 'Voyagers' },
+      { id: 'ch_2_3b', name: '2-3 Pioneers',    ageGroup: '2-3 yrs', ratio: 5,  deputyUnitId: 492, ownaRoomName: 'Pioneers' },
+      { id: 'ch_3_4',  name: '3-4 Creators',    ageGroup: '3-4 yrs', ratio: 10, deputyUnitId: 493, ownaRoomName: 'Creators' },
+      { id: 'ch_4_5a', name: '4-5 Inventors',   ageGroup: '4-5 yrs', ratio: 10, deputyUnitId: 495, ownaRoomName: 'Inventors' },
+      { id: 'ch_4_5b', name: '4-5 Achievers',   ageGroup: '4-5 yrs', ratio: 10, deputyUnitId: 494, ownaRoomName: 'Achievers' },
+    ],
+    floatUnitIds:    [496],
+    issUnitIds:      [488],
+    leaveUnitIds:    [501, 502, 500],
+    nonRatioUnitIds: [483, 484, 485, 486, 487, 497, 498, 499],
+    outdoorAreas:    ['Outdoor Area Level 1', 'Outdoor Area Level 2'],
+  },
 ];
 
 export const USERS: User[] = [
@@ -338,6 +356,7 @@ export const USERS: User[] = [
   { email: 'bankstown@tga.edu.au',      role: 'director', centreId: 'bankstown',        name: 'Bankstown' },
   { email: 'glendale@tga.edu.au',       role: 'director', centreId: 'glendale',         name: 'Glendale' },
   { email: 'edgeworth@tga.edu.au',      role: 'director', centreId: 'edgeworth',        name: 'Edgeworth' },
+  { email: 'charlestown@tga.edu.au',    role: 'director', centreId: 'charlestown',      name: 'Charlestown' },
 ];
 
 export const PASSWORDS: Record<string, string> = {
@@ -359,6 +378,7 @@ export const PASSWORDS: Record<string, string> = {
   'bankstown@tga.edu.au':       'bankstown2026',
   'glendale@tga.edu.au':        'glendale2026',
   'edgeworth@tga.edu.au':       'edgeworth2026',
+  'charlestown@tga.edu.au':     'charlestown2026',
 };
 
 
