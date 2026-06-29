@@ -64,7 +64,7 @@ async function getIdToken() {
     body: JSON.stringify({
       AuthFlow: 'REFRESH_TOKEN_AUTH',
       ClientId: Z_CLIENT_ID,
-      AuthParameters: { REFRESH_TOKEN: *** },
+      AuthParameters: { REFRESH_TOKEN: refreshToken },
     }),
   });
 
@@ -157,7 +157,7 @@ async function queryZGraphQL(authToken, query, variables = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': '***' + authToken.token,
+      'Authorization': 'COGNITO ' + authToken.token,
     },
     body: JSON.stringify({ operationName: null, query, variables }),
   });
