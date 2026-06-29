@@ -21,7 +21,7 @@ function extractKey(filePath, keyName) {
   return m[1];
 }
 
-const SERVICE_KEY = extractKey('api/staffing-structure.js', 'SERVICE_KEY');
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || extractKey('api/staffing-structure.js', 'SERVICE_KEY');
 const MONDAY_TOKEN = extractKey('scripts/migrate-monday-to-supabase.cjs', 'MONDAY_TOKEN');
 
 const BOARD_IDS = {

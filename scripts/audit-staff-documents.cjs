@@ -19,7 +19,7 @@ function getServiceKey() {
   return m[1];
 }
 
-const SERVICE_KEY = getServiceKey();
+const SERVICE_KEY = proces…_KEY || getServiceKey();
 const SB = `${SUPABASE_URL}/rest/v1`;
 const HEADERS = {
   'Authorization': `Bearer ${SERVICE_KEY}`,

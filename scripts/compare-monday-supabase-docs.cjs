@@ -31,7 +31,7 @@ function getSupabaseKey() {
 }
 
 const MONDAY_TOKEN = getMondayToken();
-const SERVICE_KEY = getSupabaseKey();
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || getSupabaseKey();
 
 const BOARDS = {
   oatley: 1419063930,
