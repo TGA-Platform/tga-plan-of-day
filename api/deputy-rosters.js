@@ -46,36 +46,19 @@ export default async function handler(req, res) {
 
   // ── 2. Cache miss: fetch live from Deputy ────────────────────────────────
   if (!allRosters) {
-    const PAGE  = 500;
-    allRosters  = [];
-    let start   = 1;
+    // NOTE: resource/Roster/QUERY silently omits some shifts that are visible
+    // in Deputy's "Week by Area" view. The supervise/roster/{date} endpoint
+    // returns the complete roster, so we use that and filter client-side.
+    const response = await fetch(
+      `https://thegroveacademy.au.deputy.com/api/v1/supervise/roster/${date}`,
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${DEPUTY_TOKEN}` },
+      }
+    );
 
-    // NOTE: Deputy's OperationalUnit 'in' filter silently drops records for
-    // some units (known API quirk). We query by date only and filter on our
-    // side — this is reliable. Never revert to server-side unit filtering.
-    while (true) {
-      const response = await fetch(
-        'https://thegroveacademy.au.deputy.com/api/v1/resource/Roster/QUERY',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${DEPUTY_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            max:    PAGE,
-            start,
-            search: { s1: { field: 'Date', type: 'eq', data: date } },
-          }),
-        }
-      );
-
-      const page = await response.json();
-      if (!Array.isArray(page) || page.length === 0) break;
-      allRosters.push(...page);
-      if (page.length < PAGE) break;
-      start += PAGE;
-    }
+    const page = await response.json();
+    allRosters = Array.isArray(page) ? page : [];
 
     // Write result to Supabase cache (non-blocking, best-effort)
     fetch(`${SUPABASE_URL}/rest/v1/deputy_roster_cache`, {

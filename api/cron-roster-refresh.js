@@ -38,32 +38,18 @@ function getNextWeekDatesSydney() {
 }
 
 async function fetchAllRostersFromDeputy(date) {
-  const PAGE = 500;
-  const all  = [];
-  let start  = 1;
-  while (true) {
-    const res = await fetch(
-      'https://thegroveacademy.au.deputy.com/api/v1/resource/Roster/QUERY',
-      {
-        method: 'POST',
-        headers: {
-          Authorization:  `Bearer ${DEPUTY_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          max: PAGE, start,
-          search: { s1: { field: 'Date', type: 'eq', data: date } },
-        }),
-      }
-    );
-    if (!res.ok) throw new Error(`Deputy ${res.status}: ${await res.text()}`);
-    const page = await res.json();
-    if (!Array.isArray(page) || page.length === 0) break;
-    all.push(...page);
-    if (page.length < PAGE) break;
-    start += PAGE;
-  }
-  return all;
+  // supervise/roster/{date} returns the full roster visible in Deputy's
+  // "Week by Area" view. resource/Roster/QUERY omits some shifts.
+  const res = await fetch(
+    `https://thegroveacademy.au.deputy.com/api/v1/supervise/roster/${date}`,
+    {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${DEPUTY_TOKEN}` },
+    }
+  );
+  if (!res.ok) throw new Error(`Deputy ${res.status}: ${await res.text()}`);
+  const page = await res.json();
+  return Array.isArray(page) ? page : [];
 }
 
 async function writeToSupabaseCache(date, rosters) {
