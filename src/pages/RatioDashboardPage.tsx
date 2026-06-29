@@ -1144,6 +1144,7 @@ export default function RatioDashboardPage() {
       setIssStaff(issRosters);
       setSupportStaff(supportRosters);
       // Exclude leave staff so Staff Available only counts staff actually on shift
+      // External casuals will be merged in after they're fetched (see below)
       setAllRosters(rosters.filter(r => !leaveSet.has(r.unitId)));
 
       // Current Sydney time in minutes for shift filtering
@@ -1256,6 +1257,12 @@ export default function RatioDashboardPage() {
     const interval = setInterval(load, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [load]);
+
+  // Merge external casuals into allRosters so they appear in Ratio Check,
+  // Summary tab, and all downstream calculations.
+  const allRostersWithExternal = useMemo((): RosteredStaff[] => {
+    return [...allRosters, ...externalCasuals];
+  }, [allRosters, externalCasuals]);
 
   // Current Sydney time in minutes — used for snapshot staff filtering
   const nowSydneyRender = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
@@ -1452,7 +1459,7 @@ export default function RatioDashboardPage() {
             date={date}
             rooms={centre.rooms}
             children={children}
-            rosters={allRosters.filter(r => !leaveUnitIds.includes(r.unitId))}
+            rosters={allRostersWithExternal.filter(r => !leaveUnitIds.includes(r.unitId))}
             onLunchAlerts={setLunchAlerts}
           />
         </div>
@@ -1464,7 +1471,7 @@ export default function RatioDashboardPage() {
           centreId={selectedCentreId}
           date={date}
           rooms={centre.rooms}
-          allRosters={allRosters}
+          allRosters={allRostersWithExternal}
           staffMoves={staffMoves}
           floatUnitIds={floatUnitIds}
           leaveUnitIds={leaveUnitIds}
@@ -1916,7 +1923,7 @@ export default function RatioDashboardPage() {
         <PredictedCoveragePanel
           rooms={centre.rooms}
           children={children}
-          allRosters={allRosters}
+          allRosters={allRostersWithExternal}
           floats={floats}
           adStaff={adStaff}
           effectiveDate={effectiveDate}
