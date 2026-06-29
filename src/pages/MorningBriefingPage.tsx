@@ -116,12 +116,13 @@ export default function MorningBriefingPage() {
   const [lastSnapshot, setLastSnapshot] = useState<Date | null>(null);
   const [loadError, setLoadError]       = useState<string | null>(null);
   const [viewMode, setViewMode]         = useState<ViewMode>('allday');
+  const [totalBooked, setTotalBooked]   = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       // Fetch today + last week attendance + last-snapshot time in parallel
-      const [todayAtt, lastWeekAtt, unitsRes, lastSnapshotRes] = await Promise.all([
+      const [todayAtt, lastWeekAtt, unitsRes, lastSnapshotRes, ...forecastResults] = await Promise.all([
         withCache(`briefing-today:${date}`, () =>
           fetch(`/api/attendance?date=${date}`).then(r => r.json()), 3 * 60 * 1000),
         withCache(`briefing-lw:${lastWeek}`, () =>
@@ -132,6 +133,13 @@ export default function MorningBriefingPage() {
         fetch(`https://tgxpvzlibquqnldgmwho.supabase.co/rest/v1/attendance_daily?date=eq.${date}&select=updated_at&order=updated_at.desc&limit=1`, {
           headers: { apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NDE3MjUsImV4cCI6MjA4OTUxNzcyNX0.v_thHOU7xq0gaFhcnb2A3iBl5H7bAp9IbT9IPMg_jTY' }
         }).then(r => r.json()).catch(() => []),
+        ...allowed.map(centre => {
+          const campus = centre.ownaName ?? centre.name;
+          return withCache(`briefing-forecast:${campus}:${date}`, () =>
+            fetch(`/api/room-forecast?campus=${encodeURIComponent(campus)}&date=${date}`)
+              .then(r => r.json())
+              .catch(() => null), 5 * 60 * 1000);
+        }),
       ]);
 
       // Current Sydney time as HH:MM for predicted_sign_out comparison
@@ -320,6 +328,12 @@ export default function MorningBriefingPage() {
         });
       }
 
+      // Sum booked children across all centres (from room-forecast)
+      const bookedValues = (forecastResults as Array<{ booked?: number | null } | null>)
+        .map(f => f?.booked)
+        .filter((b): b is number => b != null);
+      setTotalBooked(bookedValues.length > 0 ? bookedValues.reduce((a, b) => a + b, 0) : null);
+
       // Sort: at-risk first, then by children desc
       result.sort((a,b) => {
         const order = { red:0, amber:1, green:2, unknown:3 };
@@ -446,9 +460,10 @@ export default function MorningBriefingPage() {
 
       {/* ── Executive top stats (admin + CEO) ── */}
       {isExec && (
-        <div className="rounded-2xl p-5 mb-6 grid grid-cols-2 sm:grid-cols-4 gap-4"
+        <div className="rounded-2xl p-5 mb-6 grid grid-cols-2 sm:grid-cols-5 gap-4"
           style={{ backgroundColor: '#2d5c18' }}>
           <StatBlock icon="🧒" label={viewMode === 'present' ? 'Children present' : viewMode === 'day' ? 'Children expected' : 'Children today'} value={loading ? '...' : totalKids} />
+          <StatBlock icon="📖" label="Booked" value={loading ? '...' : totalBooked ?? '—'} />
           <StatBlock icon="👥" label={viewMode === 'present' ? 'Staff signed in' : 'Staff rostered'} value={loading ? '...' : totalStaff} />
           <StatBlock icon="🚫" label="Staff absent" value={loading ? '...' : totalAbsent} />
           <StatBlock icon="👷" label="Casuals recommended" value={loading ? '...' : totalCasuals > 0 ? `${fmtFTE(totalCasuals)} FTE` : '✅ None'}
