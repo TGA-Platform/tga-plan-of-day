@@ -244,9 +244,10 @@ export default function DayDetailPage() {
 
     // Booked = total children enrolled for this room today (Owna scrapes ALL children,
     // including those who are absent — sign_in is null for no-shows)
+    // For today's date, show actual signed-in children instead of total booked
     // Falls back to localStorage manual override if no Owna data (future dates)
-    const bookedFromOwna = roomOwna.length;
-    const booked = hasLiveData ? bookedFromOwna : (attendance[room.id] ?? 0);
+    const signedInFromOwna = roomOwna.filter(r => r.sign_in).length;
+    const booked = hasLiveData ? signedInFromOwna : (attendance[room.id] ?? 0);
 
     // Anticipated = booked × historical attendance rate (ALWAYS ≤ booked)
     // This is the planning number: how many we expect to show up based on past patterns

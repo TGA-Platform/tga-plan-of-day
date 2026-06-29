@@ -97,19 +97,41 @@ export default async function handler(req, res) {
   const occ = Array.isArray(occRows) && occRows.length > 0 ? occRows[0] : null;
   const roomBooked = (occ?.room_booked && typeof occ.room_booked === 'object') ? occ.room_booked : {};
 
+  // For today's date, fetch actual attendance from attendance_daily
+  const todayStr = new Date().toISOString().slice(0, 10);
+  let actualAttendance = null;
+  let roomActual = {};
+  if (date === todayStr) {
+    try {
+      const attRows = await supaFetch(
+        `/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=room,child_name&limit=5000`
+      );
+      if (Array.isArray(attRows)) {
+        actualAttendance = attRows.length;
+        for (const row of attRows) {
+          roomActual[row.room] = (roomActual[row.room] || 0) + 1;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch actual attendance:', e.message);
+    }
+  }
+
   // Merge room_booked into rooms response
   // Also include rooms that have a booked count but no historical attendance
-  const allRoomNames = new Set([...Object.keys(rooms), ...Object.keys(roomBooked)]);
+  const allRoomNames = new Set([...Object.keys(rooms), ...Object.keys(roomBooked), ...Object.keys(roomActual)]);
   const roomsOut = {};
   for (const room of allRoomNames) {
     roomsOut[room] = {
       ...(rooms[room] ?? { expected: null, weeksUsed: 0 }),
       booked: roomBooked[room] ?? null,
+      actual: roomActual[room] ?? null,
     };
   }
 
   return res.status(200).json({
     booked:   occ?.booked   ?? null,
+    actual:   actualAttendance,
     capacity: occ?.capacity ?? null,
     rooms: roomsOut,
     priorDates, // for debugging

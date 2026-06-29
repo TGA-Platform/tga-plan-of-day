@@ -6,21 +6,16 @@
  * Fetches live from Z Staffing API, upserts to Supabase for reporting, then returns.
  *
  * Auth (in priority order):
- *   1. Permanent API key: Z_API_KEY (KMS-encrypted, decrypted via Cognito Identity Pool credentials)
+ *   1. Permanent API key: Z_API_KEY (sent as Authorization: API_KEY <key>)
  *   2. Legacy: Z_REFRESH_TOKEN (Cognito refresh token → IdToken)
  */
-
-import { CognitoIdentityClient, GetIdCommand, GetCredentialsForIdentityCommand } from '@aws-sdk/client-cognito-identity';
-import { KMSClient, DecryptCommand } from '@aws-sdk/client-kms';
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
 const SERVICE_KEY  = 'eyJhbG…6f1c';
 
-const Z_COGNITO_REGION   = 'ap-southeast-2';
-const Z_USER_POOL_ID     = 'ap-southeast-2_pFnKUT9rq';
-const Z_IDENTITY_POOL_ID = 'ap-southeast-2:e95e4810-2cbf-4c3c-aab2-4a7f5de2ee4f';
-const Z_CLIENT_ID        = '4brth3dn73p47s17m5p28lvi2r';
-const Z_GRAPHQL_URL      = 'https://api.zrecruitment.com.au/graphql';
+const Z_COGNITO_REGION = 'ap-southeast-2';
+const Z_CLIENT_ID      = '4brth3dn73p47s17m5p28lvi2r';
+const Z_GRAPHQL_URL    = 'https://api.zrecruitment.com.au/graphql';
 
 // TGA centre name → Z Staffing workspace UUID
 const TGA_WORKSPACE_MAP = {
@@ -42,9 +37,8 @@ const TGA_WORKSPACE_MAP = {
   'Glendale':           '2277a625-9403-b30a-3315-be19ab6c922a',
 };
 
-// In-memory caches (survives warm function restarts, not cold starts)
+// In-memory cache for Cognito fallback IdToken
 let _tokenCache = null; // { idToken, expiresAt }
-let _keyCache   = null; // { plaintext, expiresAt }
 
 async function getIdToken() {
   const now = Date.now();
@@ -79,75 +73,11 @@ async function getIdToken() {
   return idToken;
 }
 
-async function getAwsCredentials(idToken) {
-  const providerName = `cognito-idp.${Z_COGNITO_REGION}.amazonaws.com/${Z_USER_POOL_ID}`;
-  const logins = { [providerName]: idToken };
-
-  const cognitoIdentity = new CognitoIdentityClient({ region: Z_COGNITO_REGION });
-
-  const getIdResp = await cognitoIdentity.send(new GetIdCommand({
-    IdentityPoolId: Z_IDENTITY_POOL_ID,
-    Logins: logins,
-  }));
-
-  const credsResp = await cognitoIdentity.send(new GetCredentialsForIdentityCommand({
-    IdentityId: getIdResp.IdentityId,
-    Logins: logins,
-  }));
-
-  const creds = credsResp.Credentials;
-  return {
-    accessKeyId: creds.AccessKeyId,
-    secretAccessKey: creds.SecretKey,
-    sessionToken: creds.SessionToken,
-    expiration: creds.Expiration,
-  };
-}
-
-async function decryptKmsKey(encryptedBase64, credentials) {
-  const kms = new KMSClient({ region: Z_COGNITO_REGION, credentials });
-  const resp = await kms.send(new DecryptCommand({
-    CiphertextBlob: Buffer.from(encryptedBase64, 'base64'),
-  }));
-  return Buffer.from(resp.Plaintext).toString('utf-8');
-}
-
-async function getDecryptedApiKey() {
-  const encryptedKey = process.env.Z_API_KEY;
-  if (!encryptedKey) return null;
-
-  const now = Date.now();
-  if (_keyCache && _keyCache.expiresAt - now > 5 * 60 * 1000) {
-    return _keyCache.plaintext;
-  }
-
-  const idToken = await getIdToken();
-  const awsCreds = await getAwsCredentials(idToken);
-  const plaintext = await decryptKmsKey(encryptedKey, awsCreds);
-
-  // Cache until AWS credentials expire, or 1 hour if unknown
-  const expiresAt = awsCreds.expiration
-    ? new Date(awsCreds.expiration).getTime()
-    : now + 60 * 60 * 1000;
-
-  _keyCache = { plaintext, expiresAt };
-  return plaintext;
-}
-
 async function getAuthToken() {
-  // Try the permanent KMS-encrypted API key first (only when explicitly enabled).
-  // The Cognito Identity Pool role currently lacks kms:Decrypt permission for this
-  // key, so we keep it gated behind Z_API_KEY_ENABLED until Z Staffing fixes that.
-  if (process.env.Z_API_KEY_ENABLED === 'true') {
-    try {
-      const apiKey = await getDecryptedApiKey();
-      if (apiKey) {
-        console.log('[z-casuals] Using KMS-decrypted permanent API key');
-        return { token: apiKey, source: 'api-key' };
-      }
-    } catch (err) {
-      console.error('[z-casuals] KMS decrypt failed, falling back to Cognito refresh token:', err.message);
-    }
+  // Permanent API key: sent as Authorization: API_KEY <key>
+  if (process.env.Z_API_KEY_ENABLED === 'true' && process.env.Z_API_KEY) {
+    console.log('[z-casuals] Using permanent API key');
+    return { token: process.env.Z_API_KEY, source: 'api-key' };
   }
 
   // Fallback to legacy Cognito refresh-token flow
@@ -161,10 +91,10 @@ async function queryZGraphQL(authToken, query, variables = {}) {
     'Content-Type': 'application/json',
   };
 
-  // Permanent API key uses API Gateway x-api-key auth.
+  // Permanent API key uses Authorization: API_KEY <key>.
   // Legacy Cognito refresh-token flow uses Authorization: COGNITO <idToken>.
   if (authToken.source === 'api-key') {
-    headers['x-api-key'] = authToken.token;
+    headers['Authorization'] = 'API_KEY ' + authToken.token;
   } else {
     headers['Authorization'] = 'COGNITO ' + authToken.token;
   }
