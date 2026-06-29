@@ -5,9 +5,9 @@
  * Returns the expected children for a future date based on historical
  * attendance patterns for that day of the week.
  *
- * Strategy: look back up to 4 same-weekday occurrences in attendance_daily.
- * A child is "expected" if they attended on that weekday in any of those weeks.
- * Their room is taken from the most recent occurrence.
+ * Strategy: use the same weekday last week in attendance_daily.
+ * A child is "expected" if they actually attended on that day.
+ * Their room is taken from that attendance record.
  * Age is sourced from children_enrolled (DOB) and projected to the target date.
  */
 
@@ -30,20 +30,16 @@ export default async function handler(req, res) {
   const { campus, date } = req.query;
   if (!campus || !date) return res.status(400).json({ error: 'campus and date are required' });
 
-  // Build the last 4 same-weekday dates before the target date
+  // Same weekday last week
   const target = new Date(date + 'T12:00:00+10:00');
-  const lookbackDates = [];
-  for (let i = 1; i <= 4; i++) {
-    const d = new Date(target);
-    d.setDate(d.getDate() - i * 7);
-    lookbackDates.push(d.toISOString().slice(0, 10));
-  }
+  const lastWeek = new Date(target);
+  lastWeek.setDate(lastWeek.getDate() - 7);
+  const lastWeekStr = lastWeek.toISOString().slice(0, 10);
 
-  // Fetch attendance for those 4 dates
-  const dateFilter = lookbackDates.map(d => `date.eq.${d}`).join(',');
+  // Fetch actual attendance for that day
   const [attendanceRows, enrolledRows] = await Promise.all([
     supabase(
-      `attendance_daily?select=child_name,date,room,age&campus=eq.${encodeURIComponent(campus)}&or=(${dateFilter})&limit=2000&order=date.desc`
+      `attendance_daily?select=child_name,date,room,age&campus=eq.${encodeURIComponent(campus)}&date=eq.${lastWeekStr}&limit=2000`
     ),
     supabase(
       `children_enrolled?select=full_name,dob,room&campus=eq.${encodeURIComponent(campus)}&status=eq.Confirmed&limit=2000`
@@ -56,13 +52,12 @@ export default async function handler(req, res) {
     dobLookup[c.full_name?.toLowerCase().trim()] = c.dob;
   }
 
-  // Deduplicate: keep most recent room per child
-  const seen = new Map(); // child_name -> { room, age, dob }
+  // One record per child from last week's attendance
+  const seen = new Map(); // child_name -> { room, dob }
   for (const row of attendanceRows) {
     const key = row.child_name?.toLowerCase().trim();
     if (!key) continue;
     if (!seen.has(key)) {
-      // Most recent occurrence (rows ordered by date desc)
       const dob = dobLookup[key] ?? null;
       seen.set(key, { full_name: row.child_name, room: row.room, dob });
     }
