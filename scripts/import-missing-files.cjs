@@ -21,7 +21,7 @@ function extractKey(filePath, keyName) {
   return m[1];
 }
 
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || extractKey('api/staffing-structure.js', 'SERVICE_KEY');
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || extractKey('scripts/apply-schema-changes.cjs', 'SERVICE_KEY');
 const MONDAY_TOKEN = extractKey('scripts/migrate-monday-to-supabase.cjs', 'MONDAY_TOKEN');
 
 const BOARD_IDS = {
@@ -76,6 +76,7 @@ const FILE_TITLE_MAP = {
   'training contract': 'Training Contract',
   'training plan': 'Training Plan',
   'working towards ect': 'Working Towards ECT',
+  'foundation of national child safety training': 'Foundation of National Child Safety Training',
 };
 
 const SB = `${SUPABASE_URL}/rest/v1`;
@@ -85,6 +86,20 @@ async function sbGet(p) {
   const r = await fetch(SB + p, { headers: SB_HEADERS });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
+}
+
+async function sbGetAll(p, pageSize = 1000) {
+  let all = [];
+  let offset = 0;
+  while (true) {
+    const r = await fetch(SB + p + (p.includes('?') ? '&' : '?') + `limit=${pageSize}&offset=${offset}`, { headers: SB_HEADERS });
+    if (!r.ok) throw new Error(await r.text());
+    const rows = await r.json();
+    all = all.concat(rows);
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
 }
 
 async function sbPost(p, body) {
@@ -127,7 +142,7 @@ function canonicalLabel(title) {
 }
 
 async function getExistingDocs() {
-  const rows = await sbGet('/staff_documents?select=staff_id,monday_url');
+  const rows = await sbGetAll('/staff_documents?select=staff_id,monday_url');
   const set = new Set();
   for (const row of rows) set.add(`${row.staff_id}|${row.monday_url}`);
   return set;
@@ -138,7 +153,7 @@ async function main() {
   const targetCentre = args[0];
   const centres = targetCentre ? [targetCentre] : Object.keys(BOARD_IDS);
 
-  const staff = await sbGet('/staff_members?select=id,monday_id,centre_id');
+  const staff = await sbGetAll('/staff_members?select=id,monday_id,centre_id');
   const staffByMonday = Object.fromEntries(staff.map(s => [s.monday_id, s]));
   const existingDocs = await getExistingDocs();
 

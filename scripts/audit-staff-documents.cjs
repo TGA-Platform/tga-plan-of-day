@@ -10,7 +10,7 @@ const path = require('path');
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
 
 function getServiceKey() {
-  const apiPath = path.join(__dirname, '..', 'api', 'staffing-structure.js');
+  const apiPath = path.join(__dirname, '..', 'scripts', 'apply-schema-changes.cjs');
   const src = fs.readFileSync(apiPath, 'utf8');
   const idx = src.indexOf('SERVICE_KEY');
   const line = src.slice(idx, idx + 600);
@@ -19,7 +19,7 @@ function getServiceKey() {
   return m[1];
 }
 
-const SERVICE_KEY = proces…_KEY || getServiceKey();
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || getServiceKey();
 const SB = `${SUPABASE_URL}/rest/v1`;
 const HEADERS = {
   'Authorization': `Bearer ${SERVICE_KEY}`,
@@ -33,9 +33,24 @@ async function sbGet(path) {
   return r.json();
 }
 
+async function sbGetAll(path, pageSize = 1000) {
+  let all = [];
+  let offset = 0;
+  while (true) {
+    const sep = path.includes('?') ? '&' : '?';
+    const r = await fetch(`${SB}${path}${sep}limit=${pageSize}&offset=${offset}`, { headers: HEADERS });
+    if (!r.ok) throw new Error(`Supabase GET ${r.status}: ${await r.text()}`);
+    const rows = await r.json();
+    all = all.concat(rows);
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
 async function main() {
-  const staff = await sbGet('/staff_members?select=id,name,centre_id,position,qualification');
-  const docs = await sbGet('/staff_documents?select=id,staff_id,doc_type,label,storage_path,monday_url');
+  const staff = await sbGetAll('/staff_members?select=id,name,centre_id,position,qualification');
+  const docs = await sbGetAll('/staff_documents?select=id,staff_id,doc_type,label,storage_path,monday_url');
 
   console.log(`Total staff: ${staff.length}`);
   console.log(`Total documents: ${docs.length}\n`);

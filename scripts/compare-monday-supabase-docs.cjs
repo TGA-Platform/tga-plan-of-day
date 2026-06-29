@@ -21,7 +21,7 @@ function getMondayToken() {
 }
 
 function getSupabaseKey() {
-  const apiPath = path.join(__dirname, '..', 'api', 'staffing-structure.js');
+  const apiPath = path.join(__dirname, '..', 'scripts', 'apply-schema-changes.cjs');
   const src = fs.readFileSync(apiPath, 'utf8');
   const idx = src.indexOf('SERVICE_KEY');
   const line = src.slice(idx, idx + 600);
@@ -123,10 +123,25 @@ async function sbGet(path) {
   return r.json();
 }
 
+async function sbGetAll(path, pageSize = 1000) {
+  let all = [];
+  let offset = 0;
+  while (true) {
+    const sep = path.includes('?') ? '&' : '?';
+    const r = await fetch(`${SB}${path}${sep}limit=${pageSize}&offset=${offset}`, { headers: SB_HEADERS });
+    if (!r.ok) throw new Error(`Supabase GET ${r.status}: ${await r.text()}`);
+    const rows = await r.json();
+    all = all.concat(rows);
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
 async function main() {
   console.log('Fetching Supabase doc counts by centre...');
-  const docs = await sbGet('/staff_documents?select=staff_id,doc_type');
-  const staff = await sbGet('/staff_members?select=id,centre_id');
+  const docs = await sbGetAll('/staff_documents?select=staff_id,doc_type');
+  const staff = await sbGetAll('/staff_members?select=id,centre_id');
   const staffCentre = Object.fromEntries(staff.map(s => [s.id, s.centre_id]));
 
   const sbByCentre = {};
