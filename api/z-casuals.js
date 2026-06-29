@@ -5,15 +5,22 @@
  * Returns Z Staffing external casual shifts for a TGA centre on a given date.
  * Fetches live from Z Staffing API, upserts to Supabase for reporting, then returns.
  *
- * Auth: uses Z_REFRESH_TOKEN env var (Cognito refresh token — long-lived).
- * Token cache: in-memory, refreshed when < 5 min from expiry.
+ * Auth (in priority order):
+ *   1. Permanent API key: Z_API_KEY (KMS-encrypted, decrypted via Cognito Identity Pool credentials)
+ *   2. Legacy: Z_REFRESH_TOKEN (Cognito refresh token → IdToken)
  */
 
-const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SERVICE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
+import { CognitoIdentityClient, GetIdCommand, GetCredentialsForIdentityCommand } from '@aws-sdk/client-cognito-identity';
+import { KMSClient, DecryptCommand } from '@aws-sdk/client-kms';
 
-const Z_COGNITO_REGION = 'ap-southeast-2';
-const Z_CLIENT_ID      = '4brth3dn73p47s17m5p28lvi2r';
+const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
+const SERVICE_KEY  = 'eyJhbG…6f1c';
+
+const Z_COGNITO_REGION   = 'ap-southeast-2';
+const Z_USER_POOL_ID     = 'ap-southeast-2_pFnKUT9rq';
+const Z_IDENTITY_POOL_ID = 'ap-southeast-2:e95e4810-2cbf-4c3c-aab2-4a7f5de2ee4f';
+const Z_CLIENT_ID        = '4brth3dn73p47s17m5p28lvi2r';
+const Z_GRAPHQL_URL      = 'https://api.zrecruitment.com.au/graphql';
 
 // TGA centre name → Z Staffing workspace UUID
 const TGA_WORKSPACE_MAP = {
@@ -35,12 +42,12 @@ const TGA_WORKSPACE_MAP = {
   'Glendale':           '2277a625-9403-b30a-3315-be19ab6c922a',
 };
 
-// In-memory token cache (survives warm function restarts, not cold starts)
+// In-memory caches (survives warm function restarts, not cold starts)
 let _tokenCache = null; // { idToken, expiresAt }
+let _keyCache   = null; // { plaintext, expiresAt }
 
 async function getIdToken() {
   const now = Date.now();
-  // Return cached token if still valid for > 5 minutes
   if (_tokenCache && _tokenCache.expiresAt - now > 5 * 60 * 1000) {
     return _tokenCache.idToken;
   }
@@ -57,7 +64,7 @@ async function getIdToken() {
     body: JSON.stringify({
       AuthFlow: 'REFRESH_TOKEN_AUTH',
       ClientId: Z_CLIENT_ID,
-      AuthParameters: { REFRESH_TOKEN: refreshToken },
+      AuthParameters: { REFRESH_TOKEN: *** },
     }),
   });
 
@@ -72,12 +79,85 @@ async function getIdToken() {
   return idToken;
 }
 
-async function queryZGraphQL(idToken, query, variables = {}) {
-  const resp = await fetch('https://api.zrecruitment.com.au/graphql', {
+async function getAwsCredentials(idToken) {
+  const providerName = `cognito-idp.${Z_COGNITO_REGION}.amazonaws.com/${Z_USER_POOL_ID}`;
+  const logins = { [providerName]: idToken };
+
+  const cognitoIdentity = new CognitoIdentityClient({ region: Z_COGNITO_REGION });
+
+  const getIdResp = await cognitoIdentity.send(new GetIdCommand({
+    IdentityPoolId: Z_IDENTITY_POOL_ID,
+    Logins: logins,
+  }));
+
+  const credsResp = await cognitoIdentity.send(new GetCredentialsForIdentityCommand({
+    IdentityId: getIdResp.IdentityId,
+    Logins: logins,
+  }));
+
+  const creds = credsResp.Credentials;
+  return {
+    accessKeyId: creds.AccessKeyId,
+    secretAccessKey: creds.SecretKey,
+    sessionToken: creds.SessionToken,
+    expiration: creds.Expiration,
+  };
+}
+
+async function decryptKmsKey(encryptedBase64, credentials) {
+  const kms = new KMSClient({ region: Z_COGNITO_REGION, credentials });
+  const resp = await kms.send(new DecryptCommand({
+    CiphertextBlob: Buffer.from(encryptedBase64, 'base64'),
+  }));
+  return Buffer.from(resp.Plaintext).toString('utf-8');
+}
+
+async function getDecryptedApiKey() {
+  const encryptedKey = process.env.Z_API_KEY;
+  if (!encryptedKey) return null;
+
+  const now = Date.now();
+  if (_keyCache && _keyCache.expiresAt - now > 5 * 60 * 1000) {
+    return _keyCache.plaintext;
+  }
+
+  const idToken = await getIdToken();
+  const awsCreds = await getAwsCredentials(idToken);
+  const plaintext = await decryptKmsKey(encryptedKey, awsCreds);
+
+  // Cache until AWS credentials expire, or 1 hour if unknown
+  const expiresAt = awsCreds.expiration
+    ? new Date(awsCreds.expiration).getTime()
+    : now + 60 * 60 * 1000;
+
+  _keyCache = { plaintext, expiresAt };
+  return plaintext;
+}
+
+async function getAuthToken() {
+  // Try the permanent KMS-encrypted API key first
+  try {
+    const apiKey = await getDecryptedApiKey();
+    if (apiKey) {
+      console.log('[z-casuals] Using KMS-decrypted permanent API key');
+      return { token: apiKey, source: 'api-key' };
+    }
+  } catch (err) {
+    console.error('[z-casuals] KMS decrypt failed, falling back to Cognito refresh token:', err.message);
+  }
+
+  // Fallback to legacy Cognito refresh-token flow
+  const idToken = await getIdToken();
+  console.log('[z-casuals] Using Cognito IdToken from refresh token');
+  return { token: idToken, source: 'cognito' };
+}
+
+async function queryZGraphQL(authToken, query, variables = {}) {
+  const resp = await fetch(Z_GRAPHQL_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': 'COGNITO ' + idToken,
+      'Authorization': '***' + authToken.token,
     },
     body: JSON.stringify({ operationName: null, query, variables }),
   });
@@ -134,8 +214,6 @@ async function upsertToSupabase(rows) {
 }
 
 async function createTableIfNeeded() {
-  // Create via Supabase SQL edge function if available
-  // Otherwise silently skip — table needs to be created via dashboard
   console.log('[z-casuals] Note: z_casuals table may need manual creation in Supabase.');
 }
 
@@ -186,9 +264,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    const idToken = await getIdToken();
-
-    const gqlData = await queryZGraphQL(idToken, JOB_QUERY, {
+    const auth = await getAuthToken();
+    const gqlData = await queryZGraphQL(auth, JOB_QUERY, {
       workspaceId,
       withEducatorProfile: true,
     });
