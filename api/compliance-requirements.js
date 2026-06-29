@@ -42,10 +42,12 @@ function toDbRow(req, sortOrder) {
     required_for: req.requiredFor || [],
     required_for_qualifications: req.requiredForQualifications || [],
     expiry_field: req.expiryField || null,
-    doc_pattern: req.docPattern ? req.docPattern.source : null,
+    doc_pattern: req.docPattern ? (typeof req.docPattern === 'string' ? req.docPattern : req.docPattern.source) : null,
     is_mandatory: req.isMandatory ?? true,
     description: req.description || null,
     sort_order: sortOrder,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   };
 }
 
