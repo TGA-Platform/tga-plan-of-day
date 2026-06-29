@@ -157,12 +157,21 @@ async function getAuthToken() {
 }
 
 async function queryZGraphQL(authToken, query, variables = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+  };
+
+  // Permanent API key uses API Gateway x-api-key auth.
+  // Legacy Cognito refresh-token flow uses Authorization: COGNITO <idToken>.
+  if (authToken.source === 'api-key') {
+    headers['x-api-key'] = authToken.token;
+  } else {
+    headers['Authorization'] = 'COGNITO ' + authToken.token;
+  }
+
   const resp = await fetch(Z_GRAPHQL_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'COGNITO ' + authToken.token,
-    },
+    headers,
     body: JSON.stringify({ operationName: null, query, variables }),
   });
   const data = await resp.json();
