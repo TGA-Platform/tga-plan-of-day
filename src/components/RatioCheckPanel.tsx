@@ -10,6 +10,7 @@ function to12h(hhmm: string): string {
   return m === 0 ? `${h12}${ampm}` : `${h12}:${String(m).padStart(2, '0')}${ampm}`;
 }
 import type { Room, AttendanceChild, RosteredStaff } from '../types';
+import { calcRequiredStaff, parseAgeMonths } from '../utils/ratioEngine';
 import { enqueueSave } from '../utils/syncQueue';
 
 // --- Types --------------------------------------------------------------------
@@ -161,6 +162,10 @@ function formatRosterTime(t: string | number | null | undefined): string {
 }
 
 function countChildrenAtSlot(children: AttendanceChild[], room: Room, slot: string): number {
+  return getChildrenAtSlot(children, room, slot).length;
+}
+
+function getChildrenAtSlot(children: AttendanceChild[], room: Room, slot: string): AttendanceChild[] {
   const slotMins = slotToMins(slot);
   const roomName = room.ownaRoomName ?? room.name;
   return children.filter(c => {
@@ -173,7 +178,7 @@ function countChildrenAtSlot(children: AttendanceChild[], room: Room, slot: stri
       if (outMins <= slotMins) return false;
     }
     return true;
-  }).length;
+  });
 }
 
 // @ts-expect-error kept for potential future use
@@ -520,7 +525,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               child_name: r.child_name ?? '', room: r.room ?? '',
               sign_in: r.sign_in ?? null, sign_out: r.sign_out ?? null,
               predicted_sign_out: r.predicted_sign_out ?? null,
-              age: r.age ?? null, ageMonths: 0,
+              age: r.age ?? null, ageMonths: parseAgeMonths(r.age ?? null),
             })));
             if (!cancelled) setLastAttendanceRefresh(new Date());
           }
@@ -549,7 +554,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               child_name: r.child_name ?? '', room: r.room ?? '',
               sign_in: r.sign_in ?? null, sign_out: r.sign_out ?? null,
               predicted_sign_out: r.predicted_sign_out ?? null,
-              age: r.age ?? null, ageMonths: 0,
+              age: r.age ?? null, ageMonths: parseAgeMonths(r.age ?? null),
             })));
             setHistDate(lastWeek);
           }
@@ -578,7 +583,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             child_name: r.child_name ?? '', room: r.room ?? '',
             sign_in: r.sign_in ?? null, sign_out: r.sign_out ?? null,
             predicted_sign_out: r.predicted_sign_out ?? null,
-            age: r.age ?? null, ageMonths: 0,
+            age: r.age ?? null, ageMonths: parseAgeMonths(r.age ?? null),
           })));
           setLastAttendanceRefresh(new Date());
         }
@@ -767,13 +772,30 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   }
 
   function getStaffRequired(slot: string, room: Room): number {
-    const count = getChildCount(slot, room.id);
-    if (count === 0) return 0;
-    const bucket = roomAgeBucket(room.ageGroup);
-    const u24 = bucket === 'u24' ? count : 0;
-    const m24 = bucket === 'm24' ? count : 0;
-    const m36 = bucket === 'm36' ? count : 0;
-    return calcRequired(u24, m24, m36);
+    const key = cellKey(slot, room.id);
+    const cell = sessionData.cells[key];
+    const manualCount = cell?.children;
+
+    // Manual count override: we don't have per-child ages, so fall back to the
+    // room's configured age group ratio.
+    if (manualCount !== undefined && manualCount !== null) {
+      if (manualCount === 0) return 0;
+      const bucket = roomAgeBucket(room.ageGroup);
+      const u24 = bucket === 'u24' ? manualCount : 0;
+      const m24 = bucket === 'm24' ? manualCount : 0;
+      const m36 = bucket === 'm36' ? manualCount : 0;
+      return calcRequired(u24, m24, m36);
+    }
+
+    // Auto-populated counts: use actual child ages for cascade ratio calculation,
+    // matching the plan-of-the-day logic exactly.
+    const childSource = hasLiveData
+      ? liveChildren
+      : children.length > 0
+        ? children
+        : historicalChildren;
+    const kids = getChildrenAtSlot(childSource, room, slot);
+    return calcRequiredStaff(kids).required;
   }
 
   /** Get actual Room objects for a FG config (empty roomIds = all rooms) */
@@ -799,15 +821,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   /** Combined required for a specific FG at a slot */
   function getFGRequiredForConfig(slot: string, fg: FamilyGroupingConfig): number {
     const fgRooms = getFGRoomsForConfig(fg);
-    let u24 = 0, m24 = 0, m36 = 0;
+    const childSource = hasLiveData
+      ? liveChildren
+      : children.length > 0
+        ? children
+        : historicalChildren;
+    const fgChildren: AttendanceChild[] = [];
     for (const room of fgRooms) {
-      const count = getChildCount(slot, room.id);
-      const bucket = roomAgeBucket(room.ageGroup);
-      if (bucket === 'u24') u24 += count;
-      else if (bucket === 'm24') m24 += count;
-      else m36 += count;
+      fgChildren.push(...getChildrenAtSlot(childSource, room, slot));
     }
-    return calcRequired(u24, m24, m36);
+    return calcRequiredStaff(fgChildren).required;
   }
 
   /** Total required across all rooms at a slot (respecting FG groupings) */
