@@ -534,9 +534,9 @@ export default function MorningBriefingPage() {
                       <div className="text-xl font-bold" style={{ color: '#050505' }}>{viewRequired}</div>
                       <div className="text-xs" style={{ color: '#596570' }}>Required</div>
                     </div>
-                    {/* 3. Rostered (available = rostered minus those absent from shift) */}
+                    {/* 3. Rostered (full rostered group; absence called out below) */}
                     <div className="text-center">
-                      <div className="text-xl font-bold" style={{ color: '#050505' }}>{card.staffAvailable}</div>
+                      <div className="text-xl font-bold" style={{ color: '#050505' }}>{card.staffRostered}</div>
                       <div className="text-xs" style={{ color: '#596570' }}>Rostered</div>
                       {card.staffAbsent > 0 && (
                         <div className="text-xs" style={{ color: '#dc2626' }}>{card.staffAbsent} absent</div>
