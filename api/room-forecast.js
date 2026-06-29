@@ -46,49 +46,27 @@ export default async function handler(req, res) {
   const { campus, date } = req.query;
   if (!campus || !date) return res.status(400).json({ error: 'campus and date required' });
 
-  // Build the 4 prior same-weekday dates
+  // Use last week's same weekday as expected attendance (room by room)
   // Use T12:00:00Z (noon UTC) to avoid timezone day-shift for any locale
   const target = new Date(date + 'T12:00:00Z');
-  const priorDates = [];
-  for (let w = 1; w <= 4; w++) {
-    const d = new Date(target);
-    d.setUTCDate(d.getUTCDate() - 7 * w);
-    priorDates.push(d.toISOString().slice(0, 10));
-  }
+  const lastWeek = new Date(target);
+  lastWeek.setUTCDate(lastWeek.getUTCDate() - 7);
+  const lastWeekStr = lastWeek.toISOString().slice(0, 10);
 
-  // Fetch attendance rows for those 4 dates for this campus (all rooms)
-  const dateFilter = priorDates.map(d => `date.eq.${d}`).join(',');
+  // Fetch attendance rows for last week's same weekday
   const attRows = await supaFetch(
-    `/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&or=(${encodeURIComponent(dateFilter)})&select=date,room,child_name&limit=5000`
+    `/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${lastWeekStr}&select=date,room,child_name&limit=5000`
   );
 
-  // Count actuals per room per date
-  // { date -> { room -> count } }
-  const byDateRoom = {};
+  // Count actuals per room for last week
+  // { room -> count }
+  const lastWeekByRoom = {};
   for (const row of (Array.isArray(attRows) ? attRows : [])) {
-    if (!byDateRoom[row.date]) byDateRoom[row.date] = {};
-    byDateRoom[row.date][row.room] = (byDateRoom[row.date][row.room] || 0) + 1;
+    lastWeekByRoom[row.room] = (lastWeekByRoom[row.room] || 0) + 1;
   }
 
-  // Collect all rooms seen across all weeks
-  const allRooms = new Set();
-  for (const dateMap of Object.values(byDateRoom)) {
-    for (const room of Object.keys(dateMap)) allRooms.add(room);
-  }
-
-  // Calculate rolling average per room
-  const rooms = {};
-  for (const room of allRooms) {
-    const counts = priorDates
-      .map(d => byDateRoom[d]?.[room])
-      .filter(c => c !== undefined);
-    if (counts.length === 0) {
-      rooms[room] = { expected: null, weeksUsed: 0 };
-    } else {
-      const avg = Math.round(counts.reduce((a, b) => a + b, 0) / counts.length);
-      rooms[room] = { expected: avg, weeksUsed: counts.length };
-    }
-  }
+  // Collect all rooms seen last week
+  const allRooms = new Set(Object.keys(lastWeekByRoom));
 
   // Fetch booked + capacity + room_booked for this campus + date from daily_occupancy
   const occRows = await supaFetch(
@@ -117,14 +95,16 @@ export default async function handler(req, res) {
     }
   }
 
-  // Merge room_booked into rooms response
-  // Also include rooms that have a booked count but no historical attendance
-  const allRoomNames = new Set([...Object.keys(rooms), ...Object.keys(roomBooked), ...Object.keys(roomActual)]);
+  // Build rooms output using last week's actual attendance as expected
+  const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual)]);
   const roomsOut = {};
   for (const room of allRoomNames) {
+    const bookedCount = roomBooked[room] ?? null;
+    const expectedCount = lastWeekByRoom[room] ?? null;
     roomsOut[room] = {
-      ...(rooms[room] ?? { expected: null, weeksUsed: 0 }),
-      booked: roomBooked[room] ?? null,
+      expected: expectedCount,
+      weeksUsed: expectedCount !== null ? 1 : 0,
+      booked: bookedCount,
       actual: roomActual[room] ?? null,
     };
   }
@@ -134,6 +114,6 @@ export default async function handler(req, res) {
     actual:   actualAttendance,
     capacity: occ?.capacity ?? null,
     rooms: roomsOut,
-    priorDates, // for debugging
+    lastWeek: lastWeekStr, // for debugging
   });
 }
