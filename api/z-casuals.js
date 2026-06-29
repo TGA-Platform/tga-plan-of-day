@@ -135,15 +135,19 @@ async function getDecryptedApiKey() {
 }
 
 async function getAuthToken() {
-  // Try the permanent KMS-encrypted API key first
-  try {
-    const apiKey = await getDecryptedApiKey();
-    if (apiKey) {
-      console.log('[z-casuals] Using KMS-decrypted permanent API key');
-      return { token: apiKey, source: 'api-key' };
+  // Try the permanent KMS-encrypted API key first (only when explicitly enabled).
+  // The Cognito Identity Pool role currently lacks kms:Decrypt permission for this
+  // key, so we keep it gated behind Z_API_KEY_ENABLED until Z Staffing fixes that.
+  if (process.env.Z_API_KEY_ENABLED === 'true') {
+    try {
+      const apiKey = await getDecryptedApiKey();
+      if (apiKey) {
+        console.log('[z-casuals] Using KMS-decrypted permanent API key');
+        return { token: apiKey, source: 'api-key' };
+      }
+    } catch (err) {
+      console.error('[z-casuals] KMS decrypt failed, falling back to Cognito refresh token:', err.message);
     }
-  } catch (err) {
-    console.error('[z-casuals] KMS decrypt failed, falling back to Cognito refresh token:', err.message);
   }
 
   // Fallback to legacy Cognito refresh-token flow
