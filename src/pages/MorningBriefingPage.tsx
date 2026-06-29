@@ -98,7 +98,7 @@ export default function MorningBriefingPage() {
   const navigate    = useNavigate();
   const user        = getUser();
   const allowed     = user ? getAllowedCentres(user) : [];
-  const isCeo       = user?.role === 'ceo';
+  const isExec      = user?.role === 'admin' || user?.role === 'ceo';
   const [date, setDate] = useState(todayStr());
   const lastWeek        = lastWeekStr(date);
   const isToday         = date === todayStr();
@@ -403,7 +403,7 @@ export default function MorningBriefingPage() {
               ›
             </button>
           </div>
-          {isCeo && (
+          {isExec && (
             <button onClick={() => navigate('/summary')}
               className="border rounded-xl px-4 py-2 text-sm font-semibold"
               style={{ borderColor: '#D0E8B8', color: '#5a9228' }}>
@@ -444,8 +444,8 @@ export default function MorningBriefingPage() {
         </div>
       )}
 
-      {/* ── CEO top stats ── */}
-      {isCeo && (
+      {/* ── Executive top stats (admin + CEO) ── */}
+      {isExec && (
         <div className="rounded-2xl p-5 mb-6 grid grid-cols-2 sm:grid-cols-4 gap-4"
           style={{ backgroundColor: '#2d5c18' }}>
           <StatBlock icon="🧒" label={viewMode === 'present' ? 'Children present' : viewMode === 'day' ? 'Children expected' : 'Children today'} value={loading ? '...' : totalKids} />
@@ -458,8 +458,8 @@ export default function MorningBriefingPage() {
 
       {/* ── Centre cards ── */}
       {loading ? (
-        <div style={isCeo ? { display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', width: '100%' } : { display: 'grid', gap: '16px', maxWidth: '672px' }}>
-          {Array.from({ length: isCeo ? 6 : 1 }).map((_, i) => (
+        <div style={isExec ? { display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', width: '100%' } : { display: 'grid', gap: '16px', maxWidth: '672px' }}>
+          {Array.from({ length: isExec ? 6 : 1 }).map((_, i) => (
             <div key={i} className="rounded-2xl border p-5 animate-pulse"
               style={{ borderColor: '#E2F1DA', backgroundColor: 'white' }}>
               <div className="h-5 w-40 bg-gray-200 rounded mb-4" />
@@ -470,7 +470,7 @@ export default function MorningBriefingPage() {
           ))}
         </div>
       ) : (
-        <div style={isCeo ? { display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', width: '100%' } : { display: 'grid', gap: '16px', maxWidth: '672px' }}>
+        <div style={isExec ? { display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', width: '100%' } : { display: 'grid', gap: '16px', maxWidth: '672px' }}>
           {cards.map(card => (
             <div
               key={card.centreId}
