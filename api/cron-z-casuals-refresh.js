@@ -211,14 +211,21 @@ export default async function handler(req, res) {
     const centres = Object.keys(TGA_WORKSPACE_MAP);
     const rows = [];
 
-    // Fetch centres sequentially to avoid hammering Z API
-    for (const centre of centres) {
-      try {
-        const centreRows = await fetchCentre(centre, date, auth);
-        rows.push(...centreRows);
-      } catch (err) {
-        console.error(`[cron-z-casuals] ${centre} failed:`, err.message);
-      }
+    // Fetch centres in parallel with limited concurrency
+    const CONCURRENCY = 5;
+    for (let i = 0; i < centres.length; i += CONCURRENCY) {
+      const batch = centres.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async centre => {
+          try {
+            return await fetchCentre(centre, date, auth);
+          } catch (err) {
+            console.error(`[cron-z-casuals] ${centre} failed:`, err.message);
+            return [];
+          }
+        })
+      );
+      for (const r of results) rows.push(...r);
     }
 
     await upsertToSupabase(rows);
