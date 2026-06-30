@@ -204,21 +204,16 @@ export default function MorningBriefingPage() {
           .catch(() => [] as Array<{ start?: string; end?: string; centre?: string }>), 5 * 60 * 1000);
       const zCasualMap = new Map(allowed.map(c => [c.id, (allZCasuals || []).filter((r: { centre?: string }) => r.centre === c.name)]));
 
-      // Fetch saved ratio-check state (staffMoves) for ALL centres in one call
-      const allRatioCheckRows = await withCache('briefing-ratiocheck-all:' + date, () =>
-        fetch('/api/ratio-check?date=' + date)
+      // Fetch saved staff allocations for ALL centres in one call
+      // This is the same source the Ratio Dashboard panel uses; it stores
+      // per-employee moves keyed by employeeId (values are room.id or 'float'/'support').
+      const allStaffAllocRows = await withCache('briefing-staff-allocations-all:' + date, () =>
+        fetch('/api/staff-allocations?centre=all&date=' + date)
           .then(r => r.json())
-          .catch(() => [] as Array<{ centre_id?: string; data?: { staffMoves?: Record<string, string> } }>), 5 * 60 * 1000);
+          .catch(() => [] as Array<{ centre_id?: string; moves?: Record<string, string> }>), 5 * 60 * 1000);
       const staffMovesMap = new Map(allowed.map(c => {
-        const moves: Record<string, string> = {};
-        for (const row of (allRatioCheckRows || []) as Array<{ centre_id?: string; data?: { staffMoves?: Record<string, string> } }>) {
-          if (row.centre_id !== c.id) continue;
-          const rowMoves = row?.data?.staffMoves || {};
-          for (const [empId, dest] of Object.entries(rowMoves)) {
-            moves[empId] = dest;
-          }
-        }
-        return [c.id, moves] as [string, Record<string, string>];
+        const row = (allStaffAllocRows || []).find((r: { centre_id?: string }) => r.centre_id === c.id);
+        return [c.id, row?.moves ?? {}] as [string, Record<string, string>];
       }));
 
       const result: CentreCard[] = [];
@@ -235,11 +230,14 @@ export default function MorningBriefingPage() {
         const floatSet  = new Set((centre.floatUnitIds  ?? []));
         const nonRatioSet = new Set(centre.nonRatioUnitIds ?? []);
 
-        // Effective location considering saved staffMoves from ratio-check state
+        // Effective location considering saved staff allocations from ratio dashboard
+        // Moves are per-employee; values are room.id (e.g. 'sf_0_1') or 'float'/'support'/'iss'.
         function effectiveUnitType(r: typeof centreRosters[number]): 'room' | 'float' | 'support' | 'leave' | 'other' {
           const move = staffMoves[String(r.employeeId)];
           if (move === 'float') return 'float';
           if (move === 'support') return 'support';
+          if (move === 'iss') return 'support';
+          if (move && centre.rooms.some(rm => rm.id === move)) return 'room';
           if (leaveSet.has(r.unitId)) return 'leave';
           if (floatSet.has(r.unitId)) return 'float';
           if (nonRatioSet.has(r.unitId)) return 'support';
@@ -266,11 +264,10 @@ export default function MorningBriefingPage() {
           const rk = kids.filter(c => c.room.toLowerCase().includes(owna));
           const { required: roomRequired } = calcRequiredStaff(rk.map(c => ({ ageMonths: parseAgeMonths(c.age) } as any)));
           // Count staff whose effective location is this room (moved-in or originally here)
-          const moveDest = room.deputyUnitId;
           const roomStaff = centreRosters.filter(r => {
             const dest = staffMoves[String(r.employeeId)];
-            if (dest === String(moveDest) || dest === (room.name || '')) return true;
-            return effectiveUnitType(r) === 'room' && r.unitId === room.deputyUnitId;
+            if (dest) return dest === room.id;
+            return r.unitId === room.deputyUnitId;
           });
           return { required: roomRequired, staffCount: roomStaff.length };
         });

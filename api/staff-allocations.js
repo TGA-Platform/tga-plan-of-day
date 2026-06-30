@@ -27,7 +27,9 @@ export default async function handler(req, res) {
     const { centre, date, from, to } = req.query;
     let url = base;
 
-    if (centre && date) {
+    if (centre === 'all' && date) {
+      url += `?date=eq.${date}&select=*`;
+    } else if (centre && date) {
       url += `?centre_id=eq.${encodeURIComponent(centre)}&date=eq.${date}&select=*`;
     } else if (centre && from && to) {
       url += `?centre_id=eq.${encodeURIComponent(centre)}&date=gte.${from}&date=lte.${to}&order=date.desc&select=*`;
