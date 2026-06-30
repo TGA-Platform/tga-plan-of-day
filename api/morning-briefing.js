@@ -186,7 +186,9 @@ export default async function handler(req, res) {
     const unitCounts = {};
     for (const r of centreRosters) { unitCounts[r.unitId] = (unitCounts[r.unitId] || 0) + 1; }
     const matchesPerRoom = centre.rooms.map(room => centreRosters.filter(r => r.unitId === room.id).length);
-    console.log('[mbg-debug]', centre.id, 'unitCounts', JSON.stringify(unitCounts), 'matchesPerRoom', matchesPerRoom, 'rooms', centre.rooms.map(r=>r.id));
+    const typeCounts = {};
+    for (const r of centreRosters) { const t = effectiveUnitType(r); typeCounts[t] = (typeCounts[t] || 0) + 1; }
+    console.log('[mbg-debug]', centre.id, 'unitCounts', JSON.stringify(unitCounts), 'matchesPerRoom', matchesPerRoom, 'rooms', centre.rooms.map(r=>r.id), 'typeCounts', typeCounts);
     const roomData = centre.rooms.map(room => {
       const owna = (room.ownaRoomName ?? '').toLowerCase();
       const roomKids = campusAttendance
@@ -231,7 +233,7 @@ export default async function handler(req, res) {
       casualsNeeded,
       floatSurplus,
       surplusVal,
-      debug: { roomData, totalFloorStaff, totalRatioShortage, totalSurplus, netShortageAfterRealloc, bufferRequired, roomNetSurplus, effectiveFloatCount, centreRosterCount: centreRosters.length, unitCounts, matchesPerRoom, roomIds: centre.rooms.map(r=>r.id) },
+      debug: { roomData, totalFloorStaff, totalRatioShortage, totalSurplus, netShortageAfterRealloc, bufferRequired, roomNetSurplus, effectiveFloatCount, centreRosterCount: centreRosters.length, unitCounts, matchesPerRoom, roomIds: centre.rooms.map(r=>r.id), typeCounts, staffMoveKeys: Object.keys(staffMoves) },
     });
   }
 
