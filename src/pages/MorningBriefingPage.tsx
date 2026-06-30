@@ -338,6 +338,16 @@ export default function MorningBriefingPage() {
         // Float surplus: includes room surplus contribution
         const floatSurplus = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
 
+        if (centre.id === 'spring-farm') {
+          console.log('[briefing-debug] Spring Farm', {
+            required, staffIdsSize: staffIds.size, floatIdsSize: floatIds.size, totalStaff,
+            absent, roomAndFloatAbsent, totalAvailable,
+            totalFloorStaff, totalRatioShortage, totalSurplus, netShortageAfterRealloc,
+            bufferRequired: bufferRequired.toFixed(2), effectiveFloatCount, adAvailable,
+            totalFloatersNeeded: totalFloatersNeeded.toFixed(2), casualsNeeded: casualsNeeded.toFixed(2),
+          });
+        }
+
 
         // Status = ratio compliance only (not buffer/casuals)
         // Green = more staff than required, Amber = exact match, Red = short

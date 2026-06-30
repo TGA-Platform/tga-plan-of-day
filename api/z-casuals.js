@@ -302,43 +302,24 @@ export default async function handler(req, res) {
 
   const normCentre = centre.trim();
 
-  // Bulk mode: return all centres for the date in a single call
+  // Bulk mode: return all centres for the date in a single call.
+  // The z_casuals cron jobs keep Supabase up to date; we never fetch live
+  // from Z Staffing on a page request because it is too slow and times out.
   if (normCentre.toLowerCase() === 'all') {
     try {
-      if (force !== 'true') {
-        const cacheUrl = `${SUPABASE_URL}/rest/v1/z_casuals?date=eq.${date}&select=*&order=fetched_at.desc`;
-        const cacheResp = await fetch(cacheUrl, {
-          headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
-        });
-        if (cacheResp.ok) {
-          const cached = await cacheResp.json();
-          // If we have any fresh rows for this date, return them
-          if (cached?.length > 0) {
-            const newest = new Date(cached[0].fetched_at).getTime();
-            if (Date.now() - newest <= 30 * 60 * 1000) {
-              return res.status(200).json(shapeRows(cached));
-            }
-          }
+      const cacheUrl = `${SUPABASE_URL}/rest/v1/z_casuals?date=eq.${date}&select=*&order=fetched_at.desc`;
+      const cacheResp = await fetch(cacheUrl, {
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+      });
+      if (cacheResp.ok) {
+        const cached = await cacheResp.json();
+        if (cached?.length > 0) {
+          return res.status(200).json(shapeRows(cached));
         }
       }
-
-      const auth = await getAuthToken();
-      const centres = Object.keys(TGA_WORKSPACE_MAP);
-      const results = [];
-      const CONCURRENCY = 5;
-      for (let i = 0; i < centres.length; i += CONCURRENCY) {
-        const batch = centres.slice(i, i + CONCURRENCY);
-        const batchResults = await Promise.all(
-          batch.map(c => fetchFromZAndUpsert(c, date, auth).catch(err => {
-            console.error(`[z-casuals] ${c} failed:`, err.message);
-            return [];
-          }))
-        );
-        for (const r of batchResults) results.push(...r);
-      }
-      return res.status(200).json(results);
+      return res.status(200).json([]);
     } catch (err) {
-      console.error('[z-casuals] Bulk error:', err.message);
+      console.error('[z-casuals] Bulk cache read error:', err.message);
       return res.status(200).json([]);
     }
   }
@@ -349,17 +330,11 @@ export default async function handler(req, res) {
   }
 
   try {
-    if (force !== 'true') {
-      const cached = await readCached(normCentre, date);
-      if (cached) return res.status(200).json(cached);
-    }
-
-    const auth = await getAuthToken();
-    const results = await fetchFromZAndUpsert(normCentre, date, auth);
-    return res.status(200).json(results);
-
+    const cached = await readCached(normCentre, date);
+    if (cached) return res.status(200).json(cached);
+    return res.status(200).json([]);
   } catch (err) {
-    console.error('[z-casuals] Error:', err.message);
+    console.error('[z-casuals] Cache read error:', err.message);
     return res.status(200).json([]);
   }
 }
