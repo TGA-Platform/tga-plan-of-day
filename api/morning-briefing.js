@@ -228,6 +228,7 @@ export default async function handler(req, res) {
       casualsNeeded,
       floatSurplus,
       surplusVal,
+      debug: { roomData, totalFloorStaff, totalRatioShortage, totalSurplus, netShortageAfterRealloc, bufferRequired, roomNetSurplus, effectiveFloatCount, centreRosterCount: centreRosters.length },
     });
   }
 
