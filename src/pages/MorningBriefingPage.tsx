@@ -196,12 +196,17 @@ export default function MorningBriefingPage() {
         centreRosterMap.set(centre.id, centreRosters);
       }
 
-      // Fetch Z Staffing external casuals for ALL centres in one call
+      // Fetch Z Staffing external casuals for ALL centres in one call.
+      // This is best-effort: if Z Staffing is slow, timeout and continue without it.
       const allZCasuals = await withCache('briefing-zcasuals-all:' + date, () =>
-        fetch('/api/z-casuals?centre=all&date=' + date)
-          .then(r => r.json())
-          .then((rows) => (rows || []).filter((r: { start?: string; end?: string }) => r.start && r.end))
-          .catch(() => [] as Array<{ start?: string; end?: string; centre?: string }>), 5 * 60 * 1000);
+        Promise.race([
+          fetch('/api/z-casuals?centre=all&date=' + date)
+            .then(r => r.json())
+            .then((rows) => (rows || []).filter((r: { start?: string; end?: string }) => r.start && r.end)),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('z-casuals timeout')), 5000)
+          ),
+        ]).catch(() => [] as Array<{ start?: string; end?: string; centre?: string }>), 5 * 60 * 1000);
       const zCasualMap = new Map(allowed.map(c => [c.id, (allZCasuals || []).filter((r: { centre?: string }) => r.centre === c.name)]));
 
       // Fetch saved staff allocations for ALL centres in one call
