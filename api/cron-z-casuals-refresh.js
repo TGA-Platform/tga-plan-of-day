@@ -4,7 +4,7 @@
  */
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SERVICE_KEY  = '***';
+const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY || '***';
 
 const Z_COGNITO_REGION = 'ap-southeast-2';
 const Z_CLIENT_ID      = '4brth3dn73p47s17m5p28lvi2r';
