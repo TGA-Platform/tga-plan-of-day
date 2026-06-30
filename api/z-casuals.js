@@ -191,7 +191,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { centre, date } = req.query;
+  const { centre, date, force } = req.query;
 
   if (!centre || !date) {
     return res.status(400).json({ error: 'centre and date query params required' });
@@ -207,6 +207,33 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Return cached data quickly if fresh (<= 30 minutes old) unless force=true
+    if (force !== 'true') {
+      const cacheUrl = `${SUPABASE_URL}/rest/v1/z_casuals?centre=eq.${encodeURIComponent(normCentre)}&date=eq.${date}&select=*&order=fetched_at.desc`;
+      const cacheResp = await fetch(cacheUrl, {
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+      });
+      if (cacheResp.ok) {
+        const cached = await cacheResp.json();
+        if (cached?.length > 0) {
+          const newest = new Date(cached[0].fetched_at).getTime();
+          if (Date.now() - newest <= 30 * 60 * 1000) {
+            return res.status(200).json(cached.map(r => ({
+              zJobId:    r.z_job_id,
+              name:      r.name,
+              start:     r.start_time,
+              end:       r.end_time,
+              status:    r.status,
+              isFilled:  true,
+              certLevel: r.cert_level,
+              costCents: r.cost_cents,
+              workspaceId: r.workspace_id,
+            })));
+          }
+        }
+      }
+    }
+
     const auth = await getAuthToken();
     const gqlData = await queryZGraphQL(auth, JOB_QUERY, {
       workspaceId,

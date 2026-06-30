@@ -204,10 +204,30 @@ export default function MorningBriefingPage() {
         withCache('briefing-zcasuals:' + centre.name + ':' + date, () =>
           fetch('/api/z-casuals?centre=' + encodeURIComponent(centre.name) + '&date=' + date)
             .then(r => r.json())
-            .then((rows: Array<{ start?: string; end?: string }>) => (rows || []).filter((r: { start?: string; end?: string }) => r.start && r.end))
+            .then((rows) => (rows || []).filter((r: { start?: string; end?: string }) => r.start && r.end))
             .catch(() => [] as Array<{ start?: string; end?: string }>), 5 * 60 * 1000));
       const zCasualResults = await Promise.all(zCasualPromises);
       const zCasualMap = new Map(allowed.map((c, i) => [c.id, zCasualResults[i]]));
+
+      // Fetch saved ratio-check state (staffMoves) for all centres to match staffing analysis
+      const ratioCheckPromises = allowed.map(centre =>
+        withCache('briefing-ratiocheck:' + centre.id + ':' + date, () =>
+          fetch('/api/ratio-check?centre_id=' + encodeURIComponent(centre.id) + '&date=' + date)
+            .then(r => r.json())
+            .then((rows) => {
+              const moves: Record<string, string> = {};
+              for (const row of rows || []) {
+                const rowMoves: Record<string, string> = row?.data?.staffMoves || {};
+                for (const [empId, dest] of Object.entries(rowMoves)) {
+                  // Later sessions win if conflicts
+                  moves[empId] = dest;
+                }
+              }
+              return moves;
+            })
+            .catch(() => ({}) as Record<string, string>), 5 * 60 * 1000));
+      const ratioCheckResults = await Promise.all(ratioCheckPromises);
+      const staffMovesMap = new Map(allowed.map((c, i) => [c.id, ratioCheckResults[i] as Record<string, string>]));
 
       const result: CentreCard[] = [];
       for (const centre of allowed) {
@@ -218,8 +238,22 @@ export default function MorningBriefingPage() {
         const centreRosters = centreRosterMap.get(centre.id) ?? [];
         const zCasuals = zCasualMap.get(centre.id) ?? [];
         const zCasualFloatCount = zCasuals.length;
+        const staffMoves: Record<string, string> = staffMovesMap.get(centre.id) ?? {};
         const leaveSet  = new Set((centre.leaveUnitIds  ?? []));
         const floatSet  = new Set((centre.floatUnitIds  ?? []));
+
+
+        // Effective location considering saved staffMoves from ratio-check state
+        function effectiveUnitType(r: typeof centreRosters[number]): 'room' | 'float' | 'support' | 'leave' | 'other' {
+          const move = staffMoves[String(r.employeeId)];
+          if (move === 'float') return 'float';
+          if (move === 'support') return 'support';
+          if (leaveSet.has(r.unitId)) return 'leave';
+          if (floatSet.has(r.unitId)) return 'float';
+          if (nonRatioSet.has(r.unitId)) return 'support';
+          if (centre.rooms.some(rm => rm.deputyUnitId === r.unitId)) return 'room';
+          return 'other';
+        }
 
         const presentKids  = presentByCampus[campus] ?? [];
         // Per-room required for all three modes
@@ -239,7 +273,13 @@ export default function MorningBriefingPage() {
           const owna = (room.ownaRoomName ?? room.name).toLowerCase();
           const rk = kids.filter(c => c.room.toLowerCase().includes(owna));
           const { required: roomRequired } = calcRequiredStaff(rk.map(c => ({ ageMonths: parseAgeMonths(c.age) } as any)));
-          const roomStaff = centreRosters.filter(r => r.unitId === room.deputyUnitId);
+          // Count staff whose effective location is this room (moved-in or originally here)
+          const moveDest = room.deputyUnitId;
+          const roomStaff = centreRosters.filter(r => {
+            const dest = staffMoves[String(r.employeeId)];
+            if (dest === String(moveDest) || dest === (room.name || '')) return true;
+            return effectiveUnitType(r) === 'room' && r.unitId === room.deputyUnitId;
+          });
           return { required: roomRequired, staffCount: roomStaff.length };
         });
         const required         = allDayCalc.total;
@@ -251,22 +291,20 @@ export default function MorningBriefingPage() {
         // Staff counts from centreRosters (same source as ratio dashboard)
         const nonRatioSet = new Set(centre.nonRatioUnitIds ?? []);
         const staffIds = new Set(centreRosters
-          .filter(r => !leaveSet.has(r.unitId) && !floatSet.has(r.unitId)
-            && !nonRatioSet.has(r.unitId)
-            && centre.rooms.some(rm => rm.deputyUnitId === r.unitId))
+          .filter(r => effectiveUnitType(r) === 'room')
           .map(r => r.employeeId));
         const absentIds = new Set(centreRosters
-          .filter(r => leaveSet.has(r.unitId))
+          .filter(r => effectiveUnitType(r) === 'leave')
           .map(r => r.employeeId));
         // Use raw entry counts (not unique sets) to exactly match staffing analysis Float Pool:
         // floats.length and adStaff.length are array lengths, not deduped employee counts.
         // Split-shift staff have multiple entries and each counts.
-        const floatEntries = centreRosters.filter(r => floatSet.has(r.unitId));
+        const floatEntries = centreRosters.filter(r => effectiveUnitType(r) === 'float');
         const floatIds = new Set(floatEntries.map(r => r.employeeId)); // still need set for absence calc
         const floatCount = floatEntries.length + zCasualFloatCount; // include Z Staffing external casuals as floats // matches staffing analysis floats.length
         // AD = only 'Assistant Director' unitName entries (matches staffing analysis adStaff filter)
         const adCount = centreRosters.filter(r =>
-          nonRatioSet.has(r.unitId) &&
+          effectiveUnitType(r) === 'support' &&
           (r.unitName?.toLowerCase().includes('assistant director') ||
            r.unitName?.toLowerCase().includes('asst director') ||
            r.unitName?.toLowerCase().includes('ass. director'))

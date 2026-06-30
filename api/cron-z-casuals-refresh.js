@@ -1,0 +1,230 @@
+/**
+ * Cron job: refresh Z Staffing external casuals for all TGA centres.
+ * Run every 5 minutes. Fetches live from Z API and caches in Supabase z_casuals.
+ */
+
+const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
+const SERVICE_KEY  = '***';
+
+const Z_COGNITO_REGION = 'ap-southeast-2';
+const Z_CLIENT_ID      = '4brth3dn73p47s17m5p28lvi2r';
+const Z_GRAPHQL_URL    = 'https://api.zrecruitment.com.au/graphql';
+
+const TGA_WORKSPACE_MAP = {
+  'Wollongong':         '804b217a-e60f-7e4c-51bb-9c0cb1efb06b',
+  'Shell Cove':         'bd16a8c7-77f9-1d9e-db48-2770c926a206',
+  'Belfield':           '5c6abdc2-9566-87aa-e6bf-d55c64ae8524',
+  'Edgeworth':          '7acb51fe-02fb-8020-6eb1-c360caf57d88',
+  'Dapto':              'defc8724-7e8d-228d-81e9-e6e23e247819',
+  'Dapto 2':            '4e7b8c0c-509a-879b-eeb0-2e503da86e66',
+  'Edmondson Park 1':   '6c452302-7759-8caa-469d-dda75808d208',
+  'Edmondson Park 2':   '5de49c78-cd5a-887c-94f8-42bda0cc709d',
+  'Oatley':             'e37f4e67-16c4-0252-537e-d8698179413d',
+  'Mount Annan':        '720ee944-cf15-1755-a59d-15c3dee8fddd',
+  'North Wollongong':   'dce8d817-b516-9287-4edd-733356a72813',
+  'Bexley':             'a777b110-9fe9-d477-8c18-6e9daf5357d3',
+  'Spring Farm':        '0dbc3f77-9d43-e522-4765-aa6a97e00876',
+  'Denham Court':       '9285c534-12ab-31c1-401a-3cdda30a5b40',
+  'Wilton':             '53b9a960-c404-36ae-e6e2-f44b25303680',
+  'Glendale':           '2277a625-9403-b30a-3315-be19ab6c922a',
+};
+
+let _tokenCache = null;
+
+async function getIdToken() {
+  const now = Date.now();
+  if (_tokenCache && _tokenCache.expiresAt - now > 5 * 60 * 1000) {
+    return _tokenCache.idToken;
+  }
+
+  const refreshToken = process.env.Z_REFRESH_TOKEN;
+  if (!refreshToken) throw new Error('Z_REFRESH_TOKEN env var not set');
+
+  const resp = await fetch(`https://cognito-idp.${Z_COGNITO_REGION}.amazonaws.com/`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-amz-json-1.1',
+      'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth',
+    },
+    body: JSON.stringify({
+      AuthFlow: 'REFRESH_TOKEN_AUTH',
+      ClientId: Z_CLIENT_ID,
+      AuthParameters: { REFRESH_TOKEN: *** },
+    }),
+  });
+
+  const data = await resp.json();
+  if (!data.AuthenticationResult) {
+    throw new Error(`Z Staffing auth failed: ${JSON.stringify(data)}`);
+  }
+
+  const idToken   = data.AuthenticationResult.IdToken;
+  const expiresIn = data.AuthenticationResult.ExpiresIn ?? 3600;
+  _tokenCache = { idToken, expiresAt: now + expiresIn * 1000 };
+  return idToken;
+}
+
+async function getAuthToken() {
+  if (process.env.Z_API_KEY_ENABLED === 'true' && process.env.Z_API_KEY) {
+    return { token: process.env.Z_API_KEY, source: 'api-key' };
+  }
+  const idToken = await getIdToken();
+  return { token: idToken, source: 'cognito' };
+}
+
+async function queryZGraphQL(authToken, query, variables = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (authToken.source === 'api-key') {
+    headers['Authorization'] = 'API_KEY ' + authToken.token;
+  } else {
+    headers['Authorization'] = 'COGNITO ' + authToken.token;
+  }
+
+  const resp = await fetch(Z_GRAPHQL_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ operationName: null, query, variables }),
+  });
+  const data = await resp.json();
+  if (data.errors) throw new Error(data.errors[0].message);
+  return data.data;
+}
+
+function epochToTime(ms) {
+  return new Date(parseInt(ms)).toLocaleTimeString('en-AU', {
+    timeZone: 'Australia/Sydney',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function parseStatus(raw) {
+  if (!raw) return 'Unknown';
+  return raw.split('|')[0];
+}
+
+async function upsertToSupabase(rows) {
+  if (!rows.length) return;
+  const resp = await fetch(`${SUPABASE_URL}/rest/v1/z_casuals`, {
+    method: 'POST',
+    headers: {
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=minimal',
+    },
+    body: JSON.stringify(rows),
+  });
+  if (!resp.ok) {
+    const txt = await resp.text();
+    console.error('[cron-z-casuals] Supabase upsert failed:', resp.status, txt);
+  }
+}
+
+const JOB_QUERY = `
+  query getAllJobInformationForWorkspace($workspaceId: String!, $withEducatorProfile: Boolean) {
+    getAllJobInformationForWorkspace(workspaceId: $workspaceId, withEducatorProfile: $withEducatorProfile) {
+      jobs {
+        id
+        workspaceId
+        startDate
+        endDate
+        status
+        isFilled
+        isCompleted
+        isDraft
+        educatorUserId
+        certificationLevel
+        educatorCertificationLevel
+        hourlyRateUsed
+        educatorProfile {
+          givenName
+          surname
+          certificationLevel
+        }
+      }
+    }
+  }
+`;
+
+async function fetchCentre(centre, date, auth) {
+  const workspaceId = TGA_WORKSPACE_MAP[centre];
+  if (!workspaceId) return [];
+
+  const gqlData = await queryZGraphQL(auth, JOB_QUERY, { workspaceId, withEducatorProfile: true });
+  const allJobs = gqlData?.getAllJobInformationForWorkspace?.jobs ?? [];
+
+  const dayStart = new Date(`${date}T00:00:00+10:00`).getTime();
+  const dayEnd   = dayStart + 86400000;
+
+  const dayJobs = allJobs.filter(j => {
+    const s = parseInt(j.startDate);
+    return s >= dayStart && s < dayEnd;
+  });
+
+  const results = dayJobs
+    .filter(j => !j.isDraft)
+    .map(j => {
+      const profile  = j.educatorProfile;
+      const name     = profile ? `${profile.givenName} ${profile.surname}`.trim() : null;
+      const certLevel = j.educatorCertificationLevel || profile?.certificationLevel || j.certificationLevel || 'NONE';
+      return {
+        zJobId:      j.id,
+        name:        name || null,
+        start:       epochToTime(j.startDate),
+        end:         epochToTime(j.endDate),
+        status:      parseStatus(j.status),
+        isFilled:    j.isFilled,
+        certLevel,
+        costCents:   Math.round((j.hourlyRateUsed ?? 0) * ((parseInt(j.endDate) - parseInt(j.startDate)) / 3600000)),
+        workspaceId: j.workspaceId,
+      };
+    })
+    .filter(j => j.isFilled && j.name);
+
+  return results.map(r => ({
+    centre,
+    date,
+    z_job_id:     r.zJobId,
+    name:         r.name,
+    start_time:   r.start,
+    end_time:     r.end,
+    status:       r.status,
+    cert_level:   r.certLevel,
+    cost_cents:   r.costCents,
+    workspace_id: r.workspaceId,
+    fetched_at:   new Date().toISOString(),
+  }));
+}
+
+export default async function handler(req, res) {
+  // Vercel cron sends GET; also allow explicit POST invocations
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const date = req.query.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+
+  try {
+    const auth = await getAuthToken();
+    const centres = Object.keys(TGA_WORKSPACE_MAP);
+    const rows = [];
+
+    // Fetch centres sequentially to avoid hammering Z API
+    for (const centre of centres) {
+      try {
+        const centreRows = await fetchCentre(centre, date, auth);
+        rows.push(...centreRows);
+      } catch (err) {
+        console.error(`[cron-z-casuals] ${centre} failed:`, err.message);
+      }
+    }
+
+    await upsertToSupabase(rows);
+    return res.status(200).json({ ok: true, date, centres: centres.length, rows: rows.length });
+  } catch (err) {
+    console.error('[cron-z-casuals] Fatal:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+}

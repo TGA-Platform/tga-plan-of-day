@@ -10,6 +10,10 @@
     {
       "path": "/api/cron-roster-refresh",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron-z-casuals-refresh",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
