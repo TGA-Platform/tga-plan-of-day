@@ -117,6 +117,7 @@ export default function MorningBriefingPage() {
   const [loadError, setLoadError]       = useState<string | null>(null);
   const [viewMode, setViewMode]         = useState<ViewMode>('allday');
   const [totalBooked, setTotalBooked]   = useState<number | null>(null);
+  const [totalCapacity, setTotalCapacity] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -328,11 +329,15 @@ export default function MorningBriefingPage() {
         });
       }
 
-      // Sum booked children across all centres (from room-forecast)
-      const bookedValues = (forecastResults as Array<{ booked?: number | null } | null>)
+      // Sum booked children + capacity across all centres (from room-forecast)
+      const bookedValues = (forecastResults as Array<{ booked?: number | null; capacity?: number | null } | null>)
         .map(f => f?.booked)
         .filter((b): b is number => b != null);
+      const capacityValues = (forecastResults as Array<{ booked?: number | null; capacity?: number | null } | null>)
+        .map(f => f?.capacity)
+        .filter((c): c is number => c != null);
       setTotalBooked(bookedValues.length > 0 ? bookedValues.reduce((a, b) => a + b, 0) : null);
+      setTotalCapacity(capacityValues.length > 0 ? capacityValues.reduce((a, b) => a + b, 0) : null);
 
       // Sort: at-risk first, then by children desc
       result.sort((a,b) => {
@@ -463,7 +468,10 @@ export default function MorningBriefingPage() {
         <div className="rounded-2xl p-5 mb-6 grid grid-cols-2 sm:grid-cols-5 gap-4"
           style={{ backgroundColor: '#2d5c18' }}>
           <StatBlock icon="🧒" label={viewMode === 'present' ? 'Children present' : viewMode === 'day' ? 'Children expected' : 'Children today'} value={loading ? '...' : totalKids} />
-          <StatBlock icon="📖" label="Booked" value={loading ? '...' : totalBooked ?? '—'} />
+          <StatBlock icon="📖" label="Booked" value={loading ? '...' : totalBooked ?? '—'}
+            sub={totalBooked != null && totalCapacity != null && totalCapacity > 0
+              ? `${Math.round((totalBooked / totalCapacity) * 100)}% of ${totalCapacity} capacity`
+              : totalCapacity != null ? `${totalCapacity} capacity` : undefined} />
           <StatBlock icon="👥" label={viewMode === 'present' ? 'Staff signed in' : 'Staff rostered'} value={loading ? '...' : totalStaff} />
           <StatBlock icon="🚫" label="Staff absent" value={loading ? '...' : totalAbsent} />
           <StatBlock icon="👷" label="Casuals recommended" value={loading ? '...' : totalCasuals > 0 ? `${fmtFTE(totalCasuals)} FTE` : '✅ None'}
