@@ -49,7 +49,7 @@ async function getIdToken() {
     body: JSON.stringify({
       AuthFlow: 'REFRESH_TOKEN_AUTH',
       ClientId: Z_CLIENT_ID,
-      AuthParameters: { REFRESH_TOKEN: *** },
+      AuthParameters: { REFRESH_TOKEN: process.env.Z_REFRESH_TOKEN },
     }),
   });
 
