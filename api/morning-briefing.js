@@ -87,7 +87,19 @@ export default async function handler(req, res) {
   const rosters = allRosters.flatMap(r => r.rosters ?? []);
 
   // Fetch attendance for the date (children sign-ins)
-  const attendance = await sb(`attendance_daily?date=eq.${date}&select=campus,room,age,sign_in`);
+  // Paginate attendance to beat Supabase's 1000-row default cap
+  const attendance = [];
+  {
+    const PAGE = 1000;
+    let offset = 0;
+    while (true) {
+      const page = await sb(`attendance_daily?date=eq.${date}&select=campus,room,age,sign_in&limit=${PAGE}&offset=${offset}`);
+      if (!Array.isArray(page) || page.length === 0) break;
+      attendance.push(...page);
+      if (page.length < PAGE) break;
+      offset += PAGE;
+    }
+  }
 
   const results = [];
 

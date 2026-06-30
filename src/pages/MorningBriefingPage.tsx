@@ -199,6 +199,16 @@ export default function MorningBriefingPage() {
         centreRosterMap.set(centre.id, centreRosters);
       }
 
+      // Fetch Z Staffing external casuals per centre (count as additional floats)
+      const zCasualPromises = allowed.map(centre =>
+        withCache('briefing-zcasuals:' + centre.name + ':' + date, () =>
+          fetch('/api/z-casuals?centre=' + encodeURIComponent(centre.name) + '&date=' + date)
+            .then(r => r.json())
+            .then((rows: Array<{ start?: string; end?: string }>) => (rows || []).filter((r: { start?: string; end?: string }) => r.start && r.end))
+            .catch(() => [] as Array<{ start?: string; end?: string }>), 5 * 60 * 1000));
+      const zCasualResults = await Promise.all(zCasualPromises);
+      const zCasualMap = new Map(allowed.map((c, i) => [c.id, zCasualResults[i]]));
+
       const result: CentreCard[] = [];
       for (const centre of allowed) {
         const campus = centre.ownaName ?? centre.name;
@@ -206,6 +216,8 @@ export default function MorningBriefingPage() {
 
         // Use the same rosters as the ratio dashboard (identical cache key)
         const centreRosters = centreRosterMap.get(centre.id) ?? [];
+        const zCasuals = zCasualMap.get(centre.id) ?? [];
+        const zCasualFloatCount = zCasuals.length;
         const leaveSet  = new Set((centre.leaveUnitIds  ?? []));
         const floatSet  = new Set((centre.floatUnitIds  ?? []));
 
@@ -251,7 +263,7 @@ export default function MorningBriefingPage() {
         // Split-shift staff have multiple entries and each counts.
         const floatEntries = centreRosters.filter(r => floatSet.has(r.unitId));
         const floatIds = new Set(floatEntries.map(r => r.employeeId)); // still need set for absence calc
-        const floatCount = floatEntries.length; // matches staffing analysis floats.length
+        const floatCount = floatEntries.length + zCasualFloatCount; // include Z Staffing external casuals as floats // matches staffing analysis floats.length
         // AD = only 'Assistant Director' unitName entries (matches staffing analysis adStaff filter)
         const adCount = centreRosters.filter(r =>
           nonRatioSet.has(r.unitId) &&
