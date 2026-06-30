@@ -37,65 +37,26 @@ async function supaFetch(path) {
   return r.json();
 }
 
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
-  if (req.method === 'OPTIONS') return res.status(200).end();
-
-  const { campus, date } = req.query;
-  if (!campus || !date) return res.status(400).json({ error: 'campus and date required' });
-
-  // Use last week's same weekday as expected attendance (room by room)
-  // Use T12:00:00Z (noon UTC) to avoid timezone day-shift for any locale
-  const target = new Date(date + 'T12:00:00Z');
-  const lastWeek = new Date(target);
-  lastWeek.setUTCDate(lastWeek.getUTCDate() - 7);
-  const lastWeekStr = lastWeek.toISOString().slice(0, 10);
-
-  // Fetch attendance rows for last week's same weekday
-  const attRows = await supaFetch(
-    `/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${lastWeekStr}&select=date,room,child_name&limit=5000`
-  );
-
-  // Count actuals per room for last week
-  // { room -> count }
+async function forecastForCampus(campus, date, lastWeekStr, todayStr, allLastWeekRows, allOccRows, allTodayRows) {
+  const attRows = allLastWeekRows.filter(r => r.campus === campus);
   const lastWeekByRoom = {};
-  for (const row of (Array.isArray(attRows) ? attRows : [])) {
+  for (const row of attRows) {
     lastWeekByRoom[row.room] = (lastWeekByRoom[row.room] || 0) + 1;
   }
 
-  // Collect all rooms seen last week
-  const allRooms = new Set(Object.keys(lastWeekByRoom));
-
-  // Fetch booked + capacity + room_booked for this campus + date from daily_occupancy
-  const occRows = await supaFetch(
-    `/rest/v1/daily_occupancy?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=booked,capacity,room_booked&limit=1`
-  );
-  const occ = Array.isArray(occRows) && occRows.length > 0 ? occRows[0] : null;
+  const occ = allOccRows.find(r => r.campus === campus) || null;
   const roomBooked = (occ?.room_booked && typeof occ.room_booked === 'object') ? occ.room_booked : {};
 
-  // For today's date, fetch actual attendance from attendance_daily
-  const todayStr = new Date().toISOString().slice(0, 10);
   let actualAttendance = null;
   let roomActual = {};
   if (date === todayStr) {
-    try {
-      const attRows = await supaFetch(
-        `/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=room,child_name&limit=5000`
-      );
-      if (Array.isArray(attRows)) {
-        actualAttendance = attRows.length;
-        for (const row of attRows) {
-          roomActual[row.room] = (roomActual[row.room] || 0) + 1;
-        }
-      }
-    } catch (e) {
-      console.error('Failed to fetch actual attendance:', e.message);
+    const todayRows = allTodayRows.filter(r => r.campus === campus);
+    actualAttendance = todayRows.length;
+    for (const row of todayRows) {
+      roomActual[row.room] = (roomActual[row.room] || 0) + 1;
     }
   }
 
-  // Build rooms output using last week's actual attendance as expected
   const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual)]);
   const roomsOut = {};
   for (const room of allRoomNames) {
@@ -109,11 +70,105 @@ export default async function handler(req, res) {
     };
   }
 
-  return res.status(200).json({
+  return {
+    campus,
     booked:   occ?.booked   ?? null,
     actual:   actualAttendance,
     capacity: occ?.capacity ?? null,
     rooms: roomsOut,
-    lastWeek: lastWeekStr, // for debugging
-  });
+    lastWeek: lastWeekStr,
+  };
+}
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  const { campus, date } = req.query;
+  if (!campus || !date) return res.status(400).json({ error: 'campus and date required' });
+
+  const target = new Date(date + 'T12:00:00Z');
+  const lastWeek = new Date(target);
+  lastWeek.setUTCDate(lastWeek.getUTCDate() - 7);
+  const lastWeekStr = lastWeek.toISOString().slice(0, 10);
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  try {
+    // Bulk mode: return forecasts for all campuses in one call
+    if (campus === 'all') {
+      const [allLastWeekRows, allOccRows, allTodayRows] = await Promise.all([
+        supaFetch(`/rest/v1/attendance_daily?date=eq.${lastWeekStr}&select=campus,room,child_name&limit=5000`),
+        supaFetch(`/rest/v1/daily_occupancy?date=eq.${date}&select=campus,booked,capacity,room_booked&limit=5000`),
+        date === todayStr
+          ? supaFetch(`/rest/v1/attendance_daily?date=eq.${date}&select=campus,room,child_name&limit=5000`)
+          : Promise.resolve([]),
+      ]);
+
+      const campuses = [...new Set([
+        ...allLastWeekRows.map(r => r.campus),
+        ...allOccRows.map(r => r.campus),
+        ...allTodayRows.map(r => r.campus),
+      ])];
+
+      const out = {};
+      for (const c of campuses) {
+        out[c] = await forecastForCampus(c, date, lastWeekStr, todayStr, allLastWeekRows, allOccRows, allTodayRows);
+      }
+      return res.status(200).json(out);
+    }
+
+    // Single campus mode
+    const [attRows, occRows, todayRows] = await Promise.all([
+      supaFetch(`/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${lastWeekStr}&select=date,room,child_name&limit=5000`),
+      supaFetch(`/rest/v1/daily_occupancy?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=booked,capacity,room_booked&limit=1`),
+      date === todayStr
+        ? supaFetch(`/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=room,child_name&limit=5000`)
+        : Promise.resolve([]),
+    ]);
+
+    const lastWeekByRoom = {};
+    for (const row of (Array.isArray(attRows) ? attRows : [])) {
+      lastWeekByRoom[row.room] = (lastWeekByRoom[row.room] || 0) + 1;
+    }
+
+    const occ = Array.isArray(occRows) && occRows.length > 0 ? occRows[0] : null;
+    const roomBooked = (occ?.room_booked && typeof occ.room_booked === 'object') ? occ.room_booked : {};
+
+    let actualAttendance = null;
+    let roomActual = {};
+    if (date === todayStr) {
+      if (Array.isArray(todayRows)) {
+        actualAttendance = todayRows.length;
+        for (const row of todayRows) {
+          roomActual[row.room] = (roomActual[row.room] || 0) + 1;
+        }
+      }
+    }
+
+    const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual)]);
+    const roomsOut = {};
+    for (const room of allRoomNames) {
+      const bookedCount = roomBooked[room] ?? null;
+      const expectedCount = lastWeekByRoom[room] ?? null;
+      roomsOut[room] = {
+        expected: expectedCount,
+        weeksUsed: expectedCount !== null ? 1 : 0,
+        booked: bookedCount,
+        actual: roomActual[room] ?? null,
+      };
+    }
+
+    return res.status(200).json({
+      booked:   occ?.booked   ?? null,
+      actual:   actualAttendance,
+      capacity: occ?.capacity ?? null,
+      rooms: roomsOut,
+      lastWeek: lastWeekStr,
+    });
+  } catch (e) {
+    console.error('[room-forecast] Error:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
 }

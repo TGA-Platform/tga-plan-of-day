@@ -121,8 +121,8 @@ export default function MorningBriefingPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // Fetch today + last week attendance + last-snapshot time in parallel
-      const [todayAtt, lastWeekAtt, unitsRes, lastSnapshotRes, ...forecastResults] = await Promise.all([
+      // Fetch today + last week attendance + last-snapshot time + all forecasts in parallel
+      const [todayAtt, lastWeekAtt, unitsRes, lastSnapshotRes, allForecasts] = await Promise.all([
         withCache(`briefing-today:${date}`, () =>
           fetch(`/api/attendance?date=${date}`).then(r => r.json()), 3 * 60 * 1000),
         withCache(`briefing-lw:${lastWeek}`, () =>
@@ -133,13 +133,10 @@ export default function MorningBriefingPage() {
         fetch(`https://tgxpvzlibquqnldgmwho.supabase.co/rest/v1/attendance_daily?date=eq.${date}&select=updated_at&order=updated_at.desc&limit=1`, {
           headers: { apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NDE3MjUsImV4cCI6MjA4OTUxNzcyNX0.v_thHOU7xq0gaFhcnb2A3iBl5H7bAp9IbT9IPMg_jTY' }
         }).then(r => r.json()).catch(() => []),
-        ...allowed.map(centre => {
-          const campus = centre.ownaName ?? centre.name;
-          return withCache(`briefing-forecast:${campus}:${date}`, () =>
-            fetch(`/api/room-forecast?campus=${encodeURIComponent(campus)}&date=${date}`)
-              .then(r => r.json())
-              .catch(() => null), 5 * 60 * 1000);
-        }),
+        withCache(`briefing-forecast-all:${date}`, () =>
+          fetch(`/api/room-forecast?campus=all&date=${date}`)
+            .then(r => r.json())
+            .catch(() => null), 5 * 60 * 1000),
       ]);
 
       // Current Sydney time as HH:MM for predicted_sign_out comparison
@@ -199,35 +196,30 @@ export default function MorningBriefingPage() {
         centreRosterMap.set(centre.id, centreRosters);
       }
 
-      // Fetch Z Staffing external casuals per centre (count as additional floats)
-      const zCasualPromises = allowed.map(centre =>
-        withCache('briefing-zcasuals:' + centre.name + ':' + date, () =>
-          fetch('/api/z-casuals?centre=' + encodeURIComponent(centre.name) + '&date=' + date)
-            .then(r => r.json())
-            .then((rows) => (rows || []).filter((r: { start?: string; end?: string }) => r.start && r.end))
-            .catch(() => [] as Array<{ start?: string; end?: string }>), 5 * 60 * 1000));
-      const zCasualResults = await Promise.all(zCasualPromises);
-      const zCasualMap = new Map(allowed.map((c, i) => [c.id, zCasualResults[i]]));
+      // Fetch Z Staffing external casuals for ALL centres in one call
+      const allZCasuals = await withCache('briefing-zcasuals-all:' + date, () =>
+        fetch('/api/z-casuals?centre=all&date=' + date)
+          .then(r => r.json())
+          .then((rows) => (rows || []).filter((r: { start?: string; end?: string }) => r.start && r.end))
+          .catch(() => [] as Array<{ start?: string; end?: string; centre?: string }>), 5 * 60 * 1000);
+      const zCasualMap = new Map(allowed.map(c => [c.id, (allZCasuals || []).filter((r: { centre?: string }) => r.centre === c.name)]));
 
-      // Fetch saved ratio-check state (staffMoves) for all centres to match staffing analysis
-      const ratioCheckPromises = allowed.map(centre =>
-        withCache('briefing-ratiocheck:' + centre.id + ':' + date, () =>
-          fetch('/api/ratio-check?centre_id=' + encodeURIComponent(centre.id) + '&date=' + date)
-            .then(r => r.json())
-            .then((rows) => {
-              const moves: Record<string, string> = {};
-              for (const row of rows || []) {
-                const rowMoves: Record<string, string> = row?.data?.staffMoves || {};
-                for (const [empId, dest] of Object.entries(rowMoves)) {
-                  // Later sessions win if conflicts
-                  moves[empId] = dest;
-                }
-              }
-              return moves;
-            })
-            .catch(() => ({}) as Record<string, string>), 5 * 60 * 1000));
-      const ratioCheckResults = await Promise.all(ratioCheckPromises);
-      const staffMovesMap = new Map(allowed.map((c, i) => [c.id, ratioCheckResults[i] as Record<string, string>]));
+      // Fetch saved ratio-check state (staffMoves) for ALL centres in one call
+      const allRatioCheckRows = await withCache('briefing-ratiocheck-all:' + date, () =>
+        fetch('/api/ratio-check?date=' + date)
+          .then(r => r.json())
+          .catch(() => [] as Array<{ centre_id?: string; data?: { staffMoves?: Record<string, string> } }>), 5 * 60 * 1000);
+      const staffMovesMap = new Map(allowed.map(c => {
+        const moves: Record<string, string> = {};
+        for (const row of (allRatioCheckRows || []) as Array<{ centre_id?: string; data?: { staffMoves?: Record<string, string> } }>) {
+          if (row.centre_id !== c.id) continue;
+          const rowMoves = row?.data?.staffMoves || {};
+          for (const [empId, dest] of Object.entries(rowMoves)) {
+            moves[empId] = dest;
+          }
+        }
+        return [c.id, moves] as [string, Record<string, string>];
+      }));
 
       const result: CentreCard[] = [];
       for (const centre of allowed) {
@@ -378,7 +370,7 @@ export default function MorningBriefingPage() {
       }
 
       // Sum booked children across all centres (from room-forecast)
-      const bookedValues = (forecastResults as Array<{ booked?: number | null } | null>)
+      const bookedValues = Object.values(allForecasts as Record<string, { booked?: number | null } | null>)
         .map(f => f?.booked)
         .filter((b): b is number => b != null);
       setTotalBooked(bookedValues.length > 0 ? bookedValues.reduce((a, b) => a + b, 0) : null);
