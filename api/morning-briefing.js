@@ -183,6 +183,10 @@ export default async function handler(req, res) {
     const adAvailable = (allKids.length > 0 && allKids.length < 100) ? adCount : 0;
 
     // Per-room breakdown — match children to rooms by ownaRoomName (same as dashboard)
+    const unitCounts = {};
+    for (const r of centreRosters) { unitCounts[r.unitId] = (unitCounts[r.unitId] || 0) + 1; }
+    const matchesPerRoom = centre.rooms.map(room => centreRosters.filter(r => r.unitId === room.id).length);
+    console.log('[mbg-debug]', centre.id, 'unitCounts', JSON.stringify(unitCounts), 'matchesPerRoom', matchesPerRoom, 'rooms', centre.rooms.map(r=>r.id));
     const roomData = centre.rooms.map(room => {
       const owna = (room.ownaRoomName ?? '').toLowerCase();
       const roomKids = campusAttendance
@@ -195,7 +199,6 @@ export default async function handler(req, res) {
         if (dest === moveDest || dest === room.name) return true;
         return effectiveUnitType(r) === 'room' && r.unitId === room.id;
       }).length;
-      console.log('[mbg-debug]', centre.id, 'room', room.id, 'owna', owna, 'req', roomRequired, 'staff', roomStaff, 'kids', roomKids.length);
       return { required: roomRequired, staffCount: roomStaff };
     });
 
