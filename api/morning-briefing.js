@@ -195,6 +195,7 @@ export default async function handler(req, res) {
         if (dest === moveDest || dest === room.name) return true;
         return effectiveUnitType(r) === 'room' && r.unitId === room.id;
       }).length;
+      console.log('[mbg-debug]', centre.id, 'room', room.id, 'owna', owna, 'req', roomRequired, 'staff', roomStaff, 'kids', roomKids.length);
       return { required: roomRequired, staffCount: roomStaff };
     });
 
