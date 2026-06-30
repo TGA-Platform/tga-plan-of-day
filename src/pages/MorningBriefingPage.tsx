@@ -241,7 +241,7 @@ export default function MorningBriefingPage() {
         const staffMoves: Record<string, string> = staffMovesMap.get(centre.id) ?? {};
         const leaveSet  = new Set((centre.leaveUnitIds  ?? []));
         const floatSet  = new Set((centre.floatUnitIds  ?? []));
-
+        const nonRatioSet = new Set(centre.nonRatioUnitIds ?? []);
 
         // Effective location considering saved staffMoves from ratio-check state
         function effectiveUnitType(r: typeof centreRosters[number]): 'room' | 'float' | 'support' | 'leave' | 'other' {
@@ -289,7 +289,6 @@ export default function MorningBriefingPage() {
         const requiredExpected = Math.round(expectedCount / Math.max(kids.length, 1) * required);
 
         // Staff counts from centreRosters (same source as ratio dashboard)
-        const nonRatioSet = new Set(centre.nonRatioUnitIds ?? []);
         const staffIds = new Set(centreRosters
           .filter(r => effectiveUnitType(r) === 'room')
           .map(r => r.employeeId));
