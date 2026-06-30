@@ -101,6 +101,26 @@ export default async function handler(req, res) {
     }
   }
 
+  // Fetch saved ratio-check state (staffMoves) for all centres
+  const ratioCheckRows = await sb(`ratio_check_data?date=eq.${date}&select=centre_id,session,data`)
+    .catch(() => []);
+  const staffMovesByCentre = {};
+  for (const row of ratioCheckRows) {
+    const moves = row.data?.staffMoves || {};
+    const existing = staffMovesByCentre[row.centre_id] || {};
+    staffMovesByCentre[row.centre_id] = { ...existing, ...moves };
+  }
+
+  // Fetch cached Z Staffing casuals for all centres
+  const zCasualRows = await sb(`z_casuals?date=eq.${date}&select=centre,start_time,end_time`)
+    .catch(() => []);
+  const zCasualCountByCentre = {};
+  for (const row of zCasualRows) {
+    if (row.start_time && row.end_time) {
+      zCasualCountByCentre[row.centre] = (zCasualCountByCentre[row.centre] || 0) + 1;
+    }
+  }
+
   const results = [];
 
   for (const centre of centres) {
@@ -127,23 +147,35 @@ export default async function handler(req, res) {
     const leaveSet    = new Set(centre.leaveUnitIds);
     const floatSet    = new Set(centre.floatUnitIds);
     const nonRatioSet = new Set(centre.nonRatioUnitIds);
+    const staffMoves  = staffMovesByCentre[centre.id] || {};
+    const zCasualFloatCount = zCasualCountByCentre[centre.name] || 0;
+
+    // Effective unit type considering saved staffMoves
+    function effectiveUnitType(r) {
+      const move = staffMoves[String(r.employeeId)];
+      if (move === 'float') return 'float';
+      if (move === 'support') return 'support';
+      if (leaveSet.has(r.unitId)) return 'leave';
+      if (floatSet.has(r.unitId)) return 'float';
+      if (nonRatioSet.has(r.unitId)) return 'support';
+      if (centre.rooms.some(rm => rm.id === r.unitId)) return 'room';
+      return 'other';
+    }
 
     const staffIds = new Set(centreRosters
-      .filter(r => !leaveSet.has(r.unitId) && !floatSet.has(r.unitId)
-        && !nonRatioSet.has(r.unitId)
-        && centre.rooms.some(rm => rm.id === r.unitId))
+      .filter(r => effectiveUnitType(r) === 'room')
       .map(r => r.employeeId));
 
     const absentIds = new Set(centreRosters
-      .filter(r => leaveSet.has(r.unitId))
+      .filter(r => effectiveUnitType(r) === 'leave')
       .map(r => r.employeeId));
 
-    const floatEntries = centreRosters.filter(r => floatSet.has(r.unitId));
+    const floatEntries = centreRosters.filter(r => effectiveUnitType(r) === 'float');
     const floatIds     = new Set(floatEntries.map(r => r.employeeId));
-    const floatCount   = floatEntries.length;
+    const floatCount   = floatEntries.length + zCasualFloatCount;
 
     const adCount = centreRosters.filter(r =>
-      nonRatioSet.has(r.unitId) &&
+      effectiveUnitType(r) === 'support' &&
       (r.unitName.toLowerCase().includes('assistant director') ||
        r.unitName.toLowerCase().includes('asst director') ||
        r.unitName.toLowerCase().includes('ass. director'))
@@ -157,7 +189,12 @@ export default async function handler(req, res) {
         .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
         .map(a => parseAgeMonths(a.age));
       const roomRequired = calcRequired(roomKids);
-      const roomStaff    = centreRosters.filter(r => r.unitId === room.id).length;
+      const moveDest = String(room.id);
+      const roomStaff = centreRosters.filter(r => {
+        const dest = staffMoves[String(r.employeeId)];
+        if (dest === moveDest || dest === room.name) return true;
+        return effectiveUnitType(r) === 'room' && r.unitId === room.id;
+      }).length;
       return { required: roomRequired, staffCount: roomStaff };
     });
 
