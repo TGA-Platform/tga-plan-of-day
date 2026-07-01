@@ -224,7 +224,7 @@ export default function ReportingPage() {
   const [rosterOptData, setRosterOptData]   = useState<RosterOptResult[]>([]);
   const [rosterRecs, setRosterRecs]         = useState<RosterRec[]>([]);
   const [staffingAnalysisRows, setStaffingAnalysisRows] = useState<StaffingAnalysisRow[]>([]);
-  type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean };
+  type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean; is_internal_casual?: boolean };
   // WWCC lookup function - tries multiple strategies to handle name mismatches
   const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
   const printRef = useRef<HTMLDivElement>(null);
@@ -267,6 +267,7 @@ export default function ReportingPage() {
             const isLeave    = e.staffType === 'leave';
             const isFloat    = e.staffType === 'float' || e.staffType === 'iss';
             const isExternal = e.staffType === 'external';
+            const isInternalCasual = wwccLookup(e.name)?.is_internal_casual === true;
             // Indent as a sub-row when we've already seen this person's name.
             // Leave entries are always top-level (never indent).
             const isFirstRow = isLeave || !seenNames.has(e.name);
@@ -278,13 +279,22 @@ export default function ReportingPage() {
             const bg = isLunch ? '#fffbeb'
               : isMorningFG  ? '#f0fdf4'
               : isAfternoonFG ? '#faf5ff'
-              : isLeave ? '#fef2f2' : isExternal ? '#fff7ed' : isFloat ? '#eff6ff' : isCover ? '#f0fdf4' : 'white';
+              : isLeave ? '#fef2f2'
+              : isExternal ? '#fff7ed'
+              : isInternalCasual ? '#fef3c7'
+              : isFloat ? '#eff6ff' : isCover ? '#f0fdf4' : 'white';
             const fgBadge = isMorningFG ? 'Morning FG' : isAfternoonFG ? 'Afternoon FG' : '';
+            const badgeParts: string[] = [];
+            if (isExternal) badgeParts.push('<span class="badge external" style="background:#fed7aa;color:#c2410c">EC</span>');
+            if (isInternalCasual) badgeParts.push('<span class="badge internal" style="background:#fef3c7;color:#92400e">IC</span>');
+            if (isFloat) badgeParts.push(`<span class="badge ${e.staffType}">${e.staffType === 'iss' ? 'ISS' : 'Float'}</span>`);
+            if (isLeave) badgeParts.push('<span class="badge leave">Leave</span>');
+            if (isGrouping) badgeParts.push(`<span class="badge grouping">${fgBadge}</span>`);
             const nameCell = prevSame
               ? `&nbsp;&nbsp;└ ${e.name}`
-              : `${e.name}${isExternal ? ' <span class="badge external">EC</span>' : isFloat ? ` <span class="badge ${e.staffType}">${e.staffType === 'iss' ? 'ISS' : 'Float'}</span>` : isLeave ? ' <span class="badge leave">Leave</span>' : isGrouping ? ` <span class="badge grouping">${fgBadge}</span>` : ''}`;
+              : `${e.name}${badgeParts.length ? ' ' + badgeParts.join(' ') : ''}`;
             const isSupport = e.staffType === 'support';
-            const typeLabel = isLunch ? 'Lunch' : isMorningFG ? 'Morning FG' : isAfternoonFG ? 'Afternoon FG' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : isExternal ? 'External Casual' : isSupport ? 'Support' : 'Shift';
+            const typeLabel = isLunch ? 'Lunch' : isMorningFG ? 'Morning FG' : isAfternoonFG ? 'Afternoon FG' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : isExternal ? 'External Casual' : isInternalCasual ? 'Internal Casual' : isSupport ? 'Support' : 'Shift';
             return `<tr style="background:${bg}">
               <td>${nameCell}</td>
               <td>${isLunch ? '🍽 ' : isCover ? '↳ ' : isMorningFG ? '🌅 ' : isAfternoonFG ? '🌆 ' : ''}${e.room}</td>
@@ -1383,7 +1393,7 @@ export default function ReportingPage() {
     if (uniqueNames.length > 0) {
       fetch('/api/staff-wwcc')
         .then(r => r.ok ? r.json() : [])
-        .then((records: { full_name: string; full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }[]) => {
+        .then((records: { full_name: string; full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean; is_internal_casual?: boolean }[]) => {
           /**
            * Comprehensive name normalisation - same logic as scripts/name-utils.js.
            * Apply to BOTH stored names and lookup names so they always compare alike.
@@ -1422,7 +1432,7 @@ export default function ReportingPage() {
           const normedMap: Record<string, WwccRec> = {};
 
           for (const rec of records) {
-            const entry: WwccRec = { wwcc_number: rec.wwcc_number, wwcc_expiry: rec.wwcc_expiry, under_18: rec.under_18 ?? false };
+            const entry: WwccRec = { wwcc_number: rec.wwcc_number, wwcc_expiry: rec.wwcc_expiry, under_18: rec.under_18 ?? false, is_internal_casual: rec.is_internal_casual === true };
             exactMap[rec.full_name_norm] = entry;
 
             // Also index by our aggressive normalisation (catches stored RL/abbrev suffixes)
@@ -1469,7 +1479,7 @@ export default function ReportingPage() {
             // 4. Unique last name - handles different first names (Caitlin vs Catey)
             if (candidates.length === 1) {
               const c = candidates[0];
-              return { wwcc_number: c.wwcc_number, wwcc_expiry: c.wwcc_expiry, under_18: c.under_18 ?? false };
+              return { wwcc_number: c.wwcc_number, wwcc_expiry: c.wwcc_expiry, under_18: c.under_18 ?? false, is_internal_casual: c.is_internal_casual === true };
             }
 
             // 5. Same last name + first initial
@@ -1481,7 +1491,7 @@ export default function ReportingPage() {
               });
               if (initialMatches.length === 1) {
                 const m = initialMatches[0];
-                return { wwcc_number: m.wwcc_number, wwcc_expiry: m.wwcc_expiry, under_18: m.under_18 ?? false };
+                return { wwcc_number: m.wwcc_number, wwcc_expiry: m.wwcc_expiry, under_18: m.under_18 ?? false, is_internal_casual: m.is_internal_casual === true };
               }
             }
 
@@ -1493,7 +1503,7 @@ export default function ReportingPage() {
               const d = lev(norm, normaliseName(r.full_name));
               if (d < bestDist) { bestDist = d; bestRec = r; }
             }
-            if (bestRec) return { wwcc_number: bestRec.wwcc_number, wwcc_expiry: bestRec.wwcc_expiry, under_18: bestRec.under_18 ?? false };
+            if (bestRec) return { wwcc_number: bestRec.wwcc_number, wwcc_expiry: bestRec.wwcc_expiry, under_18: bestRec.under_18 ?? false, is_internal_casual: bestRec.is_internal_casual === true };
 
             return null;
           };
@@ -1726,9 +1736,16 @@ export default function ReportingPage() {
                           // Reload WWCC lookup after sync
                           const res = await fetch('/api/staff-wwcc');
                           if (res.ok) {
-                            const records: { full_name: string; full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean }[] = await res.json();
-                            const normMap: Record<string, any> = {};
-                            for (const rec of records) normMap[rec.full_name_norm] = rec;
+                            const records: { full_name: string; full_name_norm: string; wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean; is_internal_casual?: boolean }[] = await res.json();
+                            const normMap: Record<string, WwccRec> = {};
+                            for (const rec of records) {
+                              normMap[rec.full_name_norm] = {
+                                wwcc_number: rec.wwcc_number,
+                                wwcc_expiry: rec.wwcc_expiry,
+                                under_18: rec.under_18 ?? false,
+                                is_internal_casual: rec.is_internal_casual === true,
+                              };
+                            }
                             setWwccLookup(() => (name: string) => normMap[name.toLowerCase().replace(/\s+/g,' ').trim()] ?? null);
                           }
                         } catch (e: any) {
@@ -1803,6 +1820,8 @@ export default function ReportingPage() {
                               const isAfternoonFG = isGrouping && parseInt(e.inTime) >= 12;
                               const isFloat    = e.staffType === 'float' || e.staffType === 'iss';
                               const isLeave    = e.staffType === 'leave';
+                              const isExternal = e.staffType === 'external';
+                              const isInternalCasual = wwccLookup(e.name)?.is_internal_casual === true;
                               const isCover    = e.blockType === 'lunch_cover' || e.blockType === 'float_move';
                               const isFirstRowInner = isLeave || !seenNamesInner.has(e.employeeId);
                               if (!isLeave) seenNamesInner.add(e.employeeId);
@@ -1813,6 +1832,8 @@ export default function ReportingPage() {
                                 : isMorningFG   ? '#f0fdf4'
                                 : isAfternoonFG ? '#faf5ff'
                                 : isLeave    ? '#fef2f2'
+                                : isExternal ? '#fff7ed'
+                                : isInternalCasual ? '#fef3c7'
                                 : isFloat    ? '#eff6ff'
                                 : isSupport  ? '#faf5ff'
                                 : isCover    ? '#f0fdf4'
@@ -1827,6 +1848,8 @@ export default function ReportingPage() {
                                   {prevSame
                                     ? <span style={{ color: '#9ca3af' }}>└ {e.name}</span>
                                     : <span>{e.name}
+                                        {isExternal && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#fed7aa', color: '#c2410c' }}>EC</span>}
+                                        {isInternalCasual && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>IC</span>}
                                         {isFloat && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>{e.staffType === 'iss' ? 'ISS' : 'Float'}</span>}
                                         {isLeave && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>Leave</span>}
                                         {isSupport && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#ede9fe', color: '#6d28d9' }}>Support</span>}
@@ -1849,7 +1872,7 @@ export default function ReportingPage() {
                                       backgroundColor: isLunch ? '#fef3c7' : isGrouping ? '#d1fae5' : isCover ? '#dcfce7' : isLeave ? '#fee2e2' : isFloat ? '#dbeafe' : isSupport ? '#ede9fe' : '#f0fdf4',
                                       color: isLunch ? '#92400e' : isGrouping ? '#065f46' : isCover ? '#166534' : isLeave ? '#dc2626' : isFloat ? '#1d4ed8' : isSupport ? '#6d28d9' : '#166534',
                                     }}>
-                                    {isLunch ? 'Lunch' : isGrouping ? 'Grouped' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : isSupport ? 'Support' : 'Shift'}
+                                    {isLunch ? 'Lunch' : isGrouping ? 'Grouped' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : isExternal ? 'External Casual' : isInternalCasual ? 'Internal Casual' : isSupport ? 'Support' : 'Shift'}
                                   </span>
                                 </td>
                                 <td className="py-2 px-4">
