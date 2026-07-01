@@ -599,12 +599,15 @@ export default function ReportingPage() {
               const { required } = calcRequiredStaff(roomKids as any);
               reqStaff += required;
             }
-            // Check if a roster entry covers this slot (unique employees counted via Set)
+            // Check if a roster entry covers this slot (unique employees counted via Set).
+            // /api/deputy-rosters returns StartTime/EndTime as HH:MM strings; be robust to
+            // legacy unix timestamps as well.
             const shiftCheck = (r: any) => {
-              if (!r.StartTime || r.StartTime <= 0 || !r.EndTime || r.EndTime <= 0) return false;
-              const d1 = new Date(new Date(r.StartTime * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
-              const d2 = new Date(new Date(r.EndTime   * 1000).toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
-              return (d1.getHours()*60+d1.getMinutes()) <= slotMinutes && (d2.getHours()*60+d2.getMinutes()) > slotMinutes;
+              if (!r.StartTime || !r.EndTime) return false;
+              const startM = hhmm(fmtTime(r.StartTime));
+              const endM   = hhmm(fmtTime(r.EndTime));
+              if (startM === null || endM === null) return false;
+              return startM <= slotMinutes && endM > slotMinutes;
             };
             // Floor staff = room + float combined (both count toward ratio coverage)
             const roomStaffOnShift = new Set(campusRostersFiltered.filter(shiftCheck).map((r: any) => r.Employee)).size;
