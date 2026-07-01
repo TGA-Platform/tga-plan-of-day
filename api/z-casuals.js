@@ -5,8 +5,9 @@
  * Returns Z Staffing external casual shifts for a TGA centre on a given date.
  * Fetches live from Z Staffing API, upserts to Supabase for reporting, then returns.
  *
- * Auth: uses Z_REFRESH_TOKEN env var (Cognito refresh token — long-lived).
- * Token cache: in-memory, refreshed when < 5 min from expiry.
+ * Auth (in priority order):
+ *   1. Permanent API key: Z_API_KEY (sent as Authorization: API_KEY <key>)
+ *   2. Legacy: Z_REFRESH_TOKEN (Cognito refresh token → IdToken)
  */
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
@@ -14,6 +15,7 @@ const SERVICE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 const Z_COGNITO_REGION = 'ap-southeast-2';
 const Z_CLIENT_ID      = '4brth3dn73p47s17m5p28lvi2r';
+const Z_GRAPHQL_URL    = 'https://api.zrecruitment.com.au/graphql';
 
 // TGA centre name → Z Staffing workspace UUID
 const TGA_WORKSPACE_MAP = {
@@ -35,12 +37,11 @@ const TGA_WORKSPACE_MAP = {
   'Glendale':           '2277a625-9403-b30a-3315-be19ab6c922a',
 };
 
-// In-memory token cache (survives warm function restarts, not cold starts)
+// In-memory cache for Cognito fallback IdToken
 let _tokenCache = null; // { idToken, expiresAt }
 
 async function getIdToken() {
   const now = Date.now();
-  // Return cached token if still valid for > 5 minutes
   if (_tokenCache && _tokenCache.expiresAt - now > 5 * 60 * 1000) {
     return _tokenCache.idToken;
   }
@@ -72,13 +73,35 @@ async function getIdToken() {
   return idToken;
 }
 
-async function queryZGraphQL(idToken, query, variables = {}) {
-  const resp = await fetch('https://api.zrecruitment.com.au/graphql', {
+async function getAuthToken() {
+  // Permanent API key: sent as Authorization: API_KEY <key>
+  if (process.env.Z_API_KEY_ENABLED === 'true' && process.env.Z_API_KEY) {
+    console.log('[z-casuals] Using permanent API key');
+    return { token: process.env.Z_API_KEY, source: 'api-key' };
+  }
+
+  // Fallback to legacy Cognito refresh-token flow
+  const idToken = await getIdToken();
+  console.log('[z-casuals] Using Cognito IdToken from refresh token');
+  return { token: idToken, source: 'cognito' };
+}
+
+async function queryZGraphQL(authToken, query, variables = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+  };
+
+  // Permanent API key uses Authorization: API_KEY <key>.
+  // Legacy Cognito refresh-token flow uses Authorization: COGNITO <idToken>.
+  if (authToken.source === 'api-key') {
+    headers['Authorization'] = 'API_KEY ' + authToken.token;
+  } else {
+    headers['Authorization'] = 'COGNITO ' + authToken.token;
+  }
+
+  const resp = await fetch(Z_GRAPHQL_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'COGNITO ' + idToken,
-    },
+    headers,
     body: JSON.stringify({ operationName: null, query, variables }),
   });
   const data = await resp.json();
@@ -134,8 +157,6 @@ async function upsertToSupabase(rows) {
 }
 
 async function createTableIfNeeded() {
-  // Create via Supabase SQL edge function if available
-  // Otherwise silently skip — table needs to be created via dashboard
   console.log('[z-casuals] Note: z_casuals table may need manual creation in Supabase.');
 }
 
@@ -165,104 +186,155 @@ const JOB_QUERY = `
   }
 `;
 
+function shapeRows(dbRows) {
+  return dbRows.map(r => ({
+    zJobId:      r.z_job_id,
+    name:        r.name,
+    start:       r.start_time,
+    end:         r.end_time,
+    status:      r.status,
+    isFilled:    true,
+    certLevel:   r.cert_level,
+    costCents:   r.cost_cents,
+    workspaceId: r.workspace_id,
+    centre:      r.centre,
+  }));
+}
+
+async function readCached(centre, date) {
+  const cacheUrl = `${SUPABASE_URL}/rest/v1/z_casuals?centre=eq.${encodeURIComponent(centre)}&date=eq.${date}&select=*&order=fetched_at.desc`;
+  const cacheResp = await fetch(cacheUrl, {
+    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+  });
+  if (!cacheResp.ok) return null;
+  const cached = await cacheResp.json();
+  if (!cached?.length) return null;
+  const newest = new Date(cached[0].fetched_at).getTime();
+  if (Date.now() - newest > 30 * 60 * 1000) return null;
+  return shapeRows(cached);
+}
+
+async function fetchFromZAndUpsert(centre, date, auth) {
+  const workspaceId = TGA_WORKSPACE_MAP[centre];
+  if (!workspaceId) return [];
+
+  const gqlData = await queryZGraphQL(auth, JOB_QUERY, {
+    workspaceId,
+    withEducatorProfile: true,
+  });
+
+  const allJobs = gqlData?.getAllJobInformationForWorkspace?.jobs ?? [];
+
+  const dayStart = new Date(`${date}T00:00:00+10:00`).getTime();
+  const dayEnd   = dayStart + 86400000;
+
+  const dayJobs = allJobs.filter(j => {
+    const s = parseInt(j.startDate);
+    return s >= dayStart && s < dayEnd;
+  });
+
+  const results = dayJobs
+    .filter(j => !j.isDraft)
+    .map(j => {
+      const startMs  = parseInt(j.startDate);
+      const endMs    = parseInt(j.endDate);
+      const durationHrs = (endMs - startMs) / 3600000;
+      const hourlyRate  = j.hourlyRateUsed ?? 0;
+      const costCents   = Math.round(hourlyRate * durationHrs);
+
+      const profile  = j.educatorProfile;
+      const name     = profile
+        ? `${profile.givenName} ${profile.surname}`.trim()
+        : (j.educatorUserId ? null : null);
+
+      const certLevel = (
+        j.educatorCertificationLevel ||
+        profile?.certificationLevel  ||
+        j.certificationLevel         ||
+        'NONE'
+      );
+
+      return {
+        zJobId:      j.id,
+        name:        name || null,
+        start:       epochToTime(j.startDate),
+        end:         epochToTime(j.endDate),
+        status:      parseStatus(j.status),
+        isFilled:    j.isFilled,
+        certLevel,
+        costCents,
+        workspaceId: j.workspaceId,
+        centre,
+      };
+    })
+    .filter(j => j.isFilled && j.name);
+
+  const supabaseRows = results.map(r => ({
+    centre:       r.centre,
+    date,
+    z_job_id:     r.zJobId,
+    name:         r.name,
+    start_time:   r.start,
+    end_time:     r.end,
+    status:       r.status,
+    cert_level:   r.certLevel,
+    cost_cents:   r.costCents,
+    workspace_id: r.workspaceId,
+    fetched_at:   new Date().toISOString(),
+  }));
+  upsertToSupabase(supabaseRows).catch(err =>
+    console.error('[z-casuals] Supabase upsert failed:', err.message)
+  );
+
+  return results;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { centre, date } = req.query;
+  const { centre, date, force } = req.query;
 
   if (!centre || !date) {
     return res.status(400).json({ error: 'centre and date query params required' });
   }
 
-  // Normalise centre name to match workspace map keys
   const normCentre = centre.trim();
-  const workspaceId = TGA_WORKSPACE_MAP[normCentre];
 
+  // Bulk mode: return all centres for the date in a single call.
+  // The z_casuals cron jobs keep Supabase up to date; we never fetch live
+  // from Z Staffing on a page request because it is too slow and times out.
+  if (normCentre.toLowerCase() === 'all') {
+    try {
+      const cacheUrl = `${SUPABASE_URL}/rest/v1/z_casuals?date=eq.${date}&select=*&order=fetched_at.desc`;
+      const cacheResp = await fetch(cacheUrl, {
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+      });
+      if (cacheResp.ok) {
+        const cached = await cacheResp.json();
+        if (cached?.length > 0) {
+          return res.status(200).json(shapeRows(cached));
+        }
+      }
+      return res.status(200).json([]);
+    } catch (err) {
+      console.error('[z-casuals] Bulk cache read error:', err.message);
+      return res.status(200).json([]);
+    }
+  }
+
+  const workspaceId = TGA_WORKSPACE_MAP[normCentre];
   if (!workspaceId) {
-    // Centre not in map — return empty rather than error (centre may not use Z Staffing)
     return res.status(200).json([]);
   }
 
   try {
-    const idToken = await getIdToken();
-
-    const gqlData = await queryZGraphQL(idToken, JOB_QUERY, {
-      workspaceId,
-      withEducatorProfile: true,
-    });
-
-    const allJobs = gqlData?.getAllJobInformationForWorkspace?.jobs ?? [];
-
-    // Filter to the requested date (AEST)
-    const dayStart = new Date(`${date}T00:00:00+10:00`).getTime();
-    const dayEnd   = new Date(`${date}T00:00:00+10:00`).getTime() + 86400000;
-
-    const dayJobs = allJobs.filter(j => {
-      const s = parseInt(j.startDate);
-      return s >= dayStart && s < dayEnd;
-    });
-
-    // Shape results
-    const results = dayJobs
-      .filter(j => !j.isDraft) // exclude unpublished shifts
-      .map(j => {
-        const startMs  = parseInt(j.startDate);
-        const endMs    = parseInt(j.endDate);
-        const durationHrs = (endMs - startMs) / 3600000;
-        const hourlyRate  = j.hourlyRateUsed ?? 0; // cents per hour (e.g. 5700 = $57/hr)
-        const costCents   = Math.round(hourlyRate * durationHrs);
-
-        const profile  = j.educatorProfile;
-        const name     = profile
-          ? `${profile.givenName} ${profile.surname}`.trim()
-          : (j.educatorUserId ? null : null); // null = unfilled
-
-        const certLevel = (
-          j.educatorCertificationLevel ||
-          profile?.certificationLevel  ||
-          j.certificationLevel         ||
-          'NONE'
-        );
-
-        return {
-          zJobId:      j.id,
-          name:        name || null,
-          start:       epochToTime(j.startDate),
-          end:         epochToTime(j.endDate),
-          status:      parseStatus(j.status),
-          isFilled:    j.isFilled,
-          certLevel,
-          costCents,
-          workspaceId: j.workspaceId,
-        };
-      })
-      .filter(j => j.isFilled && j.name); // only filled shifts with a known educator
-
-    // Upsert to Supabase for reporting (fire-and-forget)
-    const supabaseRows = results.map(r => ({
-      centre:       normCentre,
-      date,
-      z_job_id:     r.zJobId,
-      name:         r.name,
-      start_time:   r.start,
-      end_time:     r.end,
-      status:       r.status,
-      cert_level:   r.certLevel,
-      cost_cents:   r.costCents,
-      workspace_id: r.workspaceId,
-      fetched_at:   new Date().toISOString(),
-    }));
-    upsertToSupabase(supabaseRows).catch(err =>
-      console.error('[z-casuals] Supabase upsert failed:', err.message)
-    );
-
-    return res.status(200).json(results);
-
+    const cached = await readCached(normCentre, date);
+    if (cached) return res.status(200).json(cached);
+    return res.status(200).json([]);
   } catch (err) {
-    console.error('[z-casuals] Error:', err.message);
-    // Return empty rather than 500 so the plan of day still loads
+    console.error('[z-casuals] Cache read error:', err.message);
     return res.status(200).json([]);
   }
 }

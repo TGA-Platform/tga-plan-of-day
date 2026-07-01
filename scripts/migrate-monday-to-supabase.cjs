@@ -1,0 +1,400 @@
+/**
+ * migrate-monday-to-supabase.cjs
+ *
+ * Pulls all staffing structure data from Monday.com and migrates it to Supabase.
+ * - Staff members → staff_members table
+ * - Rooms/groups  → staff_rooms table
+ * - Documents     → downloaded and uploaded to Supabase Storage → staff_documents table
+ *
+ * Safe to re-run: uses upsert on monday_id. Already-migrated staff are skipped.
+ * Files already in storage are also skipped.
+ *
+ * Run: node scripts/migrate-monday-to-supabase.cjs [centreId]
+ * e.g. node scripts/migrate-monday-to-supabase.cjs bexley
+ *      node scripts/migrate-monday-to-supabase.cjs           (all centres)
+ */
+
+const fs   = require('fs');
+const path = require('path');
+
+const MONDAY_TOKEN  = 'eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjk1MjUwNjI1LCJhYWkiOjExLCJ1aWQiOjE3OTA3NTg3LCJpYWQiOiIyMDIxLTAxLTA4VDA1OjQxOjQxLjAwMFoiLCJwZXIiOiJtZTp3cml0ZSIsImFjdGlkIjo3ODUyNTc4LCJyZ24iOiJ1c2UxIn0.wTlMofuNFVvUvV98p8HBDarGqoURjO-rHdg7Ck9mXq4';
+const MONDAY_URL    = 'https://api.monday.com/v2';
+
+const SUPABASE_URL  = 'https://tgxpvzlibquqnldgmwho.supabase.co';
+const SERVICE_KEY   = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
+const BUCKET        = 'staff-documents';
+const SB            = `${SUPABASE_URL}/rest/v1`;
+const SB_HEADERS    = { Authorization: `Bearer ${SERVICE_KEY}`, apikey: SERVICE_KEY, 'Content-Type': 'application/json', Prefer: 'return=representation' };
+
+const BOARD_IDS = {
+  'oatley':           1419063930,
+  'wollongong':       983834623,
+  'mount-annan':      980348329,
+  'spring-farm':      6513027863,
+  'denham-court':     6247438158,
+  'ed-park-1':        983840576,
+  'ed-park-2':        3448154419,
+  'wilton':           8719103624,
+  'dapto-1':          1841109563,
+  'dapto-2':          3349576958,
+  'north-wollongong': 6248473627,
+  'shell-cove':       8347556299,
+  'bexley':           983830380,
+  'belfield':         9133300009,
+  'bankstown':        9133302478,
+  'glendale':         18406250043,
+  'edgeworth':        9060612097,
+};
+
+const INACTIVE_GROUPS = /^(open positions?|on hold|offered|exited staff|resigned)$/i;
+
+// Map Monday file column titles to canonical labels we store in staff_documents.
+// Keys are lowercased; multiple Monday titles can map to the same canonical label.
+const FILE_TITLE_MAP = {
+  // main item file columns
+  'qualification': 'Qualification Certificate',
+  'qualification certificate': 'Qualification Certificate',
+  'transcript': 'Transcripts',
+  'transcripts': 'Transcripts',
+  'additional certifications': 'Additional Certifications',
+  'induction checklist': 'Induction Checklist',
+  'upskilling plan': 'Upskilling Plan',
+  'policy kit': 'Policy Kit',
+  'employment kit': 'Employment Kit',
+  'staff record': 'Staff Record',
+  'key responsibilities': 'Key Responsibilities',
+
+  // subitem file columns
+  'rp/ns/el consent': 'RP/NS/EL Consent',
+  'fire warden': 'Fire Warden',
+  'wwc': 'WWC',
+  'qualifications': 'Qualifications',
+  'transcript & cp': 'Transcript & CP',
+  'first aid': 'First Aid',
+  'cpr': 'CPR',
+  'anaphylaxis': 'Anaphylaxis',
+  'child safety': 'Child Safety',
+  'child protection refresher': 'Child Protection Refresher',
+  'food handling certificate': 'Food Handling Certificate',
+  'position description': 'Position Description',
+  'additional responsibilities': 'Additional Responsibilities',
+  'client report': 'Client Report',
+  'training contract': 'Training Contract',
+  'training plan': 'Training Plan',
+  'working towards ect': 'Working Towards ECT',
+};
+
+function canonicalLabel(title) {
+  if (!title) return null;
+  return FILE_TITLE_MAP[title.trim().toLowerCase()] || null;
+}
+
+function col(cv, id) { return (cv.find(c => c.id === id)?.text || '').trim() || null; }
+function parseDate(v) { return v && v.length === 10 ? v : null; }
+
+// ── Monday API ─────────────────────────────────────────────────────────────
+
+async function mondayQuery(query) {
+  const r = await fetch(MONDAY_URL, {
+    method: 'POST',
+    headers: { Authorization: MONDAY_TOKEN, 'Content-Type': 'application/json', 'API-Version': '2024-01' },
+    body: JSON.stringify({ query }),
+  });
+  if (!r.ok) throw new Error(`Monday API ${r.status}`);
+  const j = await r.json();
+  if (j.errors) throw new Error(j.errors[0]?.message);
+  return j.data;
+}
+
+async function fetchBoard(boardId) {
+  const data = await mondayQuery(`{
+    boards(ids: [${boardId}]) {
+      groups { id title color
+        items_page(limit: 500) {
+          items { id name
+            column_values { id text column { title type } }
+            subitems { id name column_values { id text column { title type } } }
+          }
+        }
+      }
+    }
+  }`);
+  return data?.boards?.[0]?.groups || [];
+}
+
+// ── Supabase helpers ───────────────────────────────────────────────────────
+
+async function sbUpsert(table, rows, conflictCol) {
+  const r = await fetch(`${SB}/${table}?on_conflict=${conflictCol}`, {
+    method: 'POST',
+    headers: { ...SB_HEADERS, Prefer: 'return=representation,resolution=merge-duplicates' },
+    body: JSON.stringify(rows),
+  });
+  if (!r.ok) { const t = await r.text(); throw new Error(`Upsert ${table} failed: ${t}`); }
+  return r.json();
+}
+
+async function sbGet(path) {
+  const r = await fetch(`${SB}${path}`, { headers: SB_HEADERS });
+  if (!r.ok) { const t = await r.text(); throw new Error(`SB GET failed: ${t}`); }
+  return r.json();
+}
+
+// Upload file buffer to Supabase Storage
+async function uploadToStorage(storagePath, buffer, mimeType) {
+  const r = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${storagePath}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      apikey: SERVICE_KEY,
+      'Content-Type': mimeType || 'application/octet-stream',
+      'x-upsert': 'false', // don't overwrite existing
+    },
+    body: buffer,
+  });
+  const text = await r.text();
+  if (!r.ok && !text.includes('already exists') && !text.includes('Duplicate')) {
+    throw new Error(`Storage upload failed (${r.status}): ${text}`);
+  }
+  return storagePath;
+}
+
+// Extract Monday asset ID from a protected_static URL
+// e.g. https://tga450770.monday.com/protected_static/7852578/resources/3035796718/IMG_6915.jpeg -> 3035796718
+function extractAssetId(url) {
+  const m = url.match(/\/resources\/(\d+)\//); 
+  return m ? m[1] : null;
+}
+
+// Get public_url for a list of asset IDs via Monday API
+const assetUrlCache = new Map();
+async function getAssetPublicUrl(assetId) {
+  if (assetUrlCache.has(assetId)) return assetUrlCache.get(assetId);
+  const data = await mondayQuery(`{ assets(ids: [${assetId}]) { id public_url } }`);
+  const url = data?.assets?.[0]?.public_url || null;
+  assetUrlCache.set(assetId, url);
+  return url;
+}
+
+// Download a Monday file server-side using public_url (signed S3)
+const DOWNLOAD_TIMEOUT_MS = 60_000;
+async function downloadFile(mondayUrl) {
+  // Extract asset ID and get fresh signed S3 URL
+  const assetId = extractAssetId(mondayUrl);
+  let downloadUrl = mondayUrl;
+  if (assetId) {
+    const publicUrl = await getAssetPublicUrl(assetId);
+    if (publicUrl) downloadUrl = publicUrl;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  try {
+    const r = await fetch(downloadUrl, { signal: controller.signal });
+    if (!r.ok) throw new Error(`Download failed ${r.status}: ${downloadUrl}`);
+    const buffer = await r.arrayBuffer();
+    const mime = r.headers.get('content-type') || 'application/octet-stream';
+    return { buffer: Buffer.from(buffer), mime };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function safeName(str) {
+  return str.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
+}
+
+// ── Migration ──────────────────────────────────────────────────────────────
+
+async function migrateCentre(centreId, skipFiles = false) {
+  const boardId = BOARD_IDS[centreId];
+  if (!boardId) { console.log(`  No board for ${centreId}, skipping`); return; }
+
+  console.log(`\n[${centreId}] Fetching Monday board ${boardId}...`);
+  const groups = await fetchBoard(boardId);
+  console.log(`  ${groups.length} groups found`);
+
+  let staffMigrated = 0, docsMigrated = 0, docsSkipped = 0, errors = 0;
+
+  for (let gi = 0; gi < groups.length; gi++) {
+    const group = groups[gi];
+    const isActive = !INACTIVE_GROUPS.test(group.title.trim());
+
+    // Upsert room
+    await sbUpsert('staff_rooms', [{
+      centre_id: centreId,
+      group_id: group.id,
+      title: group.title,
+      color: group.color || '#808080',
+      is_active: isActive,
+      sort_order: gi,
+    }], 'centre_id,group_id');
+
+    for (const item of group.items_page.items) {
+      const cv = item.column_values;
+
+      const staffRow = {
+        monday_id:               String(item.id),
+        centre_id:               centreId,
+        group_id:                group.id,
+        group_title:             group.title,
+        group_color:             group.color || '#808080',
+        is_active_group:         isActive,
+        name:                    item.name,
+        qualification:           col(cv, 'status'),
+        position:                col(cv, 'dropdown'),
+        position_category:       col(cv, 'text_mm2xj3x9') || col(cv, 'text_mm2xhty9'),
+        ratio_50:                col(cv, 'status2'),
+        start_date:              parseDate(col(cv, 'date')),
+        end_date:                col(cv, 'text9'),
+        dob:                     parseDate(col(cv, 'dob20')),
+        days_per_week:           col(cv, 'text'),
+        min_hours_pw:            col(cv, 'dup__of_days_per_week__1'),
+        probationary_date:       parseDate(col(cv, 'date40')),
+        email:                   col(cv, 'email20'),
+        mobile:                  col(cv, 'mobile20'),
+        seek_url:                col(cv, 'text_mm2xjkez') || col(cv, 'text_mm2x1sxq'),
+        action:                  col(cv, 'color_mkv9yjjd') || col(cv, 'color_mkv9vd6s'),
+        wwcc_number:             col(cv, 'wwccnum20'),
+        wwcc_expiry:             parseDate(col(cv, 'wwccexp20')),
+        first_aid_code:          col(cv, 'first_aid_code'),
+        first_aid_expiry:        parseDate(col(cv, 'date92')),
+        cpr_code:                col(cv, 'cpr_code'),
+        cpr_expiry:              parseDate(col(cv, 'dup__of_cpr_code')),
+        anaphylaxis_code:        col(cv, 'anaphylaxis_code'),
+        anaphylaxis_expiry:      parseDate(col(cv, 'date35')),
+        child_protection_renewal:parseDate(col(cv, 'date__1')),
+        date_of_qualification:   parseDate(col(cv, 'dateq20')),
+        campus:                  col(cv, 'status8'),
+      };
+
+      await sbUpsert('staff_members', [staffRow], 'monday_id');
+      // Re-lookup the staff record by monday_id to ensure we have the current ID
+      const staffLookup = await sbGet(`/staff_members?monday_id=eq.${item.id}&select=id&limit=1`);
+      const staffId = staffLookup[0]?.id;
+      if (!staffId) { errors++; continue; }
+      staffMigrated++;
+
+      if (skipFiles) continue;
+
+      // Skip file downloads for inactive/exited groups
+      if (!isActive) continue;
+
+      // Collect all document URLs for this staff member dynamically
+      const docEntries = [];
+
+      // Main item file columns
+      for (const c of (cv || [])) {
+        if (c.column?.type !== 'file') continue;
+        const url = (c.text || '').trim();
+        const label = canonicalLabel(c.column.title);
+        if (url && label) docEntries.push({ label, type: 'main', url });
+      }
+
+      // Subitem file columns
+      for (const sub of (item.subitems || [])) {
+        for (const c of (sub.column_values || [])) {
+          if (c.column?.type !== 'file') continue;
+          const url = (c.text || '').trim();
+          const label = canonicalLabel(c.column.title);
+          if (url && label) docEntries.push({ label, type: 'subitem', url });
+        }
+      }
+
+      // Download + upload each doc
+      for (const doc of docEntries) {
+        try {
+          // Derive filename from URL
+          const urlPath = new URL(doc.url).pathname;
+          const origName = decodeURIComponent(urlPath.split('/').pop() || 'file');
+          const ext = path.extname(origName) || '';
+          const storagePath = `${centreId}/${staffId}/${safeName(doc.label)}${ext ? '' : ''}${safeName(origName)}`;
+
+          // Check if already exists in staff_documents
+          const existing = await sbGet(`/staff_documents?monday_url=eq.${encodeURIComponent(doc.url)}&limit=1`);
+          if (existing.length > 0) {
+            if (existing[0].staff_id !== staffId) {
+              // Orphaned doc — re-link to current staff record
+              await fetch(`${SB}/staff_documents?id=eq.${existing[0].id}`, {
+                method: 'PATCH',
+                headers: { ...SB_HEADERS, Prefer: 'return=minimal' },
+                body: JSON.stringify({ staff_id: staffId }),
+              });
+              docsMigrated++;
+            } else {
+              docsSkipped++;
+            }
+            continue;
+          }
+
+          // Download
+          const { buffer, mime } = await downloadFile(doc.url);
+
+          // Upload to storage
+          const uploaded = await uploadToStorage(storagePath, buffer, mime);
+
+          // Insert doc record
+          await fetch(`${SB}/staff_documents`, {
+            method: 'POST',
+            headers: { ...SB_HEADERS, Prefer: 'return=minimal' },
+            body: JSON.stringify({
+              staff_id: staffId,
+              label: doc.label,
+              doc_type: doc.type,
+              storage_path: uploaded,
+              file_name: path.basename(storagePath),
+              mime_type: mime,
+              monday_url: doc.url,
+            }),
+          });
+
+          docsMigrated++;
+        } catch (e) {
+          console.warn(`    [WARN] Doc failed for ${item.name} - ${doc.label}: ${e.message}`);
+          // Still store the monday_url as fallback
+          await fetch(`${SB}/staff_documents`, {
+            method: 'POST',
+            headers: { ...SB_HEADERS, Prefer: 'return=minimal' },
+            body: JSON.stringify({
+              staff_id: staffId,
+              label: doc.label,
+              doc_type: doc.type,
+              monday_url: doc.url,
+            }),
+          }).catch(() => {});
+          errors++;
+        }
+      }
+    }
+
+    process.stdout.write(`  Group ${gi+1}/${groups.length}: ${group.title} (${group.items_page.items.length} staff)\n`);
+  }
+
+  console.log(`  Done: ${staffMigrated} staff, ${docsMigrated} docs migrated, ${docsSkipped} skipped, ${errors} errors`);
+}
+
+async function main() {
+  const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
+  const flags = process.argv.slice(2).filter(a => a.startsWith('--'));
+  const skipFiles = flags.includes('--staff-only');
+  const targetCentre = args[0];
+  const centres = targetCentre ? [targetCentre] : Object.keys(BOARD_IDS);
+  if (skipFiles) console.log('Mode: staff + rooms only (skipping file downloads)');
+
+  console.log(`Migrating ${centres.length} centre(s): ${centres.join(', ')}`);
+  console.log('Storage bucket: staff-documents');
+  console.log('');
+
+  for (const centreId of centres) {
+    try {
+      await migrateCentre(centreId, skipFiles);
+    } catch (e) {
+      console.error(`[${centreId}] FAILED:`, e.message);
+    }
+    // Small delay between centres to avoid rate limits
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  console.log('\nMigration complete.');
+}
+
+main().catch(e => { console.error('Fatal:', e.message); process.exit(1); });

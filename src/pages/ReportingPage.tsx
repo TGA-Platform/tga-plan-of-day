@@ -51,7 +51,7 @@ interface EducatorEntry {
   lunchStart?: string;   // HH:MM - their own lunch break start (shown as dedicated columns)
   lunchEnd?:   string;   // HH:MM - their own lunch break end
   blockType:   'shift' | 'lunch_break' | 'float_move' | 'lunch_cover' | 'leave' | 'support' | 'grouping';
-  staffType:   'room' | 'float' | 'iss' | 'support' | 'leave';
+  staffType:   'room' | 'float' | 'iss' | 'support' | 'leave' | 'external';
   note?:       string;
 }
 
@@ -161,6 +161,31 @@ async function fetchRostersForDate(unitIds: number[], date: string) {
   return r.ok ? r.json() : [];
 }
 
+async function fetchZCasualsForDate(centreName: string, date: string) {
+  const r = await fetch(`/api/z-casuals?centre=${encodeURIComponent(centreName)}&date=${date}`);
+  if (!r.ok) return [];
+  const records: {
+    zJobId: string; name: string; start: string; end: string;
+    status: string; certLevel: string; costCents: number; workspaceId: string;
+  }[] = await r.json().catch(() => []);
+  const toNegId = (s: string) => {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+    return h < 0 ? h : -h;
+  };
+  return records.map(r => ({
+    OperationalUnit: 0,
+    Employee: toNegId(r.zJobId),
+    _DPMetaData: {
+      EmployeeInfo: { DisplayName: r.name },
+      OperationalUnitInfo: { OperationalUnitName: 'Z Casual' },
+    },
+    StartTime: r.start,
+    EndTime: r.end,
+    isExternalCasual: true,
+  }));
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function ReportingPage() {
   const navigate = useNavigate();
@@ -241,6 +266,7 @@ export default function ReportingPage() {
             const isCover    = e.blockType === 'lunch_cover' || e.blockType === 'float_move';
             const isLeave    = e.staffType === 'leave';
             const isFloat    = e.staffType === 'float' || e.staffType === 'iss';
+            const isExternal = e.staffType === 'external';
             // Indent as a sub-row when we've already seen this person's name.
             // Leave entries are always top-level (never indent).
             const isFirstRow = isLeave || !seenNames.has(e.name);
@@ -252,13 +278,13 @@ export default function ReportingPage() {
             const bg = isLunch ? '#fffbeb'
               : isMorningFG  ? '#f0fdf4'
               : isAfternoonFG ? '#faf5ff'
-              : isLeave ? '#fef2f2' : isFloat ? '#eff6ff' : isCover ? '#f0fdf4' : 'white';
+              : isLeave ? '#fef2f2' : isExternal ? '#fff7ed' : isFloat ? '#eff6ff' : isCover ? '#f0fdf4' : 'white';
             const fgBadge = isMorningFG ? 'Morning FG' : isAfternoonFG ? 'Afternoon FG' : '';
             const nameCell = prevSame
               ? `&nbsp;&nbsp;└ ${e.name}`
-              : `${e.name}${isFloat ? ` <span class="badge ${e.staffType}">${e.staffType === 'iss' ? 'ISS' : 'Float'}</span>` : isLeave ? ' <span class="badge leave">Leave</span>' : isGrouping ? ` <span class="badge grouping">${fgBadge}</span>` : ''}`;
+              : `${e.name}${isExternal ? ' <span class="badge external">EC</span>' : isFloat ? ` <span class="badge ${e.staffType}">${e.staffType === 'iss' ? 'ISS' : 'Float'}</span>` : isLeave ? ' <span class="badge leave">Leave</span>' : isGrouping ? ` <span class="badge grouping">${fgBadge}</span>` : ''}`;
             const isSupport = e.staffType === 'support';
-            const typeLabel = isLunch ? 'Lunch' : isMorningFG ? 'Morning FG' : isAfternoonFG ? 'Afternoon FG' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : isSupport ? 'Support' : 'Shift';
+            const typeLabel = isLunch ? 'Lunch' : isMorningFG ? 'Morning FG' : isAfternoonFG ? 'Afternoon FG' : e.blockType === 'lunch_cover' ? 'Lunch cover' : e.blockType === 'float_move' ? 'Float' : isLeave ? 'Leave' : isExternal ? 'External Casual' : isSupport ? 'Support' : 'Shift';
             return `<tr style="background:${bg}">
               <td>${nameCell}</td>
               <td>${isLunch ? '🍽 ' : isCover ? '↳ ' : isMorningFG ? '🌅 ' : isAfternoonFG ? '🌆 ' : ''}${e.room}</td>
@@ -380,6 +406,7 @@ export default function ReportingPage() {
     .badge.iss     { background: #ede9fe; color: #6d28d9; }
     .badge.leave   { background: #fee2e2; color: #dc2626; }
     .badge.grouping{ background: #d1fae5; color: #065f46; }
+    .badge.external { background: #fed7aa; color: #c2410c; }
     .footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid #e5f0e5; font-size: 9px; color: #aaa; text-align: center; }
     @media print {
       body { padding: 10px; font-size: 10px; }
@@ -460,9 +487,10 @@ export default function ReportingPage() {
 
       for (const date of dates) {
         // Fetch in parallel
-        const [att, rosters, allocations, floatScheds, groupingSessionRows, ratioCheckRows, deputyActuals] = await Promise.all([
+        const [att, rosters, zCasuals, allocations, floatScheds, groupingSessionRows, ratioCheckRows, deputyActuals] = await Promise.all([
           fetchAttendance(campus, date),
           fetchRostersForDate(allUnitIds, date),
+          fetchZCasualsForDate(centre.name, date),
           fetch(`/api/staff-allocations?centre=${encodeURIComponent(centre.id)}&date=${date}`)
             .then(r => r.ok ? r.json() : []).catch(() => []),
           fetch(`/api/float-schedules?centre=${encodeURIComponent(centre.id)}&date=${date}`)
@@ -475,6 +503,9 @@ export default function ReportingPage() {
           fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`)
             .then(r => r.ok ? r.json() : []).catch(() => []),
         ]);
+
+        // Merge external casuals into rosters so they're included in the educator report
+        const rostersWithExternal = [...(rosters as any[]), ...(zCasuals as any[])];
         if (needsEducator) groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
 
         // ── Occupancy ────────────────────────────────────────────────────
@@ -662,7 +693,7 @@ export default function ReportingPage() {
 
         // Build a map from employeeId -> natural room id (for covered-person room lookup)
         const empNaturalRoomId: Record<number, string> = {};
-        for (const r of (rosters as any[])) {
+        for (const r of (rostersWithExternal as any[])) {
           const unitId = r.OperationalUnit as number;
           const empId2 = r.Employee as number;
           const naturalRm = centre.rooms.find(rm => rm.deputyUnitId === unitId);
@@ -800,13 +831,14 @@ export default function ReportingPage() {
 
         const entries: EducatorEntry[] = [];
 
-        for (const r of (rosters as any[])) {
+        for (const r of (rostersWithExternal as any[])) {
           const unitId = r.OperationalUnit as number;
           const empId  = r.Employee as number;
           const name   = r._DPMetaData?.EmployeeInfo?.DisplayName ?? `Staff #${empId}`;
           if (name.startsWith('Staff #')) continue;
           const rawUnit = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
           if (rawUnit.includes('staff meeting')) continue;
+          const isExternalCasual = r.isExternalCasual === true;
 
           // Use actual Deputy times from Ratio Check overrides if available, else fall back to rostered
           // Leave entries always use roster times — Deputy clock-in overrides don't apply to leave blocks
@@ -822,7 +854,8 @@ export default function ReportingPage() {
           if (shiftIn === '-' || shiftOut === '-') continue;
 
           const staffType: EducatorEntry['staffType'] =
-            leaveSet2.has(unitId) ? 'leave'
+            isExternalCasual ? 'external'
+            : leaveSet2.has(unitId) ? 'leave'
             : floatSet2.has(unitId) ? 'float'
             : issSet2.has(unitId)   ? 'iss'
             : roomSet2.has(unitId)  ? 'room'
@@ -849,7 +882,7 @@ export default function ReportingPage() {
           // Support (AD, Directors, etc.): fall back to their Deputy unit name so they
           //   always appear in the report; ratio check moves override specific slots.
           const naturalRoomName = naturalRoom?.name ?? (
-            staffType === 'float' ? ''
+            staffType === 'float' || staffType === 'external' ? ''
             : staffType === 'iss'   ? ''
             : deputyUnitName || 'Support'
           );

@@ -22,13 +22,19 @@ export default async function handler(req, res) {
 
   const { centre_id, date, session } = req.method === 'GET' ? req.query : req.body ?? {};
 
-  if (!centre_id || !date) {
-    return res.status(400).json({ error: 'centre_id and date are required' });
+  if (!date) {
+    return res.status(400).json({ error: 'date is required' });
   }
 
   if (req.method === 'GET') {
     // Fetch saved data for a date (all sessions or specific session)
-    let url = `${SUPABASE_URL}/rest/v1/ratio_check_data?centre_id=eq.${encodeURIComponent(centre_id)}&date=eq.${date}&select=session,data,updated_at`;
+    // If centre_id is omitted or 'all', return all centres for the date (bulk mode)
+    let url;
+    if (!centre_id || centre_id === 'all') {
+      url = `${SUPABASE_URL}/rest/v1/ratio_check_data?date=eq.${date}&select=centre_id,session,data,updated_at`;
+    } else {
+      url = `${SUPABASE_URL}/rest/v1/ratio_check_data?centre_id=eq.${encodeURIComponent(centre_id)}&date=eq.${date}&select=session,data,updated_at`;
+    }
     if (session) url += `&session=eq.${encodeURIComponent(session)}`;
 
     const r = await fetch(url, { headers: HEADERS });

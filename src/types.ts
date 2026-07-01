@@ -91,6 +91,60 @@ export interface RoomRatioStatus {
   status: 'green' | 'amber' | 'red';
 }
 
+// ── Staffing Structure (Monday.com) ──────────────────────────────────────────
+
+export type StaffQualification =
+  | 'ECT' | 'WT ECT' | 'Diploma' | 'WT Diploma' | 'Certificate 3' | 'Trainee'
+  | 'ISS' | 'Chef' | 'No Qualification' | string;
+
+export interface StaffDocument {
+  label: string;
+  url: string;
+}
+
+export interface StaffCompliance {
+  wwccNumber?: string;
+  wwccExpiry?: string;        // ISO date
+  firstAidCode?: string;
+  firstAidExpiry?: string;
+  cprCode?: string;
+  cprExpiry?: string;
+  anaphylaxisCode?: string;
+  anaphylaxisExpiry?: string;
+  childProtectionRenewal?: string;
+}
+
+export interface StaffMember {
+  id?: string;          // Supabase UUID (present after migration)
+  mondayId: string;
+  name: string;
+  qualification: StaffQualification;
+  ratio50?: string;           // 50% ratio status
+  position?: string;          // e.g. 'Room Leader', 'Educator'
+  positionCategory?: string;  // 'Full Time' | 'Part Time' | 'Casual'
+  campus?: string;
+  startDate?: string;         // ISO date
+  endDate?: string;           // freeform string
+  dob?: string;
+  daysPerWeek?: string;
+  minHoursPerWeek?: string;
+  probationaryDate?: string;
+  email?: string;
+  mobile?: string;
+  seekUrl?: string;
+  action?: string;            // e.g. 'Send Onboarding Kit'
+  employmentStatus?: string;   // 'Active' | 'Inactive' | 'PPL' | 'Resigned' etc
+  compliance: StaffCompliance;
+  // File attachments on the main item
+  docs: StaffDocument[];      // named docs (qual cert, transcripts, etc.)
+  // Subitem documents (compliance certs)
+  certDocs: StaffDocument[];  // WWC, First Aid, CPR, Anaphylaxis etc.
+  // Derived
+  isActive: boolean;          // has position + no real end date + not resigned
+  isResigned: boolean;
+  isVacancy: boolean;         // placeholder/vacancy item
+}
+
 export interface FloatStaff extends RosteredStaff {
   suggestedRoom?: string;
 }

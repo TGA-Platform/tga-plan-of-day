@@ -27,6 +27,27 @@ function room(id: string, name: string, ageGroup: string, ratio: number, deputyU
   return { id, name, ageGroup, ratio, deputyUnitId, ownaRoomName: ownaPrefix + ' Room' };
 }
 
+// Monday.com staffing structure board ID per centre
+export const STAFFING_BOARD_IDS: Record<string, number> = {
+  'oatley':           1419063930,
+  'wollongong':       983834623,
+  'mount-annan':      980348329,
+  'spring-farm':      6513027863,
+  'denham-court':     6247438158,
+  'ed-park-1':        983840576,
+  'ed-park-2':        3448154419,
+  'wilton':           8719103624,
+  'dapto-1':          1841109563,
+  'dapto-2':          3349576958,
+  'north-wollongong': 6248473627,
+  'shell-cove':       8347556299,
+  'bexley':           983830380,
+  'belfield':         9133300009,
+  'bankstown':        9133302478,
+  'glendale':         18406250043,
+  'edgeworth':        9060612097,
+};
+
 export const CENTRES: Centre[] = [
   {
     id: 'oatley',
@@ -296,6 +317,24 @@ export const CENTRES: Centre[] = [
     leaveUnitIds:    [447, 453, 410],
     nonRatioUnitIds: [394, 395, 396, 397, 398, 407, 408, 409],
   },
+  {
+    id: 'charlestown', name: 'Charlestown',
+    approvedPlaces: 122,
+    rooms: [
+      { id: 'ch_0_1',  name: '0-1 Explorers',   ageGroup: '0-1 yrs', ratio: 4,  deputyUnitId: 489, ownaRoomName: 'Explorers' },
+      { id: 'ch_1_2',  name: '1-2 Adventurers', ageGroup: '1-2 yrs', ratio: 4,  deputyUnitId: 490, ownaRoomName: 'Adventurers' },
+      { id: 'ch_2_3a', name: '2-3 Voyagers',    ageGroup: '2-3 yrs', ratio: 5,  deputyUnitId: 491, ownaRoomName: 'Voyagers' },
+      { id: 'ch_2_3b', name: '2-3 Pioneers',    ageGroup: '2-3 yrs', ratio: 5,  deputyUnitId: 492, ownaRoomName: 'Pioneers' },
+      { id: 'ch_3_4',  name: '3-4 Creators',    ageGroup: '3-4 yrs', ratio: 10, deputyUnitId: 493, ownaRoomName: 'Creators' },
+      { id: 'ch_4_5a', name: '4-5 Inventors',   ageGroup: '4-5 yrs', ratio: 10, deputyUnitId: 495, ownaRoomName: 'Inventors' },
+      { id: 'ch_4_5b', name: '4-5 Achievers',   ageGroup: '4-5 yrs', ratio: 10, deputyUnitId: 494, ownaRoomName: 'Achievers' },
+    ],
+    floatUnitIds:    [496],
+    issUnitIds:      [488],
+    leaveUnitIds:    [501, 502, 500],
+    nonRatioUnitIds: [483, 484, 485, 486, 487, 497, 498, 499],
+    outdoorAreas:    ['Outdoor Area Level 1', 'Outdoor Area Level 2'],
+  },
 ];
 
 export const USERS: User[] = [
@@ -317,6 +356,7 @@ export const USERS: User[] = [
   { email: 'bankstown@tga.edu.au',      role: 'director', centreId: 'bankstown',        name: 'Bankstown' },
   { email: 'glendale@tga.edu.au',       role: 'director', centreId: 'glendale',         name: 'Glendale' },
   { email: 'edgeworth@tga.edu.au',      role: 'director', centreId: 'edgeworth',        name: 'Edgeworth' },
+  { email: 'charlestown@tga.edu.au',    role: 'director', centreId: 'charlestown',      name: 'Charlestown' },
 ];
 
 export const PASSWORDS: Record<string, string> = {
@@ -338,6 +378,7 @@ export const PASSWORDS: Record<string, string> = {
   'bankstown@tga.edu.au':       'bankstown2026',
   'glendale@tga.edu.au':        'glendale2026',
   'edgeworth@tga.edu.au':       'edgeworth2026',
+  'charlestown@tga.edu.au':     'charlestown2026',
 };
 
 

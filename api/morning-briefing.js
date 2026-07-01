@@ -30,10 +30,11 @@ const CENTRES = [
   { id:'north-wollongong', name:'North Wollongong',  ownaName:'North Wollongong', floatUnitIds:[288], issUnitIds:[296], leaveUnitIds:[290,457,293], nonRatioUnitIds:[281,282,287,289,429,297,313,336], rooms:[{id:283,ownaRoomName:'Explorers',ratio:4},{id:284,ownaRoomName:'Adventurers',ratio:4},{id:285,ownaRoomName:'Voyagers',ratio:5},{id:286,ownaRoomName:'Creators',ratio:5},{id:327,ownaRoomName:'Achievers',ratio:10}] },
   { id:'shell-cove',       name:'Shell Cove',        ownaName:'Shell Cove',       floatUnitIds:[355], issUnitIds:[348], leaveUnitIds:[440,458,359], nonRatioUnitIds:[343,344,345,346,347,357,358,356], rooms:[{id:349,ownaRoomName:'Explorers 0-1',ratio:4},{id:350,ownaRoomName:'1 Pioneers 2-3',ratio:4},{id:351,ownaRoomName:'2 Voyagers 2-3',ratio:5},{id:352,ownaRoomName:'Creators 3-4',ratio:5},{id:353,ownaRoomName:'Achievers 4-5',ratio:10},{id:430,ownaRoomName:'Achievers 4-5',ratio:10},{id:354,ownaRoomName:'Achievers 4-5',ratio:10},{id:431,ownaRoomName:'Achievers 4-5',ratio:10}] },
   { id:'bexley',           name:'Bexley',            ownaName:'Bexley',           floatUnitIds:[181], issUnitIds:[226], leaveUnitIds:[446,451,195], nonRatioUnitIds:[111,112,216,164,305,318,330,232], rooms:[{id:113,ownaRoomName:'0-2 Room',ratio:4},{id:125,ownaRoomName:'2-3 Room',ratio:5},{id:115,ownaRoomName:'3-4 Room 1',ratio:10},{id:121,ownaRoomName:'3-4 Room 2',ratio:10},{id:114,ownaRoomName:'4-5 Room',ratio:10}] },
-  { id:'belfield',         name:'Belfield',          ownaName:'Belfield',         floatUnitIds:[389], issUnitIds:[382], leaveUnitIds:[445,450,393], nonRatioUnitIds:[377,378,379,380,381,390,391,392], rooms:[{id:383,ownaRoomName:'0-1 Explorers',ratio:4},{id:384,ownaRoomName:'1-2 Adventurers',ratio:4},{id:385,ownaRoomName:'2-3 Pioneers',ratio:5},{id:486,ownaRoomName:'2-3 Voyagers',ratio:5},{id:387,ownaRoomName:'3-4 Creators',ratio:10},{id:388,ownaRoomName:'4-5 Achievers',ratio:10}] },
-  { id:'bankstown',        name:'Bankstown',         ownaName:'Bankstown',        floatUnitIds:[423], issUnitIds:[416], leaveUnitIds:[418,461,420], nonRatioUnitIds:[411,412,413,414,415,425,424],     rooms:[{id:417,ownaRoomName:'0-2 Explorers',ratio:4},{id:419,ownaRoomName:'2-3 Voyagers',ratio:5},{id:421,ownaRoomName:'3-5 Achievers',ratio:10}] },
-  { id:'glendale',         name:'Glendale',          ownaName:'Glendale',         floatUnitIds:[473], issUnitIds:[465], leaveUnitIds:[466,467,469], nonRatioUnitIds:[461,462,463,464,479,478,474],     rooms:[{id:468,ownaRoomName:'Explorers',ratio:4},{id:470,ownaRoomName:'Adventurers',ratio:4},{id:471,ownaRoomName:'Voyagers',ratio:5},{id:472,ownaRoomName:'Pioneers',ratio:5},{id:476,ownaRoomName:'Creators',ratio:10},{id:477,ownaRoomName:'Achievers',ratio:10}] },
-  { id:'edgeworth',        name:'Edgeworth',         ownaName:'Edgeworth',        floatUnitIds:[406], issUnitIds:[399], leaveUnitIds:[400,401,403], nonRatioUnitIds:[394,395,396,397,398,407,408,409], rooms:[{id:402,ownaRoomName:'0-1 Explorers',ratio:4},{id:404,ownaRoomName:'1-2 Adventurers',ratio:4},{id:405,ownaRoomName:'2-3 Voyagers',ratio:5},{id:410,ownaRoomName:'3-4 Creators',ratio:10},{id:476,ownaRoomName:'4-5 Achievers',ratio:10}] },
+  { id:'belfield',         name:'Belfield',          ownaName:'Belfield',         floatUnitIds:[389], issUnitIds:[382], leaveUnitIds:[445,450,393], nonRatioUnitIds:[377,378,379,380,381,390,391,392], rooms:[{id:383,ownaRoomName:'0-1 Explorers',ratio:4},{id:384,ownaRoomName:'1-2 Adventurers',ratio:4},{id:385,ownaRoomName:'2-3 Pioneers',ratio:5},{id:386,ownaRoomName:'2-3 Voyagers',ratio:5},{id:387,ownaRoomName:'3-4 Creators',ratio:10},{id:388,ownaRoomName:'4-5 Achievers',ratio:10},{id:439,ownaRoomName:'4-5 Inventors',ratio:10}] },
+  { id:'bankstown',        name:'Bankstown',         ownaName:'Bankstown',        floatUnitIds:[423], issUnitIds:[416], leaveUnitIds:[444,449,427], nonRatioUnitIds:[411,412,413,414,415,425,424],     rooms:[{id:417,ownaRoomName:'0-2 Explorers',ratio:4},{id:420,ownaRoomName:'2-3 Voyagers',ratio:5},{id:422,ownaRoomName:'3-5 Achievers',ratio:10}] },
+  { id:'glendale',         name:'Glendale',          ownaName:'Glendale',         floatUnitIds:[473], issUnitIds:[465], leaveUnitIds:[476,477,475], nonRatioUnitIds:[461,462,463,464,479,478,474],     rooms:[{id:466,ownaRoomName:'Explorers',ratio:4},{id:467,ownaRoomName:'Adventurers',ratio:4},{id:468,ownaRoomName:'Voyagers',ratio:5},{id:469,ownaRoomName:'Pioneers',ratio:5},{id:470,ownaRoomName:'Creators',ratio:10},{id:471,ownaRoomName:'Achievers',ratio:10}] },
+  { id:'edgeworth',        name:'Edgeworth',         ownaName:'Edgeworth',        floatUnitIds:[406], issUnitIds:[399], leaveUnitIds:[447,453,410], nonRatioUnitIds:[394,395,396,397,398,407,408,409], rooms:[{id:400,ownaRoomName:'0-1 Explorers',ratio:4},{id:401,ownaRoomName:'1-2 Adventurers',ratio:4},{id:403,ownaRoomName:'2-3 Voyagers',ratio:5},{id:435,ownaRoomName:'2-3 Wonderlings',ratio:5},{id:404,ownaRoomName:'3-4 Creators',ratio:10},{id:436,ownaRoomName:'3-4 Dreamers',ratio:10},{id:402,ownaRoomName:'4-5 Achievers',ratio:10},{id:405,ownaRoomName:'4-5 Inventors',ratio:10}] },
+  { id:'charlestown',      name:'Charlestown',       ownaName:'Charlestown',      floatUnitIds:[496], issUnitIds:[488], leaveUnitIds:[501,502,500], nonRatioUnitIds:[483,484,485,486,487,497,498,499], rooms:[{id:489,ownaRoomName:'Explorers',ratio:4},{id:490,ownaRoomName:'Adventurers',ratio:4},{id:491,ownaRoomName:'Voyagers',ratio:5},{id:492,ownaRoomName:'Pioneers',ratio:5},{id:493,ownaRoomName:'Creators',ratio:10},{id:495,ownaRoomName:'Inventors',ratio:10},{id:494,ownaRoomName:'Achievers',ratio:10}] },
 ];
 
 function sb(path) {
@@ -86,7 +87,39 @@ export default async function handler(req, res) {
   const rosters = allRosters.flatMap(r => r.rosters ?? []);
 
   // Fetch attendance for the date (children sign-ins)
-  const attendance = await sb(`attendance_daily?date=eq.${date}&select=campus,room,age,sign_in`);
+  // Paginate attendance to beat Supabase's 1000-row default cap
+  const attendance = [];
+  {
+    const PAGE = 1000;
+    let offset = 0;
+    while (true) {
+      const page = await sb(`attendance_daily?date=eq.${date}&select=campus,room,age,sign_in&limit=${PAGE}&offset=${offset}`);
+      if (!Array.isArray(page) || page.length === 0) break;
+      attendance.push(...page);
+      if (page.length < PAGE) break;
+      offset += PAGE;
+    }
+  }
+
+  // Fetch saved ratio-check state (staffMoves) for all centres
+  const ratioCheckRows = await sb(`ratio_check_data?date=eq.${date}&select=centre_id,session,data`)
+    .catch(() => []);
+  const staffMovesByCentre = {};
+  for (const row of ratioCheckRows) {
+    const moves = row.data?.staffMoves || {};
+    const existing = staffMovesByCentre[row.centre_id] || {};
+    staffMovesByCentre[row.centre_id] = { ...existing, ...moves };
+  }
+
+  // Fetch cached Z Staffing casuals for all centres
+  const zCasualRows = await sb(`z_casuals?date=eq.${date}&select=centre,start_time,end_time`)
+    .catch(() => []);
+  const zCasualCountByCentre = {};
+  for (const row of zCasualRows) {
+    if (row.start_time && row.end_time) {
+      zCasualCountByCentre[row.centre] = (zCasualCountByCentre[row.centre] || 0) + 1;
+    }
+  }
 
   const results = [];
 
@@ -114,23 +147,35 @@ export default async function handler(req, res) {
     const leaveSet    = new Set(centre.leaveUnitIds);
     const floatSet    = new Set(centre.floatUnitIds);
     const nonRatioSet = new Set(centre.nonRatioUnitIds);
+    const staffMoves  = staffMovesByCentre[centre.id] || {};
+    const zCasualFloatCount = zCasualCountByCentre[centre.name] || 0;
+
+    // Effective unit type considering saved staffMoves
+    function effectiveUnitType(r) {
+      const move = staffMoves[String(r.employeeId)];
+      if (move === 'float') return 'float';
+      if (move === 'support') return 'support';
+      if (leaveSet.has(r.unitId)) return 'leave';
+      if (floatSet.has(r.unitId)) return 'float';
+      if (nonRatioSet.has(r.unitId)) return 'support';
+      if (centre.rooms.some(rm => rm.id === r.unitId)) return 'room';
+      return 'other';
+    }
 
     const staffIds = new Set(centreRosters
-      .filter(r => !leaveSet.has(r.unitId) && !floatSet.has(r.unitId)
-        && !nonRatioSet.has(r.unitId)
-        && centre.rooms.some(rm => rm.id === r.unitId))
+      .filter(r => effectiveUnitType(r) === 'room')
       .map(r => r.employeeId));
 
     const absentIds = new Set(centreRosters
-      .filter(r => leaveSet.has(r.unitId))
+      .filter(r => effectiveUnitType(r) === 'leave')
       .map(r => r.employeeId));
 
-    const floatEntries = centreRosters.filter(r => floatSet.has(r.unitId));
+    const floatEntries = centreRosters.filter(r => effectiveUnitType(r) === 'float');
     const floatIds     = new Set(floatEntries.map(r => r.employeeId));
-    const floatCount   = floatEntries.length;
+    const floatCount   = floatEntries.length + zCasualFloatCount;
 
     const adCount = centreRosters.filter(r =>
-      nonRatioSet.has(r.unitId) &&
+      effectiveUnitType(r) === 'support' &&
       (r.unitName.toLowerCase().includes('assistant director') ||
        r.unitName.toLowerCase().includes('asst director') ||
        r.unitName.toLowerCase().includes('ass. director'))
@@ -144,7 +189,12 @@ export default async function handler(req, res) {
         .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
         .map(a => parseAgeMonths(a.age));
       const roomRequired = calcRequired(roomKids);
-      const roomStaff    = centreRosters.filter(r => r.unitId === room.id).length;
+      const moveDest = String(room.id);
+      const roomStaff = centreRosters.filter(r => {
+        const dest = staffMoves[String(r.employeeId)];
+        if (dest === moveDest || dest === room.name) return true;
+        return effectiveUnitType(r) === 'room' && r.unitId === room.id;
+      }).length;
       return { required: roomRequired, staffCount: roomStaff };
     });
 

@@ -98,7 +98,7 @@ export default function MorningBriefingPage() {
   const navigate    = useNavigate();
   const user        = getUser();
   const allowed     = user ? getAllowedCentres(user) : [];
-  const isCeo       = user?.role === 'ceo';
+  const isExec      = user?.role === 'admin' || user?.role === 'ceo';
   const [date, setDate] = useState(todayStr());
   const lastWeek        = lastWeekStr(date);
   const isToday         = date === todayStr();
@@ -116,12 +116,13 @@ export default function MorningBriefingPage() {
   const [lastSnapshot, setLastSnapshot] = useState<Date | null>(null);
   const [loadError, setLoadError]       = useState<string | null>(null);
   const [viewMode, setViewMode]         = useState<ViewMode>('allday');
+  const [totalBooked, setTotalBooked]   = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // Fetch today + last week attendance + last-snapshot time in parallel
-      const [todayAtt, lastWeekAtt, unitsRes, lastSnapshotRes] = await Promise.all([
+      // Fetch today + last week attendance + last-snapshot time + all forecasts in parallel
+      const [todayAtt, lastWeekAtt, unitsRes, lastSnapshotRes, allForecasts] = await Promise.all([
         withCache(`briefing-today:${date}`, () =>
           fetch(`/api/attendance?date=${date}`).then(r => r.json()), 3 * 60 * 1000),
         withCache(`briefing-lw:${lastWeek}`, () =>
@@ -132,6 +133,10 @@ export default function MorningBriefingPage() {
         fetch(`https://tgxpvzlibquqnldgmwho.supabase.co/rest/v1/attendance_daily?date=eq.${date}&select=updated_at&order=updated_at.desc&limit=1`, {
           headers: { apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NDE3MjUsImV4cCI6MjA4OTUxNzcyNX0.v_thHOU7xq0gaFhcnb2A3iBl5H7bAp9IbT9IPMg_jTY' }
         }).then(r => r.json()).catch(() => []),
+        withCache(`briefing-forecast-all:${date}`, () =>
+          fetch(`/api/room-forecast?campus=all&date=${date}`)
+            .then(r => r.json())
+            .catch(() => null), 5 * 60 * 1000),
       ]);
 
       // Current Sydney time as HH:MM for predicted_sign_out comparison
@@ -191,6 +196,31 @@ export default function MorningBriefingPage() {
         centreRosterMap.set(centre.id, centreRosters);
       }
 
+      // Fetch Z Staffing external casuals for ALL centres in one call.
+      // This is best-effort: if Z Staffing is slow, timeout and continue without it.
+      const allZCasuals = await withCache('briefing-zcasuals-all:' + date, () =>
+        Promise.race([
+          fetch('/api/z-casuals?centre=all&date=' + date)
+            .then(r => r.json())
+            .then((rows) => (rows || []).filter((r: { start?: string; end?: string }) => r.start && r.end)),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('z-casuals timeout')), 5000)
+          ),
+        ]).catch(() => [] as Array<{ start?: string; end?: string; centre?: string }>), 5 * 60 * 1000);
+      const zCasualMap = new Map(allowed.map(c => [c.id, (allZCasuals || []).filter((r: { centre?: string }) => r.centre === c.name)]));
+
+      // Fetch saved staff allocations for ALL centres in one call
+      // This is the same source the Ratio Dashboard panel uses; it stores
+      // per-employee moves keyed by employeeId (values are room.id or 'float'/'support').
+      const allStaffAllocRows = await withCache('briefing-staff-allocations-all:' + date, () =>
+        fetch('/api/staff-allocations?centre=all&date=' + date)
+          .then(r => r.json())
+          .catch(() => [] as Array<{ centre_id?: string; moves?: Record<string, string> }>), 5 * 60 * 1000);
+      const staffMovesMap = new Map(allowed.map(c => {
+        const row = (allStaffAllocRows || []).find((r: { centre_id?: string }) => r.centre_id === c.id);
+        return [c.id, row?.moves ?? {}] as [string, Record<string, string>];
+      }));
+
       const result: CentreCard[] = [];
       for (const centre of allowed) {
         const campus = centre.ownaName ?? centre.name;
@@ -198,8 +228,27 @@ export default function MorningBriefingPage() {
 
         // Use the same rosters as the ratio dashboard (identical cache key)
         const centreRosters = centreRosterMap.get(centre.id) ?? [];
+        const zCasuals = zCasualMap.get(centre.id) ?? [];
+        const zCasualFloatCount = zCasuals.length;
+        const staffMoves: Record<string, string> = staffMovesMap.get(centre.id) ?? {};
         const leaveSet  = new Set((centre.leaveUnitIds  ?? []));
         const floatSet  = new Set((centre.floatUnitIds  ?? []));
+        const nonRatioSet = new Set(centre.nonRatioUnitIds ?? []);
+
+        // Effective location considering saved staff allocations from ratio dashboard
+        // Moves are per-employee; values are room.id (e.g. 'sf_0_1') or 'float'/'support'/'iss'.
+        function effectiveUnitType(r: typeof centreRosters[number]): 'room' | 'float' | 'support' | 'leave' | 'other' {
+          const move = staffMoves[String(r.employeeId)];
+          if (move === 'float') return 'float';
+          if (move === 'support') return 'support';
+          if (move === 'iss') return 'support';
+          if (move && centre.rooms.some(rm => rm.id === move)) return 'room';
+          if (leaveSet.has(r.unitId)) return 'leave';
+          if (floatSet.has(r.unitId)) return 'float';
+          if (nonRatioSet.has(r.unitId)) return 'support';
+          if (centre.rooms.some(rm => rm.deputyUnitId === r.unitId)) return 'room';
+          return 'other';
+        }
 
         const presentKids  = presentByCampus[campus] ?? [];
         // Per-room required for all three modes
@@ -219,7 +268,12 @@ export default function MorningBriefingPage() {
           const owna = (room.ownaRoomName ?? room.name).toLowerCase();
           const rk = kids.filter(c => c.room.toLowerCase().includes(owna));
           const { required: roomRequired } = calcRequiredStaff(rk.map(c => ({ ageMonths: parseAgeMonths(c.age) } as any)));
-          const roomStaff = centreRosters.filter(r => r.unitId === room.deputyUnitId);
+          // Count staff whose effective location is this room (moved-in or originally here)
+          const roomStaff = centreRosters.filter(r => {
+            const dest = staffMoves[String(r.employeeId)];
+            if (dest) return dest === room.id;
+            return r.unitId === room.deputyUnitId;
+          });
           return { required: roomRequired, staffCount: roomStaff.length };
         });
         const required         = allDayCalc.total;
@@ -229,24 +283,21 @@ export default function MorningBriefingPage() {
         const requiredExpected = Math.round(expectedCount / Math.max(kids.length, 1) * required);
 
         // Staff counts from centreRosters (same source as ratio dashboard)
-        const nonRatioSet = new Set(centre.nonRatioUnitIds ?? []);
         const staffIds = new Set(centreRosters
-          .filter(r => !leaveSet.has(r.unitId) && !floatSet.has(r.unitId)
-            && !nonRatioSet.has(r.unitId)
-            && centre.rooms.some(rm => rm.deputyUnitId === r.unitId))
+          .filter(r => effectiveUnitType(r) === 'room')
           .map(r => r.employeeId));
         const absentIds = new Set(centreRosters
-          .filter(r => leaveSet.has(r.unitId))
+          .filter(r => effectiveUnitType(r) === 'leave')
           .map(r => r.employeeId));
         // Use raw entry counts (not unique sets) to exactly match staffing analysis Float Pool:
         // floats.length and adStaff.length are array lengths, not deduped employee counts.
         // Split-shift staff have multiple entries and each counts.
-        const floatEntries = centreRosters.filter(r => floatSet.has(r.unitId));
+        const floatEntries = centreRosters.filter(r => effectiveUnitType(r) === 'float');
         const floatIds = new Set(floatEntries.map(r => r.employeeId)); // still need set for absence calc
-        const floatCount = floatEntries.length; // matches staffing analysis floats.length
+        const floatCount = floatEntries.length + zCasualFloatCount; // include Z Staffing external casuals as floats // matches staffing analysis floats.length
         // AD = only 'Assistant Director' unitName entries (matches staffing analysis adStaff filter)
         const adCount = centreRosters.filter(r =>
-          nonRatioSet.has(r.unitId) &&
+          effectiveUnitType(r) === 'support' &&
           (r.unitName?.toLowerCase().includes('assistant director') ||
            r.unitName?.toLowerCase().includes('asst director') ||
            r.unitName?.toLowerCase().includes('ass. director'))
@@ -287,6 +338,16 @@ export default function MorningBriefingPage() {
         // Float surplus: includes room surplus contribution
         const floatSurplus = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
 
+        if (centre.id === 'spring-farm') {
+          console.log('[briefing-debug] Spring Farm', {
+            required, staffIdsSize: staffIds.size, floatIdsSize: floatIds.size, totalStaff,
+            absent, roomAndFloatAbsent, totalAvailable,
+            totalFloorStaff, totalRatioShortage, totalSurplus, netShortageAfterRealloc,
+            bufferRequired: bufferRequired.toFixed(2), effectiveFloatCount, adAvailable,
+            totalFloatersNeeded: totalFloatersNeeded.toFixed(2), casualsNeeded: casualsNeeded.toFixed(2),
+          });
+        }
+
 
         // Status = ratio compliance only (not buffer/casuals)
         // Green = more staff than required, Amber = exact match, Red = short
@@ -319,6 +380,12 @@ export default function MorningBriefingPage() {
           status,
         });
       }
+
+      // Sum booked children across all centres (from room-forecast)
+      const bookedValues = Object.values(allForecasts as Record<string, { booked?: number | null } | null>)
+        .map(f => f?.booked)
+        .filter((b): b is number => b != null);
+      setTotalBooked(bookedValues.length > 0 ? bookedValues.reduce((a, b) => a + b, 0) : null);
 
       // Sort: at-risk first, then by children desc
       result.sort((a,b) => {
@@ -403,7 +470,7 @@ export default function MorningBriefingPage() {
               ›
             </button>
           </div>
-          {isCeo && (
+          {isExec && (
             <button onClick={() => navigate('/summary')}
               className="border rounded-xl px-4 py-2 text-sm font-semibold"
               style={{ borderColor: '#D0E8B8', color: '#5a9228' }}>
@@ -444,11 +511,18 @@ export default function MorningBriefingPage() {
         </div>
       )}
 
-      {/* ── CEO top stats ── */}
-      {isCeo && (
-        <div className="rounded-2xl p-5 mb-6 grid grid-cols-2 sm:grid-cols-4 gap-4"
+      {/* ── Executive top stats (admin + CEO) ── */}
+      {isExec && (
+        <div className="rounded-2xl p-5 mb-6 grid grid-cols-2 sm:grid-cols-5 gap-4"
           style={{ backgroundColor: '#2d5c18' }}>
           <StatBlock icon="🧒" label={viewMode === 'present' ? 'Children present' : viewMode === 'day' ? 'Children expected' : 'Children today'} value={loading ? '...' : totalKids} />
+          <StatBlock icon="📖" label="Booked" value={loading ? '...' : totalBooked ?? '—'}
+            sub={(() => {
+              const totalApproved = allowed.reduce((sum, c) => sum + (c.approvedPlaces ?? 0), 0);
+              return totalBooked != null && totalApproved > 0
+                ? `${Math.round((totalBooked / totalApproved) * 100)}% of ${totalApproved} capacity`
+                : `${totalApproved} capacity`;
+            })()} />
           <StatBlock icon="👥" label={viewMode === 'present' ? 'Staff signed in' : 'Staff rostered'} value={loading ? '...' : totalStaff} />
           <StatBlock icon="🚫" label="Staff absent" value={loading ? '...' : totalAbsent} />
           <StatBlock icon="👷" label="Casuals recommended" value={loading ? '...' : totalCasuals > 0 ? `${fmtFTE(totalCasuals)} FTE` : '✅ None'}
@@ -458,8 +532,8 @@ export default function MorningBriefingPage() {
 
       {/* ── Centre cards ── */}
       {loading ? (
-        <div style={isCeo ? { display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', width: '100%' } : { display: 'grid', gap: '16px', maxWidth: '672px' }}>
-          {Array.from({ length: isCeo ? 6 : 1 }).map((_, i) => (
+        <div style={isExec ? { display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', width: '100%' } : { display: 'grid', gap: '16px', maxWidth: '672px' }}>
+          {Array.from({ length: isExec ? 6 : 1 }).map((_, i) => (
             <div key={i} className="rounded-2xl border p-5 animate-pulse"
               style={{ borderColor: '#E2F1DA', backgroundColor: 'white' }}>
               <div className="h-5 w-40 bg-gray-200 rounded mb-4" />
@@ -470,7 +544,7 @@ export default function MorningBriefingPage() {
           ))}
         </div>
       ) : (
-        <div style={isCeo ? { display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', width: '100%' } : { display: 'grid', gap: '16px', maxWidth: '672px' }}>
+        <div style={isExec ? { display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', width: '100%' } : { display: 'grid', gap: '16px', maxWidth: '672px' }}>
           {cards.map(card => (
             <div
               key={card.centreId}
@@ -534,9 +608,9 @@ export default function MorningBriefingPage() {
                       <div className="text-xl font-bold" style={{ color: '#050505' }}>{viewRequired}</div>
                       <div className="text-xs" style={{ color: '#596570' }}>Required</div>
                     </div>
-                    {/* 3. Rostered (available = rostered minus those absent from shift) */}
+                    {/* 3. Rostered (full rostered group; absence called out below) */}
                     <div className="text-center">
-                      <div className="text-xl font-bold" style={{ color: '#050505' }}>{card.staffAvailable}</div>
+                      <div className="text-xl font-bold" style={{ color: '#050505' }}>{card.staffRostered}</div>
                       <div className="text-xs" style={{ color: '#596570' }}>Rostered</div>
                       {card.staffAbsent > 0 && (
                         <div className="text-xs" style={{ color: '#dc2626' }}>{card.staffAbsent} absent</div>
