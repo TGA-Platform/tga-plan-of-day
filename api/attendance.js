@@ -1,6 +1,17 @@
 const SUPABASE_URL  = 'https://tgxpvzlibquqnldgmwho.supabase.co';
 const SERVICE_KEY   = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
 
+/** Calculate age in months from DOB for a target date (AEST) */
+function calcAgeMonths(dobStr, targetStr) {
+  if (!dobStr || !targetStr) return null;
+  const dob    = new Date(dobStr + 'T00:00:00+10:00');
+  const target = new Date(targetStr + 'T12:00:00+10:00');
+  const months = (target.getFullYear() - dob.getFullYear()) * 12
+    + (target.getMonth() - dob.getMonth())
+    + (target.getDate() < dob.getDate() ? -1 : 0);
+  return Math.max(0, months);
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -41,5 +52,34 @@ export default async function handler(req, res) {
     offset += PAGE;
   }
 
-  res.status(200).json(all);
+  // Fetch DOBs from children_enrolled so we can recalculate age accurately for the target date
+  const campusNames = campus ? [campus] : [...new Set(all.map(r => r.campus).filter(Boolean))];
+  const dobLookup = {};
+  if (campusNames.length > 0) {
+    try {
+      const dobUrl = `${SUPABASE_URL}/rest/v1/children_enrolled?select=full_name,campus,dob&campus=in.(${campusNames.map(c => encodeURIComponent(c)).join(',')})&limit=5000`;
+      const dobRes = await fetch(dobUrl, {
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+      });
+      if (dobRes.ok) {
+        const enrolled = await dobRes.json();
+        for (const c of enrolled) {
+          const key = `${(c.campus ?? '').toLowerCase().trim()}|${(c.full_name ?? '').toLowerCase().trim()}`;
+          dobLookup[key] = c.dob;
+        }
+      }
+    } catch (e) {
+      console.error('[attendance] DOB fetch failed:', e.message);
+    }
+  }
+
+  // Recalculate ageMonths from DOB for every record
+  const enriched = all.map(r => {
+    const key = `${(r.campus ?? '').toLowerCase().trim()}|${(r.child_name ?? '').toLowerCase().trim()}`;
+    const dob = dobLookup[key] ?? null;
+    const ageMonths = dob ? calcAgeMonths(dob, date) : null;
+    return { ...r, dob, ageMonths };
+  });
+
+  res.status(200).json(enriched);
 }

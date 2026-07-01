@@ -1079,7 +1079,7 @@ export default function RatioDashboardPage() {
         setOwnaRefreshedAt(null); // no Owna scrape for future dates
       } else {
         // Past/today: map actual attendance rows
-        const safeAttendance: { child_name: string; room: string; sign_in: string|null; sign_out: string|null; predicted_sign_out: string|null; age: string|null; updated_at?: string|null }[] = Array.isArray(attendanceRes) ? attendanceRes : [];
+        const safeAttendance: { child_name: string; room: string; sign_in: string|null; sign_out: string|null; predicted_sign_out: string|null; age: string|null; ageMonths?: number|null; dob?: string|null; updated_at?: string|null }[] = Array.isArray(attendanceRes) ? attendanceRes : [];
         childRows = safeAttendance.map(row => ({
           child_name: row.child_name,
           room: row.room,
@@ -1087,7 +1087,7 @@ export default function RatioDashboardPage() {
           sign_out: row.sign_out,
           predicted_sign_out: row.predicted_sign_out ?? null,
           age: row.age,
-          ageMonths: parseAgeMonths(row.age),
+          ageMonths: row.ageMonths ?? parseAgeMonths(row.age),
         }));
         const latestScrape = safeAttendance
           .map(r => r.updated_at ? new Date(r.updated_at) : null)

@@ -90,7 +90,7 @@ export default function RatioSummaryPage() {
       const [attRes, unitsRes] = await Promise.all([
         withCache(`summary-att:${date}`, () =>
           fetch(`/api/attendance?date=${date}`).then(r => r.json())
-        ) as Promise<{ campus: string; child_name: string; room: string; sign_in: string | null; sign_out: string | null; age: string | null; }[]>,
+        ) as Promise<{ campus: string; child_name: string; room: string; sign_in: string | null; sign_out: string | null; age: string | null; ageMonths?: number | null; dob?: string | null; }[]>,
         withCache('deputy-units', () =>
           fetch('/api/deputy-units').then(r => r.json())
         , 10 * 60 * 1000) as Promise<DeputyUnit[]>,  // units rarely change — 10 min TTL
@@ -136,7 +136,7 @@ export default function RatioSummaryPage() {
         // Map children for ratio calc
         const children = campusRows
           .filter(r => r.sign_in) // all who attended
-          .map(r => ({ room: r.room, ageMonths: parseAgeMonths(r.age) }));
+          .map(r => ({ room: r.room, ageMonths: r.ageMonths ?? parseAgeMonths(r.age) }));
 
         // Match campus to configured centre (supports ownaName override e.g. Ed Park 1 ? Edmondson Park 1)
         const configCentre = CENTRES.find(c =>
