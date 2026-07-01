@@ -584,7 +584,7 @@ export default function ReportingPage() {
               const psoM = hhmm(r.predicted_sign_out);
               if (soM === null && psoM !== null && psoM <= slotMinutes) return false;
               return true;
-            }).map((r: any) => ({ ageMonths: parseAgeMonths(r.age ?? null), child_name: r.child_name ?? '', room: r.room ?? '', sign_in: r.sign_in, sign_out: r.sign_out, predicted_sign_out: r.predicted_sign_out, age: r.age }));
+            }).map((r: any) => ({ ageMonths: r.ageMonths ?? parseAgeMonths(r.age ?? null), child_name: r.child_name ?? '', room: r.room ?? '', sign_in: r.sign_in, sign_out: r.sign_out, predicted_sign_out: r.predicted_sign_out, age: r.age }));
             const childrenPresent = childrenAtSlot.length;
             // Required staff calculated PER ROOM independently — each room must meet its
             // own ratio. Cannot use carryover between rooms (that would undercount).

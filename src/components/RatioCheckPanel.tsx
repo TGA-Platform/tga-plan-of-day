@@ -525,7 +525,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               child_name: r.child_name ?? '', room: r.room ?? '',
               sign_in: r.sign_in ?? null, sign_out: r.sign_out ?? null,
               predicted_sign_out: r.predicted_sign_out ?? null,
-              age: r.age ?? null, ageMonths: parseAgeMonths(r.age ?? null),
+              age: r.age ?? null, ageMonths: r.ageMonths ?? parseAgeMonths(r.age ?? null),
             })));
             if (!cancelled) setLastAttendanceRefresh(new Date());
           }
@@ -554,7 +554,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               child_name: r.child_name ?? '', room: r.room ?? '',
               sign_in: r.sign_in ?? null, sign_out: r.sign_out ?? null,
               predicted_sign_out: r.predicted_sign_out ?? null,
-              age: r.age ?? null, ageMonths: parseAgeMonths(r.age ?? null),
+              age: r.age ?? null, ageMonths: r.ageMonths ?? parseAgeMonths(r.age ?? null),
             })));
             setHistDate(lastWeek);
           }
@@ -583,7 +583,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             child_name: r.child_name ?? '', room: r.room ?? '',
             sign_in: r.sign_in ?? null, sign_out: r.sign_out ?? null,
             predicted_sign_out: r.predicted_sign_out ?? null,
-            age: r.age ?? null, ageMonths: parseAgeMonths(r.age ?? null),
+            age: r.age ?? null, ageMonths: r.ageMonths ?? parseAgeMonths(r.age ?? null),
           })));
           setLastAttendanceRefresh(new Date());
         }
