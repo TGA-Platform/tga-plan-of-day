@@ -106,7 +106,9 @@ function parseStatus(raw) {
 
 async function upsertToSupabase(rows) {
   if (!rows.length) return;
-  const resp = await fetch(`${SUPABASE_URL}/rest/v1/z_casuals`, {
+  // Use z_job_id as the conflict target so existing rows are updated.
+  const url = `${SUPABASE_URL}/rest/v1/z_casuals?on_conflict=z_job_id`;
+  const resp = await fetch(url, {
     method: 'POST',
     headers: {
       apikey: SERVICE_KEY,

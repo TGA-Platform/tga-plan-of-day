@@ -127,7 +127,9 @@ function parseStatus(raw) {
 
 async function upsertToSupabase(rows) {
   if (!rows.length) return;
-  const resp = await fetch(`${SUPABASE_URL}/rest/v1/z_casuals`, {
+  // Use z_job_id as the conflict target so existing rows are updated.
+  const url = `${SUPABASE_URL}/rest/v1/z_casuals?on_conflict=z_job_id`;
+  const resp = await fetch(url, {
     method: 'POST',
     headers: {
       apikey: SERVICE_KEY,
@@ -142,7 +144,7 @@ async function upsertToSupabase(rows) {
     // Table may not exist yet — try to create it then retry once
     if (resp.status === 404 || txt.includes('does not exist')) {
       await createTableIfNeeded();
-      await fetch(`${SUPABASE_URL}/rest/v1/z_casuals`, {
+      await fetch(url, {
         method: 'POST',
         headers: {
           apikey: SERVICE_KEY,
