@@ -212,15 +212,6 @@ export default function MorningBriefingPage() {
       // Fetch saved staff allocations for ALL centres in one call
       // This is the same source the Ratio Dashboard panel uses; it stores
       // per-employee moves keyed by employeeId (values are room.id or 'float'/'support').
-      const allStaffAllocRows = await withCache('briefing-staff-allocations-all:' + date, () =>
-        fetch('/api/staff-allocations?centre=all&date=' + date)
-          .then(r => r.json())
-          .catch(() => [] as Array<{ centre_id?: string; moves?: Record<string, string> }>), 5 * 60 * 1000);
-      const staffMovesMap = new Map(allowed.map(c => {
-        const row = (allStaffAllocRows || []).find((r: { centre_id?: string }) => r.centre_id === c.id);
-        return [c.id, row?.moves ?? {}] as [string, Record<string, string>];
-      }));
-
       const result: CentreCard[] = [];
       for (const centre of allowed) {
         const campus = centre.ownaName ?? centre.name;
@@ -230,25 +221,21 @@ export default function MorningBriefingPage() {
         const centreRosters = centreRosterMap.get(centre.id) ?? [];
         const zCasuals = zCasualMap.get(centre.id) ?? [];
         const zCasualFloatCount = zCasuals.length;
-        const staffMoves: Record<string, string> = staffMovesMap.get(centre.id) ?? {};
+        // staffMoves intentionally not used for card stats so they match Ratio Dashboard staffing analysis
         const leaveSet  = new Set((centre.leaveUnitIds  ?? []));
         const floatSet  = new Set((centre.floatUnitIds  ?? []));
         const nonRatioSet = new Set(centre.nonRatioUnitIds ?? []);
 
-        // Effective location considering saved staff allocations from ratio dashboard
-        // Moves are per-employee; values are room.id (e.g. 'sf_0_1') or 'float'/'support'/'iss'.
-        function effectiveUnitType(r: typeof centreRosters[number]): 'room' | 'float' | 'support' | 'leave' | 'other' {
-          const move = staffMoves[String(r.employeeId)];
-          if (move === 'float') return 'float';
-          if (move === 'support') return 'support';
-          if (move === 'iss') return 'support';
-          if (move && centre.rooms.some(rm => rm.id === move)) return 'room';
+        // Raw unit type from roster (ignoring manual moves) — used for card stats
+        // so they match the Ratio Dashboard staffing analysis.
+        function rawUnitType(r: typeof centreRosters[number]): 'room' | 'float' | 'support' | 'leave' | 'other' {
           if (leaveSet.has(r.unitId)) return 'leave';
           if (floatSet.has(r.unitId)) return 'float';
           if (nonRatioSet.has(r.unitId)) return 'support';
           if (centre.rooms.some(rm => rm.deputyUnitId === r.unitId)) return 'room';
           return 'other';
         }
+
 
         const presentKids  = presentByCampus[campus] ?? [];
         // Per-room required for all three modes
@@ -268,12 +255,8 @@ export default function MorningBriefingPage() {
           const owna = (room.ownaRoomName ?? room.name).toLowerCase();
           const rk = kids.filter(c => c.room.toLowerCase().includes(owna));
           const { required: roomRequired } = calcRequiredStaff(rk.map(c => ({ ageMonths: parseAgeMonths(c.age) } as any)));
-          // Count staff whose effective location is this room (moved-in or originally here)
-          const roomStaff = centreRosters.filter(r => {
-            const dest = staffMoves[String(r.employeeId)];
-            if (dest) return dest === room.id;
-            return r.unitId === room.deputyUnitId;
-          });
+          // Count staff whose RAW location is this room (ignore moves so card matches staffing analysis)
+          const roomStaff = centreRosters.filter(r => r.unitId === room.deputyUnitId);
           return { required: roomRequired, staffCount: roomStaff.length };
         });
         const required         = allDayCalc.total;
@@ -282,27 +265,27 @@ export default function MorningBriefingPage() {
         const expectedCount    = lwByCampus[campus] ?? kids.length;
         const requiredExpected = Math.round(expectedCount / Math.max(kids.length, 1) * required);
 
-        // Staff counts from centreRosters (same source as ratio dashboard)
+        // Staff counts from centreRosters using RAW unit type (ignore moves so card matches staffing analysis)
         const staffIds = new Set(centreRosters
-          .filter(r => effectiveUnitType(r) === 'room')
+          .filter(r => rawUnitType(r) === 'room')
           .map(r => r.employeeId));
         const absentIds = new Set(centreRosters
-          .filter(r => effectiveUnitType(r) === 'leave')
+          .filter(r => rawUnitType(r) === 'leave')
           .map(r => r.employeeId));
         // Use raw entry counts (not unique sets) to exactly match staffing analysis Float Pool:
         // floats.length and adStaff.length are array lengths, not deduped employee counts.
         // Split-shift staff have multiple entries and each counts.
-        const floatEntries = centreRosters.filter(r => effectiveUnitType(r) === 'float');
+        const floatEntries = centreRosters.filter(r => rawUnitType(r) === 'float');
         const floatIds = new Set(floatEntries.map(r => r.employeeId)); // still need set for absence calc
         const floatCount = floatEntries.length + zCasualFloatCount; // include Z Staffing external casuals as floats // matches staffing analysis floats.length
         // AD = only 'Assistant Director' unitName entries (matches staffing analysis adStaff filter)
         const adCount = centreRosters.filter(r =>
-          effectiveUnitType(r) === 'support' &&
+          rawUnitType(r) === 'support' &&
           (r.unitName?.toLowerCase().includes('assistant director') ||
            r.unitName?.toLowerCase().includes('asst director') ||
            r.unitName?.toLowerCase().includes('ass. director'))
         ).length;
-        const totalStaff = staffIds.size + floatIds.size;
+        const totalStaff = new Set([...staffIds, ...floatIds]).size;
         const absent = absentIds.size;
         // AD only counts for under-100 place centres (matches staffing analysis rule)
         const adAvailable = (kids.length > 0 && kids.length < 100) ? adCount : 0;
