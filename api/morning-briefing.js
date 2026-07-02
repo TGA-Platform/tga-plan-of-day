@@ -82,9 +82,24 @@ export default async function handler(req, res) {
     ? CENTRES.filter(c => centreFilter.includes(c.id))
     : CENTRES;
 
-  // Fetch roster cache for the date (all centres in one query)
-  const allRosters = await sb(`deputy_roster_cache?date=eq.${date}&select=rosters`);
-  const rosters = allRosters.flatMap(r => r.rosters ?? []);
+  // Fetch processed rosters via the same endpoint the frontend uses.
+  // This ensures we apply the same filtering/dedup (Employee!=0, no staff
+  // meeting/study time, split-shift dedup) so API numbers match the page.
+  const allUnitIds = [...new Set(centres.flatMap(c => [
+    ...c.rooms.map(r => r.id),
+    ...(c.floatUnitIds ?? []),
+    ...(c.leaveUnitIds ?? []),
+    ...(c.nonRatioUnitIds ?? []),
+    ...(c.issUnitIds ?? []),
+  ]))];
+  const host = req.headers.host || 'plan.tga.edu.au';
+  const proto = req.headers['x-forwarded-proto'] || 'https';
+  const rosterRes = await fetch(`${proto}://${host}/api/deputy-rosters`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date, unitIds: allUnitIds }),
+  });
+  const rosters = rosterRes.ok ? await rosterRes.json() : [];
 
   // Fetch attendance for the date (children sign-ins)
   // Paginate attendance to beat Supabase's 1000-row default cap
