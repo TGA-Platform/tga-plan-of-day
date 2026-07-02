@@ -14,6 +14,10 @@
     {
       "path": "/api/cron-z-casuals-refresh",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron-reporting-snapshot",
+      "schedule": "0 * * * *"
     }
   ]
 }
