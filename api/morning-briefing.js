@@ -150,11 +150,8 @@ export default async function handler(req, res) {
     const staffMoves  = staffMovesByCentre[centre.id] || {};
     const zCasualFloatCount = zCasualCountByCentre[centre.name] || 0;
 
-    // Effective unit type considering saved staffMoves
-    function effectiveUnitType(r) {
-      const move = staffMoves[String(r.employeeId)];
-      if (move === 'float') return 'float';
-      if (move === 'support') return 'support';
+    // Raw unit type ignoring saved staffMoves — matches MorningBriefingPage.tsx exactly.
+    function rawUnitType(r) {
       if (leaveSet.has(r.unitId)) return 'leave';
       if (floatSet.has(r.unitId)) return 'float';
       if (nonRatioSet.has(r.unitId)) return 'support';
@@ -163,19 +160,19 @@ export default async function handler(req, res) {
     }
 
     const staffIds = new Set(centreRosters
-      .filter(r => effectiveUnitType(r) === 'room')
+      .filter(r => rawUnitType(r) === 'room')
       .map(r => r.employeeId));
 
     const absentIds = new Set(centreRosters
-      .filter(r => effectiveUnitType(r) === 'leave')
+      .filter(r => rawUnitType(r) === 'leave')
       .map(r => r.employeeId));
 
-    const floatEntries = centreRosters.filter(r => effectiveUnitType(r) === 'float');
+    const floatEntries = centreRosters.filter(r => rawUnitType(r) === 'float');
     const floatIds     = new Set(floatEntries.map(r => r.employeeId));
     const floatCount   = floatEntries.length + zCasualFloatCount;
 
     const adCount = centreRosters.filter(r =>
-      effectiveUnitType(r) === 'support' &&
+      rawUnitType(r) === 'support' &&
       (r.unitName.toLowerCase().includes('assistant director') ||
        r.unitName.toLowerCase().includes('asst director') ||
        r.unitName.toLowerCase().includes('ass. director'))
