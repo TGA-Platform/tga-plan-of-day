@@ -40,10 +40,12 @@ interface CentreCard {
   requiredExpected: number;    // based on expected (Day view)
   shortage:         number;   // positive = short, 0 = exact, negative = surplus (based on room+float)
   roomShortage:     number;   // positive = short, negative = surplus (room staff only)
-  floatSurplus:       number;   // floats+AD available minus floaters needed
+  floatSurplus:        number;   // floats+AD available minus floaters needed (all-day view)
+  casualsNeeded:       number;    // all-day view
+  floatSurplusPresent: number;    // floats+AD available minus floaters needed (present view)
+  casualsNeededPresent: number;   // present view
   effectiveFloatCount: number;   // floats + room net surplus (surplus room staff act as floats)
   roomNetSurplus:      number;   // net room surplus carried into float pool
-  casualsNeeded:       number;
   status:           'green' | 'amber' | 'red' | 'unknown';
 }
 
@@ -251,16 +253,20 @@ export default function MorningBriefingPage() {
 
         const allDayCalc   = calcRoomRequired(kids);
         const presentCalc  = calcRoomRequired(presentKids);
-        // Compute surplus/deficit based on currently present children so the
-        // morning briefing reflects the current state, not the full-day projection.
-        const roomData = centre.rooms.map(room => {
-          const owna = (room.ownaRoomName ?? room.name).toLowerCase();
-          const rk = presentKids.filter(c => c.room.toLowerCase().includes(owna));
-          const { required: roomRequired } = calcRequiredStaff(rk.map(c => ({ ageMonths: parseAgeMonths(c.age) } as any)));
-          // Count staff whose RAW location is this room (ignore moves so card matches staffing analysis)
-          const roomStaff = centreRosters.filter(r => r.unitId === room.deputyUnitId);
-          return { required: roomRequired, staffCount: roomStaff.length };
-        });
+        // Per-room breakdown for each view mode so surplus/deficit matches the
+        // displayed children/required numbers.
+        function makeRoomData(childSet: typeof kids) {
+          return centre.rooms.map(room => {
+            const owna = (room.ownaRoomName ?? room.name).toLowerCase();
+            const rk = childSet.filter(c => c.room.toLowerCase().includes(owna));
+            const { required: roomRequired } = calcRequiredStaff(rk.map(c => ({ ageMonths: parseAgeMonths(c.age) } as any)));
+            // Count staff whose RAW location is this room (ignore moves so card matches staffing analysis)
+            const roomStaff = centreRosters.filter(r => r.unitId === room.deputyUnitId);
+            return { required: roomRequired, staffCount: roomStaff.length };
+          });
+        }
+        const roomDataAllDay = makeRoomData(kids);
+        const roomDataPresent = makeRoomData(presentKids);
         const required         = allDayCalc.total;
         const requiredPresent  = presentCalc.total;
         // For Day view use expected (last week) if available, else all-day
@@ -289,8 +295,7 @@ export default function MorningBriefingPage() {
         ).length;
         const totalStaff = new Set([...staffIds, ...floatIds]).size;
         const absent = absentIds.size;
-        // AD only counts for under-100 place centres (matches staffing analysis rule)
-        const adAvailable = (kids.length > 0 && kids.length < 100) ? adCount : 0;
+        // AD availability is now computed per view mode inside calcFloatPool.
 
         // Only subtract absent staff who were ALSO rostered to a room or float
         // (they called in sick from their scheduled shift).
@@ -306,30 +311,36 @@ export default function MorningBriefingPage() {
         const roomShortage = required - roomStaffAvailable; // >0 = short, negative = surplus
 
         // Exact same logic as ratio dashboard Float Pool section:
-        // 1. Per-room surplus reallocation
-        const totalRatioShortage = roomData.reduce((s, r) => s + Math.max(0, r.required - r.staffCount), 0);
-        const totalSurplus       = roomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
-        const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
-        // 2. Buffer: 1 per 6 floor staff
-        const totalFloorStaff = roomData.reduce((s, r) => s + r.staffCount, 0);
-        const bufferRequired  = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
-        // 3. Room net surplus (after covering all shortages) counts as effective floats
-        // e.g. a room with 1 extra staff when all rooms are compliant = 1 extra available float
-        const roomNetSurplus       = Math.max(0, totalSurplus - totalRatioShortage);
-        const effectiveFloatCount  = floatCount + roomNetSurplus;
-        // 4. Total floaters needed → casuals = what effective floats+AD can't cover
-        const totalFloatersNeeded = Math.max(0, netShortageAfterRealloc + bufferRequired);
-        const casualsNeeded       = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
-        // Float surplus: includes room surplus contribution
-        const floatSurplus = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
+        // Compute separately for all-day and currently-present so each view mode is internally consistent.
+        function calcFloatPool(roomData: { required: number; staffCount: number }[], childCount: number) {
+          // 1. Per-room surplus reallocation
+          const totalRatioShortage = roomData.reduce((s, r) => s + Math.max(0, r.required - r.staffCount), 0);
+          const totalSurplus       = roomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
+          const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
+          // 2. Buffer: 1 per 6 floor staff
+          const totalFloorStaff = roomData.reduce((s, r) => s + r.staffCount, 0);
+          const bufferRequired  = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
+          // 3. Room net surplus (after covering all shortages) counts as effective floats
+          const roomNetSurplus      = Math.max(0, totalSurplus - totalRatioShortage);
+          const effectiveFloatCount = floatCount + roomNetSurplus;
+          // 4. AD availability depends on child count
+          const adAvail = (childCount > 0 && childCount < 100) ? adCount : 0;
+          // 5. Total floaters needed → casuals = what effective floats+AD can't cover
+          const totalFloatersNeeded = Math.max(0, netShortageAfterRealloc + bufferRequired);
+          const casualsNeeded       = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvail);
+          const floatSurplus        = casualsNeeded <= 0 ? (effectiveFloatCount + adAvail - totalFloatersNeeded) : 0;
+          return { totalFloatersNeeded, casualsNeeded, floatSurplus, effectiveFloatCount, roomNetSurplus, bufferRequired };
+        }
+
+        const allDayPool  = calcFloatPool(roomDataAllDay, kids.length);
+        const presentPool = calcFloatPool(roomDataPresent, presentKids.length);
+        const poolToUse   = viewMode === 'present' ? presentPool : allDayPool;
 
         if (centre.id === 'spring-farm') {
           console.log('[briefing-debug] Spring Farm', {
             required, staffIdsSize: staffIds.size, floatIdsSize: floatIds.size, totalStaff,
             absent, roomAndFloatAbsent, totalAvailable,
-            totalFloorStaff, totalRatioShortage, totalSurplus, netShortageAfterRealloc,
-            bufferRequired: bufferRequired.toFixed(2), effectiveFloatCount, adAvailable,
-            totalFloatersNeeded: totalFloatersNeeded.toFixed(2), casualsNeeded: casualsNeeded.toFixed(2),
+            allDayPool, presentPool,
           });
         }
 
@@ -358,10 +369,12 @@ export default function MorningBriefingPage() {
           requiredExpected,
           shortage:         statusShortage,  // positive = short, 0 = exact, negative = surplus (room+float)
           roomShortage,                      // positive = short, negative = surplus (room staff only)
-          floatSurplus,
-          effectiveFloatCount,
-          roomNetSurplus,
-          casualsNeeded,
+          floatSurplus:       allDayPool.floatSurplus,
+          casualsNeeded:      allDayPool.casualsNeeded,
+          floatSurplusPresent:  presentPool.floatSurplus,
+          casualsNeededPresent: presentPool.casualsNeeded,
+          effectiveFloatCount:  poolToUse.effectiveFloatCount,
+          roomNetSurplus:       poolToUse.roomNetSurplus,
           status,
         });
       }
@@ -570,10 +583,12 @@ export default function MorningBriefingPage() {
                   : viewMode === 'day'     ? card.requiredExpected
                   : card.requiredStaff;
                 // Surplus = float pool surplus from staffing analysis (floats+AD minus floaters needed)
-                // This matches the "+4.3 FTE over" shown in the staffing analysis Float Pool panel.
-                // If casuals are needed (deficit), use casualsNeeded as the deficit.
-                const hasCasuals = card.casualsNeeded > 0;
-                const surplusVal = hasCasuals ? -card.casualsNeeded : card.floatSurplus;
+                // Match the view mode: present view uses present-based surplus, all-day uses all-day surplus.
+                const isPresentView = viewMode === 'present';
+                const viewCasualsNeeded = isPresentView ? card.casualsNeededPresent : card.casualsNeeded;
+                const viewFloatSurplus  = isPresentView ? card.floatSurplusPresent : card.floatSurplus;
+                const hasCasuals = viewCasualsNeeded > 0;
+                const surplusVal = hasCasuals ? -viewCasualsNeeded : viewFloatSurplus;
                 const shortfall  = surplusVal < 0;
                 const surplus    = surplusVal > 0;
                 const surplusStr = surplusVal === 0 ? '0'
@@ -627,9 +642,9 @@ export default function MorningBriefingPage() {
               >
                 {card.status === 'unknown' ? (
                   <span className="text-xs" style={{ color: '#596570' }}>No data yet</span>
-                ) : card.casualsNeeded > 0 ? (
+                ) : (viewMode === 'present' ? card.casualsNeededPresent : card.casualsNeeded) > 0 ? (
                   <span className="text-xs font-semibold" style={{ color: '#dc2626' }}>
-                    ⚠️ {fmtFTE(card.casualsNeeded)} casual FTE recommended
+                    ⚠️ {fmtFTE(viewMode === 'present' ? card.casualsNeededPresent : card.casualsNeeded)} casual FTE recommended
                   </span>
                 ) : (
                   <span className="text-xs font-semibold" style={{ color: '#5a9228' }}>
