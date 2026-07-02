@@ -93,7 +93,7 @@ export default async function handler(req, res) {
     const PAGE = 1000;
     let offset = 0;
     while (true) {
-      const page = await sb(`attendance_daily?date=eq.${date}&select=campus,room,age,sign_in&limit=${PAGE}&offset=${offset}`);
+      const page = await sb(`attendance_daily?date=eq.${date}&select=campus,room,age,sign_in&order=campus,room,child_name&limit=${PAGE}&offset=${offset}`);
       if (!Array.isArray(page) || page.length === 0) break;
       attendance.push(...page);
       if (page.length < PAGE) break;
@@ -189,12 +189,8 @@ export default async function handler(req, res) {
         .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
         .map(a => parseAgeMonths(a.age));
       const roomRequired = calcRequired(roomKids);
-      const moveDest = String(room.id);
-      const roomStaff = centreRosters.filter(r => {
-        const dest = staffMoves[String(r.employeeId)];
-        if (dest === moveDest || dest === room.name) return true;
-        return effectiveUnitType(r) === 'room' && r.unitId === room.id;
-      }).length;
+      // Match the frontend exactly: room staff are rostered to this room's Deputy unit.
+      const roomStaff = centreRosters.filter(r => r.unitId === room.id).length;
       return { required: roomRequired, staffCount: roomStaff };
     });
 
