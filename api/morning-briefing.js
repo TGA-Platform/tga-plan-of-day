@@ -108,12 +108,23 @@ export default async function handler(req, res) {
     const PAGE = 1000;
     let offset = 0;
     while (true) {
-      const page = await sb(`attendance_daily?date=eq.${date}&select=campus,room,age,sign_in&order=campus,room,child_name&limit=${PAGE}&offset=${offset}`);
+      const page = await sb(`attendance_daily?date=eq.${date}&select=campus,room,age,sign_in,sign_out,predicted_sign_out&order=campus,room,child_name&limit=${PAGE}&offset=${offset}`);
       if (!Array.isArray(page) || page.length === 0) break;
       attendance.push(...page);
       if (page.length < PAGE) break;
       offset += PAGE;
     }
+  }
+
+  // Current Sydney time as HH:MM for "currently present" filtering
+  const nowSyd = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+  const nowHHMM = `${String(nowSyd.getHours()).padStart(2, '0')}:${String(nowSyd.getMinutes()).padStart(2, '0')}`;
+
+  function isPresent(a) {
+    if (!a.sign_in) return false;
+    if (a.sign_out) return false;
+    if (a.predicted_sign_out && a.predicted_sign_out <= nowHHMM) return false;
+    return true;
   }
 
   // Fetch saved ratio-check state (staffMoves) for all centres
@@ -157,7 +168,9 @@ export default async function handler(req, res) {
 
     // Children for this campus
     const campusAttendance = attendance.filter(a => a.campus === campus);
-    const allKids = campusAttendance.map(a => parseAgeMonths(a.age));
+    const presentAttendance = campusAttendance.filter(isPresent);
+    const presentKids = presentAttendance.map(a => parseAgeMonths(a.age));
+    const allDayKids = campusAttendance.map(a => parseAgeMonths(a.age));
 
     const leaveSet    = new Set(centre.leaveUnitIds);
     const floatSet    = new Set(centre.floatUnitIds);
@@ -192,12 +205,13 @@ export default async function handler(req, res) {
        r.unitName.toLowerCase().includes('asst director') ||
        r.unitName.toLowerCase().includes('ass. director'))
     ).length;
-    const adAvailable = (allKids.length > 0 && allKids.length < 100) ? adCount : 0;
+    const adAvailable = (presentKids.length > 0 && presentKids.length < 100) ? adCount : 0;
 
-    // Per-room breakdown — match children to rooms by ownaRoomName (same as dashboard)
+    // Per-room breakdown — match children to rooms by ownaRoomName (same as dashboard).
+    // Use currently present children so the report reflects the current state.
     const roomData = centre.rooms.map(room => {
       const owna = (room.ownaRoomName ?? '').toLowerCase();
-      const roomKids = campusAttendance
+      const roomKids = presentAttendance
         .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
         .map(a => parseAgeMonths(a.age));
       const roomRequired = calcRequired(roomKids);
@@ -226,7 +240,8 @@ export default async function handler(req, res) {
       centreId:           centre.id,
       name:               centre.name,
       date,
-      childrenToday:      allKids.length,
+      childrenToday:      presentKids.length,
+      childrenAllDay:     allDayKids.length,
       staffAvailable:     staffIds.size - roomAbsent,
       floatCount,
       adAvailable,
