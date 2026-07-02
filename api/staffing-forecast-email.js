@@ -72,10 +72,30 @@ function unitType(r, centre) {
   return 'other';
 }
 
-function calcCentreForecast(centre, date, forecasts, rosters) {
+function normName(name) {
+  return String(name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet, zCasualCountByCentre) {
   const campus = centre.ownaName ?? centre.name;
   const fc = forecasts[campus];
   if (!fc) return null;
+
+  const centreRosters = rosters.filter(r => {
+    const uid = r.OperationalUnit;
+    return centre.rooms.some(rm => rm.deputyUnitId === uid)
+      || centre.floatUnitIds.includes(uid)
+      || centre.leaveUnitIds.includes(uid)
+      || centre.nonRatioUnitIds.includes(uid)
+      || (centre.issUnitIds || []).includes(uid);
+  });
+
+  const internalCasualCount = centreRosters.filter(r => {
+    const name = r._DPMetaData?.EmployeeInfo?.DisplayName || '';
+    return internalCasualSet.has(normName(name));
+  }).length;
+
+  const zCasualFloatCount = zCasualCountByCentre[centre.name] || 0;
 
   const roomData = centre.rooms.map(room => {
     const owna = (room.ownaRoomName ?? room.name).toLowerCase();
@@ -96,7 +116,8 @@ function calcCentreForecast(centre, date, forecasts, rosters) {
   const totalFloorStaff = roomData.reduce((s, r) => s + r.staffCount, 0);
 
   const floatIds = new Set(centre.floatUnitIds || []);
-  const floatCount = rosters.filter(r => floatIds.has(r.OperationalUnit)).length;
+  const internalFloatCount = rosters.filter(r => floatIds.has(r.OperationalUnit)).length;
+  const floatCount = internalFloatCount + zCasualFloatCount;
 
   const nonRatioIds = new Set([...(centre.nonRatioUnitIds || []), ...(centre.leaveUnitIds || [])]);
   const adCount = rosters.filter(r => {
@@ -127,6 +148,9 @@ function calcCentreForecast(centre, date, forecasts, rosters) {
     requiredStaff: totalRequired,
     floorStaff: totalFloorStaff,
     floatCount,
+    internalFloatCount,
+    zCasualFloatCount,
+    internalCasualCount,
     adAvailable,
     casualsNeeded,
     floatSurplus,
@@ -147,9 +171,12 @@ function buildHtml(summary) {
         <tr>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-weight:600;">${s.name}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.expectedChildren}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.booked ?? '-'}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.requiredStaff}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.floorStaff}</td>
-          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.floatCount}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.internalFloatCount}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.zCasualFloatCount}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.internalCasualCount}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.adAvailable}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;color:${color};font-weight:700;">${valStr} ${label}</td>
         </tr>
@@ -165,9 +192,12 @@ function buildHtml(summary) {
           <tr style="background:#f3f4f6;">
             <th style="padding:8px;text-align:left;">Centre</th>
             <th style="padding:8px;text-align:center;">Expected</th>
+            <th style="padding:8px;text-align:center;">Booked</th>
             <th style="padding:8px;text-align:center;">Required</th>
             <th style="padding:8px;text-align:center;">Floor</th>
             <th style="padding:8px;text-align:center;">Float</th>
+            <th style="padding:8px;text-align:center;">External Casuals</th>
+            <th style="padding:8px;text-align:center;">Internal Casuals</th>
             <th style="padding:8px;text-align:center;">AD</th>
             <th style="padding:8px;text-align:center;">Surplus / Deficit</th>
           </tr>
@@ -197,19 +227,32 @@ export default async function handler(req, res) {
     const host = req.headers.host || 'plan.tga.edu.au';
     const proto = req.headers['x-forwarded-proto'] || 'https';
 
-    const [forecastRes, rosterRes] = await Promise.all([
+    const [forecastRes, rosterRes, wwccRes, zCasualRes] = await Promise.all([
       fetch(`${proto}://${host}/api/room-forecast?campus=all&date=${date}`),
       fetch(`${proto}://${host}/api/deputy-rosters`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date }),
       }),
+      fetch(`${proto}://${host}/api/staff-wwcc`),
+      fetch(`${proto}://${host}/api/z-casuals?centre=all&date=${date}`),
     ]);
 
     const forecasts = forecastRes.ok ? await forecastRes.json() : {};
     const rosters = rosterRes.ok ? await rosterRes.json() : [];
 
-    const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, rosters));
+    const wwccRows = wwccRes.ok ? await wwccRes.json() : [];
+    const internalCasualSet = new Set(
+      wwccRows.filter(r => r.is_internal_casual).map(r => normName(r.full_name))
+    );
+
+    const zCasualRows = zCasualRes.ok ? await zCasualRes.json() : [];
+    const zCasualCountByCentre = {};
+    for (const row of zCasualRows) {
+      zCasualCountByCentre[row.centre] = (zCasualCountByCentre[row.centre] || 0) + 1;
+    }
+
+    const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet, zCasualCountByCentre));
     const html = buildHtml(summary);
 
     return res.status(200).json({

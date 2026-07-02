@@ -150,54 +150,72 @@ const JOB_QUERY = `
   }
 `;
 
-async function fetchCentre(centre, date, auth) {
+function dateToSydneyEpochMs(dateStr) {
+  return new Date(`${dateStr}T00:00:00+10:00`).getTime();
+}
+
+function jobsForDate(allJobs, date) {
+  const dayStart = dateToSydneyEpochMs(date);
+  const dayEnd   = dayStart + 86400000;
+  return allJobs.filter(j => {
+    const s = parseInt(j.startDate);
+    return s >= dayStart && s < dayEnd;
+  });
+}
+
+async function fetchCentre(centre, dates, auth) {
   const workspaceId = TGA_WORKSPACE_MAP[centre];
   if (!workspaceId) return [];
 
   const gqlData = await queryZGraphQL(auth, JOB_QUERY, { workspaceId, withEducatorProfile: true });
   const allJobs = gqlData?.getAllJobInformationForWorkspace?.jobs ?? [];
 
-  const dayStart = new Date(`${date}T00:00:00+10:00`).getTime();
-  const dayEnd   = dayStart + 86400000;
+  const rows = [];
+  for (const date of dates) {
+    const dayJobs = jobsForDate(allJobs, date)
+      .filter(j => !j.isDraft)
+      .map(j => {
+        const profile  = j.educatorProfile;
+        const name     = profile ? `${profile.givenName} ${profile.surname}`.trim() : null;
+        const certLevel = j.educatorCertificationLevel || profile?.certificationLevel || j.certificationLevel || 'NONE';
+        return {
+          zJobId:      j.id,
+          name:        name || null,
+          start:       epochToTime(j.startDate),
+          end:         epochToTime(j.endDate),
+          status:      parseStatus(j.status),
+          isFilled:    j.isFilled,
+          certLevel,
+          costCents:   Math.round((j.hourlyRateUsed ?? 0) * ((parseInt(j.endDate) - parseInt(j.startDate)) / 3600000)),
+          workspaceId: j.workspaceId,
+        };
+      })
+      .filter(j => j.isFilled && j.name);
 
-  const dayJobs = allJobs.filter(j => {
-    const s = parseInt(j.startDate);
-    return s >= dayStart && s < dayEnd;
-  });
+    for (const r of dayJobs) {
+      rows.push({
+        centre,
+        date,
+        z_job_id:     r.zJobId,
+        name:         r.name,
+        start_time:   r.start,
+        end_time:     r.end,
+        status:       r.status,
+        cert_level:   r.certLevel,
+        cost_cents:   r.costCents,
+        workspace_id: r.workspaceId,
+        fetched_at:   new Date().toISOString(),
+      });
+    }
+  }
 
-  const results = dayJobs
-    .filter(j => !j.isDraft)
-    .map(j => {
-      const profile  = j.educatorProfile;
-      const name     = profile ? `${profile.givenName} ${profile.surname}`.trim() : null;
-      const certLevel = j.educatorCertificationLevel || profile?.certificationLevel || j.certificationLevel || 'NONE';
-      return {
-        zJobId:      j.id,
-        name:        name || null,
-        start:       epochToTime(j.startDate),
-        end:         epochToTime(j.endDate),
-        status:      parseStatus(j.status),
-        isFilled:    j.isFilled,
-        certLevel,
-        costCents:   Math.round((j.hourlyRateUsed ?? 0) * ((parseInt(j.endDate) - parseInt(j.startDate)) / 3600000)),
-        workspaceId: j.workspaceId,
-      };
-    })
-    .filter(j => j.isFilled && j.name);
+  return rows;
+}
 
-  return results.map(r => ({
-    centre,
-    date,
-    z_job_id:     r.zJobId,
-    name:         r.name,
-    start_time:   r.start,
-    end_time:     r.end,
-    status:       r.status,
-    cert_level:   r.certLevel,
-    cost_cents:   r.costCents,
-    workspace_id: r.workspaceId,
-    fetched_at:   new Date().toISOString(),
-  }));
+function addDays(dateStr, days) {
+  const d = new Date(`${dateStr}T12:00:00+10:00`);
+  d.setDate(d.getDate() + days);
+  return d.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
 }
 
 export default async function handler(req, res) {
@@ -206,7 +224,11 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const date = req.query.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+  const baseDate = req.query.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+  const dates = [];
+  for (let i = 0; i < 7; i++) {
+    dates.push(addDays(baseDate, i));
+  }
 
   try {
     const auth = await getAuthToken();
@@ -220,7 +242,7 @@ export default async function handler(req, res) {
       const results = await Promise.all(
         batch.map(async centre => {
           try {
-            return await fetchCentre(centre, date, auth);
+            return await fetchCentre(centre, dates, auth);
           } catch (err) {
             console.error(`[cron-z-casuals] ${centre} failed:`, err.message);
             return [];
@@ -231,7 +253,7 @@ export default async function handler(req, res) {
     }
 
     await upsertToSupabase(rows);
-    return res.status(200).json({ ok: true, date, centres: centres.length, rows: rows.length });
+    return res.status(200).json({ ok: true, dates, centres: centres.length, rows: rows.length });
   } catch (err) {
     console.error('[cron-z-casuals] Fatal:', err.message);
     return res.status(500).json({ error: err.message });
