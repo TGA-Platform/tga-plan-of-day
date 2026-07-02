@@ -387,7 +387,7 @@ function computeWwccSnapshot(centre, wwccAll, activeStaffNames) {
 
 // ─── Main snapshot run ───────────────────────────────────────────────────────
 
-async function snapshotCentreDate(centre, date, wwccAll) {
+async function snapshotCentreDate(centre, date, wwccAll, skipWwcc) {
   const campus = centre.ownaName ?? centre.name;
 
   const [rosters, attendance, zCasuals] = await Promise.all([
@@ -401,6 +401,10 @@ async function snapshotCentreDate(centre, date, wwccAll) {
 
   await sbPost('report_slot_30', slotRows, 'centre_id,date,time_slot');
   await sbPost('report_daily', [dailyRow], 'centre_id,date');
+
+  if (skipWwcc) {
+    return { slotRows: slotRows.length, dailyRows: 1, wwccRows: 0 };
+  }
 
   // WWCC snapshot uses active staff names from this centre's roster cache for recent dates
   const activeNames = new Set();
@@ -451,9 +455,13 @@ export default async function handler(req, res) {
 
   const t0 = Date.now();
   const dates = getDatesToSnapshot();
+  const now = getSydneyNow();
+  const isNightlyWindow = now.getHours() >= 2 && now.getHours() < 3;
+  // WWCC snapshots are large; only refresh them during the nightly window.
+  const skipWwcc = !isNightlyWindow;
 
   try {
-    const wwccAll = await fetchStaffWwcc();
+    const wwccAll = skipWwcc ? [] : await fetchStaffWwcc();
     let totalSlotRows = 0;
     let totalDailyRows = 0;
     let totalWwccRows = 0;
@@ -461,7 +469,7 @@ export default async function handler(req, res) {
     for (const centre of CENTRES) {
       for (const date of dates) {
         try {
-          const counts = await snapshotCentreDate(centre, date, wwccAll);
+          const counts = await snapshotCentreDate(centre, date, wwccAll, skipWwcc);
           totalSlotRows += counts.slotRows;
           totalDailyRows += counts.dailyRows;
           totalWwccRows += counts.wwccRows;
