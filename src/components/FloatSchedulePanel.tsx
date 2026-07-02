@@ -702,14 +702,32 @@ export default function FloatSchedulePanel({
 
       // Generate new schedule
       const regenBlocks = buildInitialSchedule(float, rooms, roomStatuses, children, centreId, freshRules, alreadyCovered);
-      setBlocks(regenBlocks);
+
+      // Preserve any coverType overrides set by the ratio check panel.
+      // Ratio check is always the source of truth — if it has assigned a staff member
+      // to ratio or programming cover, that assignment must not be overridden on regenerate.
+      const existingBlocks = blocks; // current blocks (loaded from Supabase, may have ratio-check coverType)
+      const mergedBlocks = regenBlocks.map(newBlock => {
+        if (newBlock.type !== 'break') return newBlock;
+        // Find a matching existing break block for the same time window
+        const existingMatch = existingBlocks.find(
+          b => b.type === 'break' && b.startTime === newBlock.startTime && b.endTime === newBlock.endTime
+        );
+        // If existing block has a coverType set (from ratio check), preserve it
+        if (existingMatch?.coverType) {
+          return { ...newBlock, coverType: existingMatch.coverType };
+        }
+        return newBlock;
+      });
+
+      setBlocks(mergedBlocks);
 
       // Auto-save so other floats see this
       try {
         await fetch('/api/float-schedules', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ centre_id: centreId, date, employee_id: float.employeeId, employee_name: float.employeeName, schedule: regenBlocks }),
+          body: JSON.stringify({ centre_id: centreId, date, employee_id: float.employeeId, employee_name: float.employeeName, schedule: mergedBlocks }),
         });
         setSaved(true);
       } catch { setSaved(false); }
