@@ -613,6 +613,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     }
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => setSaveStatus('idle'), 3000);
+
+    // Sync staffMoves to float_schedules so ratio check is the source of truth
+    // for programming vs ratio cover — prevents float panel save from overriding
+    if (data.staffMoves && Object.keys(data.staffMoves).length > 0) {
+      fetch('/api/ratio-check-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ centre_id: centreId, date, staffMoves: data.staffMoves }),
+      }).catch(e => console.warn('[RatioCheck] Float schedule sync failed:', e));
+    }
   }, [centreId, date]);
 
   // -- Computed children counts (auto-populated) ------------------------------
