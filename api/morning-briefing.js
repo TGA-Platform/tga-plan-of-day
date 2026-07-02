@@ -205,34 +205,50 @@ export default async function handler(req, res) {
        r.unitName.toLowerCase().includes('asst director') ||
        r.unitName.toLowerCase().includes('ass. director'))
     ).length;
-    const adAvailable = (presentKids.length > 0 && presentKids.length < 100) ? adCount : 0;
 
-    // Per-room breakdown — match children to rooms by ownaRoomName (same as dashboard).
-    // Use currently present children so the report reflects the current state.
-    const roomData = centre.rooms.map(room => {
-      const owna = (room.ownaRoomName ?? '').toLowerCase();
-      const roomKids = presentAttendance
-        .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
-        .map(a => parseAgeMonths(a.age));
-      const roomRequired = calcRequired(roomKids);
-      // Match the frontend exactly: room staff are rostered to this room's Deputy unit.
-      const roomStaff = centreRosters.filter(r => r.unitId === room.id).length;
-      return { required: roomRequired, staffCount: roomStaff };
-    });
+    // Per-room breakdown for each basis so we can report both all-day and currently-present.
+    function makeRoomData(attendanceSet) {
+      return centre.rooms.map(room => {
+        const owna = (room.ownaRoomName ?? '').toLowerCase();
+        const roomKids = attendanceSet
+          .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
+          .map(a => parseAgeMonths(a.age));
+        const roomRequired = calcRequired(roomKids);
+        // Match the frontend exactly: room staff are rostered to this room's Deputy unit.
+        const roomStaff = centreRosters.filter(r => r.unitId === room.id).length;
+        return { required: roomRequired, staffCount: roomStaff };
+      });
+    }
 
-    // Exact same Float Pool formula as MorningBriefingPage.tsx
-    const totalRatioShortage      = roomData.reduce((s, r) => s + Math.max(0, r.required - r.staffCount), 0);
-    const totalSurplus            = roomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
-    const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
-    const totalFloorStaff         = roomData.reduce((s, r) => s + r.staffCount, 0);
-    const bufferRequired          = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
-    const roomNetSurplus          = Math.max(0, totalSurplus - totalRatioShortage);
-    const effectiveFloatCount     = floatCount + roomNetSurplus;
-    const totalFloatersNeeded     = Math.max(0, netShortageAfterRealloc + bufferRequired);
-    const casualsNeeded           = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
-    const floatSurplus            = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
-    const surplusVal              = casualsNeeded > 0 ? -casualsNeeded : floatSurplus;
-    const totalRequired           = roomData.reduce((s, r) => s + r.required, 0);
+    function calcFloatPool(roomData, childCount) {
+      const totalRatioShortage      = roomData.reduce((s, r) => s + Math.max(0, r.required - r.staffCount), 0);
+      const totalSurplus            = roomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
+      const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
+      const totalFloorStaff         = roomData.reduce((s, r) => s + r.staffCount, 0);
+      const bufferRequired          = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
+      const roomNetSurplus          = Math.max(0, totalSurplus - totalRatioShortage);
+      const effectiveFloatCount     = floatCount + roomNetSurplus;
+      const adAvailable             = (childCount > 0 && childCount < 100) ? adCount : 0;
+      const totalFloatersNeeded     = Math.max(0, netShortageAfterRealloc + bufferRequired);
+      const casualsNeeded           = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
+      const floatSurplus            = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
+      const surplusVal              = casualsNeeded > 0 ? -casualsNeeded : floatSurplus;
+      const totalRequired           = roomData.reduce((s, r) => s + r.required, 0);
+      return { totalRequired, totalFloatersNeeded, casualsNeeded, floatSurplus, surplusVal, effectiveFloatCount, roomNetSurplus };
+    }
+
+    const allDayPool   = calcFloatPool(makeRoomData(campusAttendance), allDayKids.length);
+    const presentPool  = calcFloatPool(makeRoomData(presentAttendance), presentKids.length);
+
+    // Default the report to currently-present, as requested.
+    const totalRequired       = presentPool.totalRequired;
+    const totalFloatersNeeded = presentPool.totalFloatersNeeded;
+    const casualsNeeded       = presentPool.casualsNeeded;
+    const floatSurplus        = presentPool.floatSurplus;
+    const surplusVal          = presentPool.surplusVal;
+    const effectiveFloatCount = presentPool.effectiveFloatCount;
+    const roomNetSurplus      = presentPool.roomNetSurplus;
+    const adAvailable         = (presentKids.length > 0 && presentKids.length < 100) ? adCount : 0;
 
     const roomAbsent = [...absentIds].filter(id => staffIds.has(id)).length;
 
@@ -250,6 +266,22 @@ export default async function handler(req, res) {
       casualsNeeded,
       floatSurplus,
       surplusVal,
+      allDay: {
+        children: allDayKids.length,
+        required: allDayPool.totalRequired,
+        totalFloatersNeeded: allDayPool.totalFloatersNeeded,
+        casualsNeeded: allDayPool.casualsNeeded,
+        floatSurplus: allDayPool.floatSurplus,
+        surplusVal: allDayPool.surplusVal,
+      },
+      present: {
+        children: presentKids.length,
+        required: presentPool.totalRequired,
+        totalFloatersNeeded: presentPool.totalFloatersNeeded,
+        casualsNeeded: presentPool.casualsNeeded,
+        floatSurplus: presentPool.floatSurplus,
+        surplusVal: presentPool.surplusVal,
+      },
     });
   }
 
