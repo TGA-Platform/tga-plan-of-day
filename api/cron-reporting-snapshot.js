@@ -466,15 +466,23 @@ export default async function handler(req, res) {
     let totalDailyRows = 0;
     let totalWwccRows = 0;
 
-    for (const centre of CENTRES) {
-      for (const date of dates) {
-        try {
-          const counts = await snapshotCentreDate(centre, date, wwccAll, skipWwcc);
-          totalSlotRows += counts.slotRows;
-          totalDailyRows += counts.dailyRows;
-          totalWwccRows += counts.wwccRows;
-        } catch (err) {
-          console.error(`[cron-reporting-snapshot] ${centre.id} ${date} failed:`, err.message);
+    // Process all centres for each date in parallel to fit inside the function timeout.
+    for (const date of dates) {
+      const results = await Promise.all(
+        CENTRES.map(centre =>
+          snapshotCentreDate(centre, date, wwccAll, skipWwcc)
+            .then(counts => ({ ok: true, counts }))
+            .catch(err => {
+              console.error(`[cron-reporting-snapshot] ${centre.id} ${date} failed:`, err.message);
+              return { ok: false, counts: { slotRows: 0, dailyRows: 0, wwccRows: 0 } };
+            })
+        )
+      );
+      for (const r of results) {
+        if (r.ok) {
+          totalSlotRows += r.counts.slotRows;
+          totalDailyRows += r.counts.dailyRows;
+          totalWwccRows += r.counts.wwccRows;
         }
       }
     }
