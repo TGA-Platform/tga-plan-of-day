@@ -418,19 +418,20 @@ function getDatesToSnapshot() {
   const today = getTodaySydney();
   const dates = new Set();
 
-  // Today + future
-  for (let i = 0; i <= FUTURE_DAYS; i++) {
+  // Always process today and tomorrow to keep the report current and allow
+  // next-day planning. Keep the batch small so the function finishes well
+  // within Vercel's serverless timeout.
+  for (let i = 0; i <= 1; i++) {
     const d = addDaysSydney(today, i);
     if (getDayOfWeekSydney(d) !== 0 && getDayOfWeekSydney(d) !== 6) dates.add(d);
   }
 
-  // Nightly backfill for past dates
+  // Nightly backfill: cycle through the last 7 weekdays, one per day.
   const now = getSydneyNow();
   if (now.getHours() >= 2 && now.getHours() < 3) {
-    for (let i = 1; i <= BACKFILL_DAYS; i++) {
-      const d = addDaysSydney(today, -i);
-      if (getDayOfWeekSydney(d) !== 0 && getDayOfWeekSydney(d) !== 6) dates.add(d);
-    }
+    const dayIndex = now.getDate() % 7; // 0-6
+    const d = addDaysSydney(today, -(dayIndex + 1));
+    if (getDayOfWeekSydney(d) !== 0 && getDayOfWeekSydney(d) !== 6) dates.add(d);
   }
 
   return [...dates].sort();
