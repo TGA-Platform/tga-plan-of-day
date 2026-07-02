@@ -116,7 +116,7 @@ function normName(name) {
   return String(name || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet, zCasualCountByCentre) {
+function calcCentreForecast(centre, date, forecasts, childrenExpected, rosters, internalCasualSet, zCasualCountByCentre) {
   const campus = centre.ownaName ?? centre.name;
   const fc = forecasts[campus];
   if (!fc) return null;
@@ -151,8 +151,12 @@ function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet,
     return { room: room.name, expected, required, staffCount: roomStaff };
   });
 
-  const totalExpected = roomData.reduce((s, r) => s + r.expected, 0);
+  const totalExpectedFromRooms = roomData.reduce((s, r) => s + r.expected, 0);
   const totalRequired = roomData.reduce((s, r) => s + r.required, 0);
+  // Match the Ratio Dashboard "Expected" number, which uses children-expected (last week's same-weekday attendance).
+  const totalExpected = Array.isArray(childrenExpected) && childrenExpected.length > 0
+    ? childrenExpected.length
+    : totalExpectedFromRooms;
   const totalFloorStaff = roomData.reduce((s, r) => s + r.staffCount, 0);
 
   const floatIds = new Set(centre.floatUnitIds || []);
@@ -354,6 +358,20 @@ export default async function handler(req, res) {
     const forecasts = forecastRes.ok ? await forecastRes.json() : {};
     const rosters = rosterRes.ok ? await rosterRes.json() : [];
 
+    // Fetch children-expected per campus to match the Ratio Dashboard "Expected" number.
+    const childrenExpectedByCentre = {};
+    await Promise.all(CENTRES.map(async (centre) => {
+      const campus = centre.ownaName ?? centre.name;
+      try {
+        const res = await fetch(`${proto}://${host}/api/children-expected?campus=${encodeURIComponent(campus)}&date=${date}`);
+        if (res.ok) {
+          childrenExpectedByCentre[centre.id] = await res.json();
+        }
+      } catch (e) {
+        console.warn(`[staffing-forecast-email] children-expected failed for ${campus}:`, e.message);
+      }
+    }));
+
     const wwccRows = wwccRes.ok ? await wwccRes.json() : [];
     const internalCasualSet = new Set(
       wwccRows.filter(r => r.is_internal_casual).map(r => normName(r.full_name))
@@ -365,7 +383,7 @@ export default async function handler(req, res) {
       zCasualCountByCentre[row.centre] = (zCasualCountByCentre[row.centre] || 0) + 1;
     }
 
-    const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet, zCasualCountByCentre));
+    const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, childrenExpectedByCentre[centre.id], rosters, internalCasualSet, zCasualCountByCentre));
     const html = buildHtml(summary, { title: `TGA Staffing Forecast — ${formatDateLabel(date)}` });
 
     let sent = null;
