@@ -251,9 +251,11 @@ export default function MorningBriefingPage() {
 
         const allDayCalc   = calcRoomRequired(kids);
         const presentCalc  = calcRoomRequired(presentKids);
+        // Compute surplus/deficit based on currently present children so the
+        // morning briefing reflects the current state, not the full-day projection.
         const roomData = centre.rooms.map(room => {
           const owna = (room.ownaRoomName ?? room.name).toLowerCase();
-          const rk = kids.filter(c => c.room.toLowerCase().includes(owna));
+          const rk = presentKids.filter(c => c.room.toLowerCase().includes(owna));
           const { required: roomRequired } = calcRequiredStaff(rk.map(c => ({ ageMonths: parseAgeMonths(c.age) } as any)));
           // Count staff whose RAW location is this room (ignore moves so card matches staffing analysis)
           const roomStaff = centreRosters.filter(r => r.unitId === room.deputyUnitId);
