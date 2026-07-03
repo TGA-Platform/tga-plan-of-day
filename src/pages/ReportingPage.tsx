@@ -106,6 +106,26 @@ interface RosterRec {
   type:   'overstaffed' | 'understaffed';
 }
 
+interface RosterSuggestion {
+  type: 'shift-start' | 'shift-end' | 'add-staff';
+  staffName: string;
+  fromTime: string;
+  toTime: string;
+  coversStart: string;
+  coversEnd: string;
+  shortfallFte: number;
+  text: string;
+}
+
+interface RosterSuggestionResult {
+  centre: string;
+  date: string;
+  optimal: boolean;
+  suggestions: RosterSuggestion[];
+  beforeShortfallSlots: string[];
+  afterShortfallSlots: string[];
+}
+
 interface StaffingAnalysisRow {
   date:                string;
   campus:              string;
@@ -160,6 +180,242 @@ async function fetchRostersForDate(unitIds: number[], date: string) {
     body: JSON.stringify({ date, unitIds }),
   });
   return r.ok ? r.json() : [];
+}
+
+const ROSTER_SUGGESTION_SLOTS = Array.from({ length: 22 }, (_, i) => {
+  const m = 7 * 60 + i * 30;
+  const h = Math.floor(m / 60);
+  const min = m % 60;
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+});
+
+function slotToMinutes(slot: string) {
+  const [h, m] = slot.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function minsToHhmm(mins: number) {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function isDirectorUnit(r: any) {
+  const uName = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
+  return uName.includes('director') && !uName.includes('assistant') && !uName.includes('asst');
+}
+
+function getStaffName(r: any) {
+  return r._DPMetaData?.EmployeeInfo?.DisplayName || `Employee ${r.Employee}`;
+}
+
+function shiftCovers(r: any, slotMinutes: number) {
+  if (!r.StartTime || !r.EndTime) return false;
+  const startM = hhmm(r.StartTime);
+  const endM = hhmm(r.EndTime);
+  if (startM === null || endM === null) return false;
+  return startM <= slotMinutes && endM > slotMinutes;
+}
+
+async function buildRosterSuggestionsForCentre(centre: any, date: string): Promise<RosterSuggestionResult> {
+  const campus = centre.ownaName ?? centre.name;
+  const allUnitIds = [
+    ...centre.rooms.map((r: any) => r.deputyUnitId),
+    ...(centre.floatUnitIds ?? []),
+    ...(centre.issUnitIds ?? []),
+    ...(centre.leaveUnitIds ?? []),
+    ...(centre.nonRatioUnitIds ?? []),
+  ];
+  const roomUnitIds = new Set(centre.rooms.map((r: any) => r.deputyUnitId));
+  const floatUnitIds = new Set(centre.floatUnitIds ?? []);
+  const nonRatioIdsSet = new Set([...(centre.nonRatioUnitIds ?? []), ...(centre.leaveUnitIds ?? [])]);
+
+  const [att, rosters] = await Promise.all([
+    fetchAttendance(campus, date),
+    fetchRostersForDate(allUnitIds, date),
+  ]);
+
+  // Per-slot coverage
+  const slotCoverage = ROSTER_SUGGESTION_SLOTS.map(slot => {
+    const sm = slotToMinutes(slot);
+    const childrenAtSlot = (att as any[]).filter((r: any) => {
+      const siM = hhmm(r.sign_in);
+      if (siM === null || siM > sm) return false;
+      const soM = hhmm(r.sign_out);
+      if (soM !== null && soM <= sm) return false;
+      const psoM = hhmm(r.predicted_sign_out);
+      if (soM === null && psoM !== null && psoM <= sm) return false;
+      return true;
+    });
+    const childrenByRoom: Record<string, any[]> = {};
+    for (const child of childrenAtSlot) {
+      const rk = child.room || 'unassigned';
+      (childrenByRoom[rk] = childrenByRoom[rk] || []).push(child);
+    }
+    let required = 0;
+    for (const roomKids of Object.values(childrenByRoom)) {
+      required += calcRequiredStaff(roomKids.map((c: any) => ({ ageMonths: c.ageMonths ?? parseAgeMonths(c.age ?? null) } as any))).required;
+    }
+
+    const floor = new Set<number>();
+    const offFloor = new Set<number>();
+    const offFloorExclDirector = new Set<number>();
+    const shiftStaff: any[] = [];
+    for (const r of rosters as any[]) {
+      if (!r.Employee || r.Employee === 0) continue;
+      if (!shiftCovers(r, sm)) continue;
+      const isFloor = roomUnitIds.has(r.OperationalUnit) || floatUnitIds.has(r.OperationalUnit);
+      const isOffFloor = nonRatioIdsSet.has(r.OperationalUnit);
+      shiftStaff.push(r);
+      if (isFloor) floor.add(r.Employee);
+      if (isOffFloor) {
+        offFloor.add(r.Employee);
+        if (!isDirectorUnit(r)) offFloorExclDirector.add(r.Employee);
+      }
+    }
+
+    return {
+      slot,
+      sm,
+      required,
+      floorCount: floor.size,
+      offFloorExclDirectorCount: offFloorExclDirector.size,
+      available: floor.size + offFloorExclDirector.size,
+      surplus: floor.size + offFloorExclDirector.size - required,
+      shiftStaff,
+    };
+  });
+
+  const shortfallSlots = slotCoverage.filter(s => s.surplus < 0);
+  if (shortfallSlots.length === 0) {
+    return {
+      centre: campus,
+      date,
+      optimal: true,
+      suggestions: [],
+      beforeShortfallSlots: [],
+      afterShortfallSlots: [],
+    };
+  }
+
+  // Group consecutive shortfall slots into windows
+  const windows: { startIdx: number; endIdx: number; startSlot: string; endSlot: string; peakShortfall: number }[] = [];
+  let current: typeof windows[0] | null = null;
+  for (let i = 0; i < slotCoverage.length; i++) {
+    const s = slotCoverage[i];
+    if (s.surplus < 0) {
+      if (!current) {
+        current = { startIdx: i, endIdx: i, startSlot: s.slot, endSlot: s.slot, peakShortfall: Math.abs(s.surplus) };
+      } else {
+        current.endIdx = i;
+        current.endSlot = s.slot;
+        current.peakShortfall = Math.max(current.peakShortfall, Math.abs(s.surplus));
+      }
+    } else {
+      if (current) { windows.push(current); current = null; }
+    }
+  }
+  if (current) windows.push(current);
+
+  const suggestions: RosterSuggestion[] = [];
+  const adjustedRosters = (rosters as any[]).map(r => ({ ...r }));
+  const usedStaff = new Set<number>();
+
+  for (const w of windows) {
+    const windowStartM = slotToMinutes(w.startSlot);
+    const windowEndM = slotToMinutes(w.endSlot) + 30;
+
+    // Candidate 1: staff whose shift starts during/just after the window starts (arrive late)
+    const startCandidates = adjustedRosters.filter(r => {
+      if (!r.Employee || usedStaff.has(r.Employee)) return false;
+      if (isDirectorUnit(r)) return false;
+      const sm = hhmm(r.StartTime);
+      return sm !== null && sm > windowStartM && sm <= windowEndM;
+    }).sort((a, b) => (hhmm(a.StartTime) ?? 0) - (hhmm(b.StartTime) ?? 0));
+
+    if (startCandidates.length > 0) {
+      const r = startCandidates[0];
+      const oldStart = r.StartTime;
+      const newStart = minsToHhmm(windowStartM);
+      r.StartTime = newStart;
+      usedStaff.add(r.Employee);
+      suggestions.push({
+        type: 'shift-start',
+        staffName: getStaffName(r),
+        fromTime: oldStart,
+        toTime: newStart,
+        coversStart: w.startSlot,
+        coversEnd: minsToHhmm(windowEndM),
+        shortfallFte: w.peakShortfall,
+        text: `Move ${getStaffName(r)}'s start from ${oldStart} → ${newStart} to cover the ${w.startSlot}–${minsToHhmm(windowEndM)} shortfall in ${campus}`,
+      });
+      continue;
+    }
+
+    // Candidate 2: staff whose shift ends during/just before the window ends (leave early)
+    const endCandidates = adjustedRosters.filter(r => {
+      if (!r.Employee || usedStaff.has(r.Employee)) return false;
+      if (isDirectorUnit(r)) return false;
+      const em = hhmm(r.EndTime);
+      return em !== null && em >= windowStartM && em < windowEndM;
+    }).sort((a, b) => (hhmm(b.EndTime) ?? 0) - (hhmm(a.EndTime) ?? 0));
+
+    if (endCandidates.length > 0) {
+      const r = endCandidates[0];
+      const oldEnd = r.EndTime;
+      const newEnd = minsToHhmm(windowEndM);
+      r.EndTime = newEnd;
+      usedStaff.add(r.Employee);
+      suggestions.push({
+        type: 'shift-end',
+        staffName: getStaffName(r),
+        fromTime: oldEnd,
+        toTime: newEnd,
+        coversStart: w.startSlot,
+        coversEnd: minsToHhmm(windowEndM),
+        shortfallFte: w.peakShortfall,
+        text: `Extend ${getStaffName(r)}'s finish from ${oldEnd} → ${newEnd} to cover the ${w.startSlot}–${minsToHhmm(windowEndM)} shortfall in ${campus}`,
+      });
+      continue;
+    }
+
+    // Fallback: add staff
+    suggestions.push({
+      type: 'add-staff',
+      staffName: 'Additional staff',
+      fromTime: '-',
+      toTime: '-',
+      coversStart: w.startSlot,
+      coversEnd: minsToHhmm(windowEndM),
+      shortfallFte: w.peakShortfall,
+      text: `Add ${Math.ceil(w.peakShortfall)} staff member${Math.ceil(w.peakShortfall) > 1 ? 's' : ''} from ${w.startSlot}–${minsToHhmm(windowEndM)} to cover the shortfall in ${campus}`,
+    });
+  }
+
+  // Recompute after applying adjustments
+  const afterShortfallSlots = ROSTER_SUGGESTION_SLOTS.map(slot => {
+    const sm = slotToMinutes(slot);
+    const floor = new Set<number>();
+    const offFloorExclDirector = new Set<number>();
+    for (const r of adjustedRosters) {
+      if (!r.Employee || r.Employee === 0) continue;
+      if (!shiftCovers(r, sm)) continue;
+      const isFloor = roomUnitIds.has(r.OperationalUnit) || floatUnitIds.has(r.OperationalUnit);
+      const isOffFloor = nonRatioIdsSet.has(r.OperationalUnit);
+      if (isFloor) floor.add(r.Employee);
+      if (isOffFloor && !isDirectorUnit(r)) offFloorExclDirector.add(r.Employee);
+    }
+    return { slot, surplus: floor.size + offFloorExclDirector.size - slotCoverage.find(s => s.slot === slot)!.required };
+  }).filter(s => s.surplus < 0).map(s => s.slot);
+
+  return {
+    centre: campus,
+    date,
+    optimal: false,
+    suggestions,
+    beforeShortfallSlots: shortfallSlots.map(s => s.slot),
+    afterShortfallSlots,
+  };
 }
 
 async function fetchZCasualsForDate(centreName: string, date: string) {
@@ -224,6 +480,8 @@ export default function ReportingPage() {
   const [occupancyRows, setOccupancyRows]   = useState<OccupancyRow[]>([]);
   const [rosterOptData, setRosterOptData]   = useState<RosterOptResult[]>([]);
   const [rosterRecs, setRosterRecs]         = useState<RosterRec[]>([]);
+  const [rosterSuggestions, setRosterSuggestions] = useState<RosterSuggestionResult[] | null>(null);
+  const [rosterSuggestionsLoading, setRosterSuggestionsLoading] = useState(false);
   const [staffingAnalysisRows, setStaffingAnalysisRows] = useState<StaffingAnalysisRow[]>([]);
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean; is_internal_casual?: boolean };
   // WWCC lookup function - tries multiple strategies to handle name mismatches
@@ -239,6 +497,33 @@ export default function ReportingPage() {
     { id: 'wwcc-expiry',        icon: '🛡️', label: 'WWCC Expiries',             desc: 'Working With Children Check expiry dates for all active staff. Sorted by soonest expiring.' },
     { id: 'staffing-analysis', icon: '📊', label: 'Staffing Analysis',          desc: 'Float pool surplus/deficit per centre per day — mirrors the staffing analysis Float Pool panel. Shows buffer required (1:6 floor staff), floats available, AD coverage for small centres (<100 children).' },
   ];
+
+  const handleGenerateRosterSuggestions = async () => {
+    setRosterSuggestionsLoading(true);
+    setRosterSuggestions(null);
+    try {
+      const dates: string[] = [];
+      let cur = fromDate;
+      while (cur <= toDate) {
+        const [y, m, dy] = cur.split('-').map(Number);
+        const dow = new Date(Date.UTC(y, m - 1, dy)).getUTCDay();
+        if (dow !== 0 && dow !== 6) dates.push(cur);
+        cur = new Date(Date.UTC(y, m - 1, dy + 1)).toISOString().slice(0, 10);
+      }
+      const results: RosterSuggestionResult[] = [];
+      for (const centre of selectedCentres) {
+        for (const date of dates) {
+          results.push(await buildRosterSuggestionsForCentre(centre, date));
+        }
+      }
+      setRosterSuggestions(results);
+    } catch (err: any) {
+      console.error('Failed to generate roster suggestions:', err);
+      alert('Failed to generate roster suggestions: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setRosterSuggestionsLoading(false);
+    }
+  };
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=1100,height=800');
@@ -2238,6 +2523,59 @@ export default function ReportingPage() {
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
                   <strong>Roster Optimisation</strong> - Average staffing vs. required per 30-min slot. Required staff calculated using real NSW age-based ratios (1:4 under 2, 1:5 aged 2-3, 1:10 aged 3+) from actual child ages in Owna. Surplus = Floor Staff (ratio) minus Required. Surplus (incl Off Floor) adds off-floor staff who can step onto the floor, excluding the centre director.
                 </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleGenerateRosterSuggestions}
+                    disabled={rosterSuggestionsLoading}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-60"
+                    style={{ backgroundColor: '#2d5c18' }}
+                  >
+                    {rosterSuggestionsLoading ? 'Analysing…' : 'Generate roster suggestions'}
+                  </button>
+                  {rosterSuggestions !== null && !rosterSuggestionsLoading && (
+                    <span className="text-sm" style={{ color: '#596570' }}>
+                      {rosterSuggestions.every(r => r.optimal)
+                        ? 'All rosters are optimal'
+                        : `${rosterSuggestions.filter(r => !r.optimal).length} centre/date(s) need changes`}
+                    </span>
+                  )}
+                </div>
+
+                {rosterSuggestions !== null && (
+                  <div className="space-y-4">
+                    {rosterSuggestions.map((result, ri) => (
+                      <div key={ri} className="rounded-xl border p-4" style={{ borderColor: '#E2F1DA', backgroundColor: '#fafffe' }}>
+                        <div className="font-bold text-sm mb-2" style={{ color: '#2d5c18' }}>
+                          {result.centre} · {result.date}
+                        </div>
+                        {result.optimal ? (
+                          <div className="rounded-lg p-3 text-sm font-medium" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>
+                            Roster is already optimal
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            <div className="space-y-2">
+                              {result.suggestions.map((s, si) => (
+                                <div key={si} className="rounded-lg p-3 text-sm" style={{ backgroundColor: '#fef9c3', color: '#854d0e', border: '1px solid #fde68a' }}>
+                                  <strong>Suggestion {si + 1}:</strong> {s.text}
+                                  <div className="text-xs mt-1" style={{ color: '#a16207' }}>
+                                    Peak shortfall: {s.shortfallFte.toFixed(1)} FTE · Covers {s.coversStart}–{s.coversEnd}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="rounded-lg p-3 text-xs" style={{ backgroundColor: '#f0f0f0', color: '#555' }}>
+                              <strong>Before → After:</strong>{' '}
+                              {result.beforeShortfallSlots.length} shortfall slot{result.beforeShortfallSlots.length === 1 ? '' : 's'} ({result.beforeShortfallSlots.join(', ')}){' '}
+                              → {result.afterShortfallSlots.length === 0 ? '0 shortfall slots' : `${result.afterShortfallSlots.length} remaining (${result.afterShortfallSlots.join(', ')})`}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {rosterRecs.length > 0 && (
                   <div className="space-y-2">
