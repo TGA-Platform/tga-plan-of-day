@@ -117,6 +117,15 @@ interface RosterSuggestion {
   text: string;
 }
 
+interface RosterSlotAfter {
+  slot: string;
+  beforeAvailable: number;
+  afterAvailable: number;
+  beforeSurplus: number;
+  afterSurplus: number;
+  totalDays: number;
+}
+
 interface RosterSuggestionResult {
   centre: string;
   date: string;
@@ -124,6 +133,7 @@ interface RosterSuggestionResult {
   suggestions: RosterSuggestion[];
   beforeShortfallSlots: string[];
   afterShortfallSlots: string[];
+  slotBySlot: RosterSlotAfter[];
 }
 
 interface StaffingAnalysisRow {
@@ -218,6 +228,7 @@ function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlotData[]
       suggestions: [],
       beforeShortfallSlots: [],
       afterShortfallSlots: [],
+      slotBySlot: [],
     };
   }
 
@@ -279,12 +290,33 @@ function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlotData[]
       });
     }
 
-    // Simulate coverage improvement: add staffNeeded FTE to each slot in the window
+    // Simulate shift move: add coverage to shortfall window...
+    const durationSlots = w.durationSlots;
     for (let i = w.startIdx; i <= w.endIdx; i++) {
       simulatedCoverage[i].available += staffNeeded * Math.max(simulatedCoverage[i].totalDays, 1);
-      simulatedCoverage[i].surplus = (simulatedCoverage[i].available - simulatedCoverage[i].required) / Math.max(simulatedCoverage[i].totalDays, 1);
+    }
+    // ...and subtract it from the opposite end of the day so total hours stay the same
+    for (let i = 0; i < durationSlots; i++) {
+      const idx = shiftEarlier ? simulatedCoverage.length - 1 - i : i;
+      if (idx >= 0 && idx < simulatedCoverage.length) {
+        simulatedCoverage[idx].available -= staffNeeded * Math.max(simulatedCoverage[idx].totalDays, 1);
+      }
     }
   }
+
+  // Recompute surplus across all slots after applying every suggestion
+  for (const s of simulatedCoverage) {
+    s.surplus = (s.available - s.required) / Math.max(s.totalDays, 1);
+  }
+
+  const slotBySlot: RosterSlotAfter[] = slotCoverage.map((before, i) => ({
+    slot: before.slot,
+    beforeAvailable: before.totalDays > 0 ? before.available / before.totalDays : 0,
+    afterAvailable: simulatedCoverage[i].totalDays > 0 ? simulatedCoverage[i].available / simulatedCoverage[i].totalDays : 0,
+    beforeSurplus: before.surplus,
+    afterSurplus: simulatedCoverage[i].surplus,
+    totalDays: before.totalDays,
+  }));
 
   return {
     centre: campus,
@@ -293,6 +325,7 @@ function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlotData[]
     suggestions,
     beforeShortfallSlots: shortfallSlots.map(s => s.slot),
     afterShortfallSlots: simulatedCoverage.filter(s => s.surplus < 0).map(s => s.slot),
+    slotBySlot,
   };
 }
 
@@ -2443,7 +2476,43 @@ export default function ReportingPage() {
                               <strong>Before → After:</strong>{' '}
                               {result.beforeShortfallSlots.length} shortfall slot{result.beforeShortfallSlots.length === 1 ? '' : 's'} ({result.beforeShortfallSlots.join(', ')}){' '}
                               → {result.afterShortfallSlots.length === 0 ? '0 shortfall slots' : `${result.afterShortfallSlots.length} remaining (${result.afterShortfallSlots.join(', ')})`}
+                              {result.afterShortfallSlots.length > 0 && (
+                                <span style={{ color: '#991b1b' }}> · Warning: suggestions create or leave shortfalls elsewhere.</span>
+                              )}
                             </div>
+
+                            {result.slotBySlot.length > 0 && (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-xs mt-2">
+                                  <thead>
+                                    <tr style={{ backgroundColor: '#F5FAF3' }}>
+                                      <th className="py-1 px-2 text-left font-semibold" style={{ color: '#5a9228' }}>Time</th>
+                                      <th className="py-1 px-2 text-center font-semibold" style={{ color: '#5a9228' }}>Staff Before</th>
+                                      <th className="py-1 px-2 text-center font-semibold" style={{ color: '#5a9228' }}>Staff After</th>
+                                      <th className="py-1 px-2 text-center font-semibold" style={{ color: '#5a9228' }}>Surplus Before</th>
+                                      <th className="py-1 px-2 text-center font-semibold" style={{ color: '#5a9228' }}>Surplus After</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {result.slotBySlot.map((row, ridx) => {
+                                      const changed = row.beforeAvailable !== row.afterAvailable || row.beforeSurplus !== row.afterSurplus;
+                                      const isShortBefore = row.beforeSurplus < 0;
+                                      const isShortAfter = row.afterSurplus < 0;
+                                      if (!changed && !isShortBefore && !isShortAfter) return null;
+                                      return (
+                                        <tr key={ridx} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: isShortAfter ? '#fef2f2' : 'white' }}>
+                                          <td className="py-1 px-2 font-mono font-medium" style={{ color: '#2d5c18' }}>{row.slot}</td>
+                                          <td className="py-1 px-2 text-center" style={{ color: '#596570' }}>{row.totalDays > 0 ? row.beforeAvailable.toFixed(1) : '—'}</td>
+                                          <td className="py-1 px-2 text-center font-medium" style={{ color: row.afterAvailable !== row.beforeAvailable ? '#2d5c18' : '#596570' }}>{row.totalDays > 0 ? row.afterAvailable.toFixed(1) : '—'}</td>
+                                          <td className="py-1 px-2 text-center" style={{ color: isShortBefore ? '#dc2626' : row.beforeSurplus > 1 ? '#d97706' : '#166534' }}>{row.totalDays > 0 ? (row.beforeSurplus >= 0 ? '+' : '') + row.beforeSurplus.toFixed(1) : '—'}</td>
+                                          <td className="py-1 px-2 text-center font-semibold" style={{ color: isShortAfter ? '#dc2626' : row.afterSurplus > 1 ? '#d97706' : '#166534' }}>{row.totalDays > 0 ? (row.afterSurplus >= 0 ? '+' : '') + row.afterSurplus.toFixed(1) : '—'}</td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
