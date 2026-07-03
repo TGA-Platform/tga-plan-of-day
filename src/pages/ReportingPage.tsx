@@ -255,51 +255,95 @@ function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlotData[]
   const suggestions: RosterSuggestion[] = [];
   const simulatedCoverage = slotCoverage.map(s => ({ ...s }));
   const middayMins = 12 * 60;
+  const MIN_OPEN_CLOSE_STAFF = 2;
+
+  const staffMeetsMin = (slot: typeof simulatedCoverage[0]) => {
+    if (slot.totalDays <= 0) return true;
+    return slot.available >= MIN_OPEN_CLOSE_STAFF * slot.totalDays;
+  };
 
   for (const w of windows) {
     const windowStartM = slotToMinutes(w.startSlot);
     const windowEndM = slotToMinutes(w.endSlot) + 30;
     const durationMins = windowEndM - windowStartM;
+    const durationSlots = w.durationSlots;
     const staffNeeded = Math.max(1, Math.ceil(w.peakShortfall));
     const windowMidMins = (windowStartM + windowEndM) / 2;
     const shiftEarlier = windowMidMins <= middayMins;
 
-    if (shiftEarlier) {
-      const text = `Move ${staffNeeded} staff member${staffNeeded > 1 ? 's' : ''} to start ${durationMins} minutes earlier and finish ${durationMins} minutes earlier to cover the ${w.startSlot}–${minsToHhmm(windowEndM)} shortfall in ${campus}.`;
-      suggestions.push({
-        type: 'shift-start',
-        staffName: staffNeeded > 1 ? `${staffNeeded} staff members` : 'One staff member',
-        fromTime: w.startSlot,
-        toTime: minsToHhmm(windowStartM - durationMins),
-        coversStart: w.startSlot,
-        coversEnd: minsToHhmm(windowEndM),
-        shortfallFte: w.peakShortfall,
-        text,
-      });
-    } else {
-      const text = `Move ${staffNeeded} staff member${staffNeeded > 1 ? 's' : ''} to start ${durationMins} minutes later and finish ${durationMins} minutes later to cover the ${w.startSlot}–${minsToHhmm(windowEndM)} shortfall in ${campus}.`;
-      suggestions.push({
-        type: 'shift-end',
-        staffName: staffNeeded > 1 ? `${staffNeeded} staff members` : 'One staff member',
-        fromTime: minsToHhmm(windowEndM),
-        toTime: minsToHhmm(windowEndM + durationMins),
-        coversStart: w.startSlot,
-        coversEnd: minsToHhmm(windowEndM),
-        shortfallFte: w.peakShortfall,
-        text,
-      });
-    }
+    // Tentatively apply the shift move and check open/close minimums
+    const tentativelyApply = () => {
+      for (let i = w.startIdx; i <= w.endIdx; i++) {
+        simulatedCoverage[i].available += staffNeeded * Math.max(simulatedCoverage[i].totalDays, 1);
+      }
+      for (let i = 0; i < durationSlots; i++) {
+        const idx = shiftEarlier ? simulatedCoverage.length - 1 - i : i;
+        if (idx >= 0 && idx < simulatedCoverage.length) {
+          simulatedCoverage[idx].available -= staffNeeded * Math.max(simulatedCoverage[idx].totalDays, 1);
+        }
+      }
+    };
 
-    // Simulate shift move: add coverage to shortfall window...
-    const durationSlots = w.durationSlots;
-    for (let i = w.startIdx; i <= w.endIdx; i++) {
-      simulatedCoverage[i].available += staffNeeded * Math.max(simulatedCoverage[i].totalDays, 1);
-    }
-    // ...and subtract it from the opposite end of the day so total hours stay the same
-    for (let i = 0; i < durationSlots; i++) {
-      const idx = shiftEarlier ? simulatedCoverage.length - 1 - i : i;
-      if (idx >= 0 && idx < simulatedCoverage.length) {
-        simulatedCoverage[idx].available -= staffNeeded * Math.max(simulatedCoverage[idx].totalDays, 1);
+    const revert = () => {
+      for (let i = w.startIdx; i <= w.endIdx; i++) {
+        simulatedCoverage[i].available -= staffNeeded * Math.max(simulatedCoverage[i].totalDays, 1);
+      }
+      for (let i = 0; i < durationSlots; i++) {
+        const idx = shiftEarlier ? simulatedCoverage.length - 1 - i : i;
+        if (idx >= 0 && idx < simulatedCoverage.length) {
+          simulatedCoverage[idx].available += staffNeeded * Math.max(simulatedCoverage[idx].totalDays, 1);
+        }
+      }
+    };
+
+    tentativelyApply();
+    const openOk = staffMeetsMin(simulatedCoverage[0]);
+    const closeOk = staffMeetsMin(simulatedCoverage[simulatedCoverage.length - 1]);
+    const moveIsValid = openOk && closeOk;
+
+    if (moveIsValid) {
+      if (shiftEarlier) {
+        const text = `Move ${staffNeeded} staff member${staffNeeded > 1 ? 's' : ''} to start ${durationMins} minutes earlier and finish ${durationMins} minutes earlier to cover the ${w.startSlot}–${minsToHhmm(windowEndM)} shortfall in ${campus}.`;
+        suggestions.push({
+          type: 'shift-start',
+          staffName: staffNeeded > 1 ? `${staffNeeded} staff members` : 'One staff member',
+          fromTime: w.startSlot,
+          toTime: minsToHhmm(windowStartM - durationMins),
+          coversStart: w.startSlot,
+          coversEnd: minsToHhmm(windowEndM),
+          shortfallFte: w.peakShortfall,
+          text,
+        });
+      } else {
+        const text = `Move ${staffNeeded} staff member${staffNeeded > 1 ? 's' : ''} to start ${durationMins} minutes later and finish ${durationMins} minutes later to cover the ${w.startSlot}–${minsToHhmm(windowEndM)} shortfall in ${campus}.`;
+        suggestions.push({
+          type: 'shift-end',
+          staffName: staffNeeded > 1 ? `${staffNeeded} staff members` : 'One staff member',
+          fromTime: minsToHhmm(windowEndM),
+          toTime: minsToHhmm(windowEndM + durationMins),
+          coversStart: w.startSlot,
+          coversEnd: minsToHhmm(windowEndM),
+          shortfallFte: w.peakShortfall,
+          text,
+        });
+      }
+    } else {
+      revert();
+      const reason = !openOk && !closeOk ? 'opening and closing' : !openOk ? 'opening' : 'closing';
+      const text = `Add ${staffNeeded} staff member${staffNeeded > 1 ? 's' : ''} from ${w.startSlot}–${minsToHhmm(windowEndM)} to cover the shortfall in ${campus} (shifting existing staff would drop ${reason} below ${MIN_OPEN_CLOSE_STAFF}).`;
+      suggestions.push({
+        type: 'add-staff',
+        staffName: staffNeeded > 1 ? `${staffNeeded} staff members` : 'One staff member',
+        fromTime: '-',
+        toTime: '-',
+        coversStart: w.startSlot,
+        coversEnd: minsToHhmm(windowEndM),
+        shortfallFte: w.peakShortfall,
+        text,
+      });
+      // Apply the add-staff coverage to the shortfall window (does not subtract anywhere)
+      for (let i = w.startIdx; i <= w.endIdx; i++) {
+        simulatedCoverage[i].available += staffNeeded * Math.max(simulatedCoverage[i].totalDays, 1);
       }
     }
   }
@@ -2479,6 +2523,20 @@ export default function ReportingPage() {
                               {result.afterShortfallSlots.length > 0 && (
                                 <span style={{ color: '#991b1b' }}> · Warning: suggestions create or leave shortfalls elsewhere.</span>
                               )}
+                              {(() => {
+                                const openSlot = result.slotBySlot[0];
+                                const closeSlot = result.slotBySlot[result.slotBySlot.length - 1];
+                                const openStaff = openSlot?.afterAvailable ?? 0;
+                                const closeStaff = closeSlot?.afterAvailable ?? 0;
+                                const openLow = openStaff < 2;
+                                const closeLow = closeStaff < 2;
+                                if (!openLow && !closeLow) return null;
+                                return (
+                                  <span style={{ color: '#991b1b' }}>
+                                    {' '}· Opening/closing minimum 2 staff not met ({openLow ? `opening ${openStaff.toFixed(1)}` : ''}{openLow && closeLow ? ', ' : ''}{closeLow ? `closing ${closeStaff.toFixed(1)}` : ''}).
+                                  </span>
+                                );
+                              })()}
                             </div>
 
                             {result.slotBySlot.length > 0 && (
