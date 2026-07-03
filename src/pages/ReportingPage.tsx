@@ -200,9 +200,12 @@ function minsToHhmm(mins: number) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
-function isDirectorUnit(r: any) {
+function isOffFloorCover(r: any) {
   const uName = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
-  return uName.includes('director') && !uName.includes('assistant') && !uName.includes('asst');
+  if (uName.includes('director') && !uName.includes('assistant') && !uName.includes('asst')) return false;
+  if (uName.includes('chef') || uName.includes('cook')) return false;
+  if (uName.includes('study') || uName.includes('trainee') || uName.includes('traineeship')) return false;
+  return true;
 }
 
 function getStaffName(r: any) {
@@ -270,7 +273,7 @@ async function buildRosterSuggestionsForCentre(centre: any, date: string): Promi
       if (isFloor) floor.add(r.Employee);
       if (isOffFloor) {
         offFloor.add(r.Employee);
-        if (!isDirectorUnit(r)) offFloorExclDirector.add(r.Employee);
+        if (isOffFloorCover(r)) offFloorExclDirector.add(r.Employee);
       }
     }
 
@@ -328,7 +331,7 @@ async function buildRosterSuggestionsForCentre(centre: any, date: string): Promi
     // Candidate 1: staff whose shift starts during/just after the window starts (arrive late)
     const startCandidates = adjustedRosters.filter(r => {
       if (!r.Employee || usedStaff.has(r.Employee)) return false;
-      if (isDirectorUnit(r)) return false;
+      if (!isOffFloorCover(r)) return false;
       const sm = hhmm(r.StartTime);
       return sm !== null && sm > windowStartM && sm <= windowEndM;
     }).sort((a, b) => (hhmm(a.StartTime) ?? 0) - (hhmm(b.StartTime) ?? 0));
@@ -355,7 +358,7 @@ async function buildRosterSuggestionsForCentre(centre: any, date: string): Promi
     // Candidate 2: staff whose shift ends during/just before the window ends (leave early)
     const endCandidates = adjustedRosters.filter(r => {
       if (!r.Employee || usedStaff.has(r.Employee)) return false;
-      if (isDirectorUnit(r)) return false;
+      if (!isOffFloorCover(r)) return false;
       const em = hhmm(r.EndTime);
       return em !== null && em >= windowStartM && em < windowEndM;
     }).sort((a, b) => (hhmm(b.EndTime) ?? 0) - (hhmm(a.EndTime) ?? 0));
@@ -403,7 +406,7 @@ async function buildRosterSuggestionsForCentre(centre: any, date: string): Promi
       const isFloor = roomUnitIds.has(r.OperationalUnit) || floatUnitIds.has(r.OperationalUnit);
       const isOffFloor = nonRatioIdsSet.has(r.OperationalUnit);
       if (isFloor) floor.add(r.Employee);
-      if (isOffFloor && !isDirectorUnit(r)) offFloorExclDirector.add(r.Employee);
+      if (isOffFloor && isOffFloorCover(r)) offFloorExclDirector.add(r.Employee);
     }
     return { slot, surplus: floor.size + offFloorExclDirector.size - slotCoverage.find(s => s.slot === slot)!.required };
   }).filter(s => s.surplus < 0).map(s => s.slot);
@@ -907,13 +910,17 @@ export default function ReportingPage() {
               shiftCheck(r)
             );
             const offFloorOnShift = new Set(offFloorRosters.map((r: any) => r.Employee)).size;
-            // Director is never counted as available floor cover
-            const isDirectorUnit = (r: any) => {
+            // Off-floor staff who can actually step onto the floor as ratio cover.
+            // Exclude director, chef/cook, and trainee/study-time units.
+            const isOffFloorCover = (r: any) => {
               const uName = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
-              return uName.includes('director') && !uName.includes('assistant') && !uName.includes('asst');
+              if (uName.includes('director') && !uName.includes('assistant') && !uName.includes('asst')) return false;
+              if (uName.includes('chef') || uName.includes('cook')) return false;
+              if (uName.includes('study') || uName.includes('trainee') || uName.includes('traineeship')) return false;
+              return true;
             };
-            const offFloorExclDirectorOnShift = new Set(
-              offFloorRosters.filter((r: any) => !isDirectorUnit(r)).map((r: any) => r.Employee)
+            const offFloorCoverOnShift = new Set(
+              offFloorRosters.filter((r: any) => isOffFloorCover(r)).map((r: any) => r.Employee)
             ).size;
             // ISS = unique ISS employees
             const issOnShift = new Set(
@@ -926,7 +933,7 @@ export default function ReportingPage() {
             rosterAccum[campus][rslot].sumChildren             += childrenPresent;
             rosterAccum[campus][rslot].sumStaff                  += staffOnShift;
             rosterAccum[campus][rslot].sumOffFloor               += offFloorOnShift;
-            rosterAccum[campus][rslot].sumOffFloorExclDirector   += offFloorExclDirectorOnShift;
+            rosterAccum[campus][rslot].sumOffFloorExclDirector   += offFloorCoverOnShift;
             rosterAccum[campus][rslot].sumISS                    += issOnShift;
             rosterAccum[campus][rslot].sumRequired               += reqStaff;
             rosterAccum[campus][rslot].days++;
@@ -2521,7 +2528,7 @@ export default function ReportingPage() {
             {viewingReport === 'roster-opt' && (
               <div className="space-y-6">
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
-                  <strong>Roster Optimisation</strong> - Average staffing vs. required per 30-min slot. Required staff calculated using real NSW age-based ratios (1:4 under 2, 1:5 aged 2-3, 1:10 aged 3+) from actual child ages in Owna. Surplus = Floor Staff (ratio) minus Required. Surplus (incl Off Floor) adds off-floor staff who can step onto the floor, excluding the centre director.
+                  <strong>Roster Optimisation</strong> - Average staffing vs. required per 30-min slot. Required staff calculated using real NSW age-based ratios (1:4 under 2, 1:5 aged 2-3, 1:10 aged 3+) from actual child ages in Owna. Surplus = Floor Staff (ratio) minus Required. Surplus (incl Off Floor) adds off-floor staff who can step onto the floor, excluding the centre director, chefs/cooks, and trainees on study time.
                 </div>
 
                 <div className="flex items-center gap-3">
