@@ -325,7 +325,10 @@ export default function RosterBuilderPage() {
     const unitIds = [
       ...centre.rooms.map(r => r.deputyUnitId),
       ...(centre.floatUnitIds || []),
+      ...(centre.issUnitIds || []),
     ];
+    const floatIds = new Set(centre.floatUnitIds || []);
+    const issIds = new Set(centre.issUnitIds || []);
     let imported = 0;
     let skipped = 0;
     const errors: string[] = [];
@@ -341,6 +344,13 @@ export default function RosterBuilderPage() {
         }
         for (const r of rosters) {
           const room = centre.rooms.find(rm => rm.deputyUnitId === r.unitId);
+          let roomName = room?.name;
+          let roomId = room?.id;
+          if (!roomName) {
+            if (floatIds.has(r.unitId)) { roomName = 'Float'; roomId = 'float'; }
+            else if (issIds.has(r.unitId)) { roomName = 'ISS'; roomId = 'iss'; }
+            else { roomName = r.unitName || 'Other'; roomId = 'other'; }
+          }
           const startM = hhmmToMinutes(r.startTime);
           const endM = hhmmToMinutes(r.endTime);
           const lunchM = Math.max(startM + 30, Math.min(endM - 60, startM + Math.floor((endM - startM) / 2)));
@@ -352,8 +362,8 @@ export default function RosterBuilderPage() {
             date,
             start_time: r.startTime,
             end_time: r.endTime,
-            room_id: room?.id,
-            room_name: room?.name || r.unitName,
+            room_id: roomId,
+            room_name: roomName,
             lunch_start: minutesToHhmm(lunchM),
             lunch_duration: 30,
             is_casual: false,
