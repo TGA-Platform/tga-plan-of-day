@@ -1,12 +1,13 @@
 /**
- * POST { mobile, pin, centreId, eventType, confirmed?, adjustedEndTime? }
+ * POST { mobile, pin, centreId, eventType, confirmed?, adjustedStartTime?, adjustedEndTime? }
  * → records a kiosk timeclock event and optionally pre-approves the timesheet.
  *
- * When ending a shift:
- * - If the employee confirms they completed their rostered shift (no overtime),
- *   the timesheet is pre-approved automatically.
- * - If they provide an adjusted end time (overtime), the timesheet is left pending
- *   for director review.
+ * When ending a shift the employee is always asked:
+ *   "Did you finish your shift on time?"
+ * - Yes  → actual clock times are recorded, but the timesheet is rounded to the
+ *          rostered start/end and pre-approved.
+ * - No   → employee can edit their start/finish times; approved = actual and the
+ *          timesheet is left pending for director review.
  */
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
@@ -20,7 +21,6 @@ const HEADERS = {
 };
 
 const VALID_EVENTS = ['start_shift', 'start_lunch', 'end_lunch', 'end_shift'];
-const KIOSK_TOLERANCE_MINUTES = 10;
 
 function nowSydneyISO() {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' })).toISOString();
@@ -53,7 +53,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).end();
 
-  const { mobile, pin, centreId, eventType, confirmed, adjustedEndTime } = req.body || {};
+  const { mobile, pin, centreId, eventType, confirmed, adjustedStartTime, adjustedEndTime } = req.body || {};
   if (!mobile || !pin || !eventType) {
     return res.status(400).json({ error: 'mobile, pin, and eventType required' });
   }
@@ -104,10 +104,11 @@ export default async function handler(req, res) {
     const shiftRows = await shiftRes.json();
     const shift = shiftRows.find(s => s.roster_weeks?.status === 'published') || shiftRows[0] || null;
 
-    // Determine event time: use adjustedEndTime if provided for end_shift
-    const eventTime = (eventType === 'end_shift' && adjustedEndTime)
-      ? `${today}T${adjustedEndTime}:00+10:00`
-      : nowSydneyISO();
+    // Determine event time: use adjusted time if provided for end_shift
+    let eventTime = nowSydneyISO();
+    if (eventType === 'end_shift' && adjustedEndTime) {
+      eventTime = `${today}T${adjustedEndTime}:00+10:00`;
+    }
 
     // 5. Insert event
     const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/kiosk_timeclock_events`, {
@@ -130,7 +131,7 @@ export default async function handler(req, res) {
     // 6. On end_shift, create/update timesheet approval
     let timesheet = null;
     if (eventType === 'end_shift' && shift && !shift.leave_type) {
-      timesheet = await upsertTimesheet(staffCentreId, staffId, pinRecord.staff_name, today, shift, events, confirmed, adjustedEndTime);
+      timesheet = await upsertTimesheet(staffCentreId, staffId, pinRecord.staff_name, today, shift, events, confirmed, adjustedStartTime, adjustedEndTime);
     }
 
     return res.status(200).json({ ok: true, event: Array.isArray(inserted) ? inserted[0] : inserted, timesheet });
@@ -140,13 +141,14 @@ export default async function handler(req, res) {
   }
 }
 
-async function upsertTimesheet(centreId, staffId, staffName, date, shift, priorEvents, confirmed, adjustedEndTime) {
+async function upsertTimesheet(centreId, staffId, staffName, date, shift, priorEvents, confirmed, adjustedStartTime, adjustedEndTime) {
   const startEvent = priorEvents.find(e => e.event_type === 'start_shift');
   const lunchStartEvent = priorEvents.find(e => e.event_type === 'start_lunch');
   const lunchEndEvent = priorEvents.find(e => e.event_type === 'end_lunch');
 
-  const actualStart = toHhmm(startEvent?.event_time) || toHhmm(shift.start_time) || null;
-  const actualEnd = adjustedEndTime || toHhmm(shift.end_time) || null;
+  // Actual clock times are always recorded for compliance
+  const actualStart = adjustedStartTime || toHhmm(startEvent?.event_time) || toHhmm(shift.start_time) || null;
+  const actualEnd = adjustedEndTime || toHhmm(priorEvents.filter(e => e.event_type === 'end_shift').pop()?.event_time) || toHhmm(shift.end_time) || null;
   const actualLunchStart = toHhmm(lunchStartEvent?.event_time) || toHhmm(shift.lunch_start) || null;
   const actualLunchEnd = toHhmm(lunchEndEvent?.event_time) || null;
 
@@ -154,12 +156,8 @@ async function upsertTimesheet(centreId, staffId, staffName, date, shift, priorE
   const rosterEndM = hhmmToMinutes(shift.end_time);
   const rosterLunchM = shift.lunch_duration || 30;
 
-  const startDiff = Math.abs(hhmmToMinutes(actualStart) - rosterStartM);
-  const endDiff = Math.abs(hhmmToMinutes(actualEnd) - rosterEndM);
-
-  // If employee confirmed no overtime and within tolerance → pre-approve
-  const withinTolerance = startDiff <= KIOSK_TOLERANCE_MINUTES && endDiff <= KIOSK_TOLERANCE_MINUTES;
-  const shouldPreApprove = confirmed === true && withinTolerance && !adjustedEndTime;
+  // Employee confirmed they finished on time → round approved times to rostered
+  const shouldPreApprove = confirmed === true && !adjustedStartTime && !adjustedEndTime;
 
   const approvedStart = shouldPreApprove ? shift.start_time : actualStart;
   const approvedEnd = shouldPreApprove ? shift.end_time : actualEnd;
@@ -167,11 +165,10 @@ async function upsertTimesheet(centreId, staffId, staffName, date, shift, priorE
   const approvedHours = Math.max(0, (hhmmToMinutes(approvedEnd) - hhmmToMinutes(approvedStart) - approvedLunchM) / 60);
 
   const flags = [];
-  if (!withinTolerance) {
-    if (startDiff > KIOSK_TOLERANCE_MINUTES) flags.push(`Start ${startDiff} min from rostered`);
-    if (endDiff > KIOSK_TOLERANCE_MINUTES) flags.push(`End ${endDiff} min from rostered`);
+  if (!shouldPreApprove) {
+    if (adjustedStartTime) flags.push('Employee adjusted start time');
+    if (adjustedEndTime) flags.push('Employee adjusted finish time');
   }
-  if (adjustedEndTime) flags.push('Employee reported overtime/change');
 
   const status = shouldPreApprove ? 'approved' : 'pending';
 
