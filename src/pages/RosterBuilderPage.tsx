@@ -221,6 +221,7 @@ export default function RosterBuilderPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalShift, setModalShift] = useState<Partial<RosterShift> | null>(null);
@@ -243,6 +244,7 @@ export default function RosterBuilderPage() {
 
   async function loadData() {
     setLoading(true);
+    setError(null);
     try {
       const [staff, week] = await Promise.all([
         fetchStaffList(centreId),
@@ -254,10 +256,11 @@ export default function RosterBuilderPage() {
         const loaded = await loadShifts(week.id);
         setShifts(loaded);
       } else {
-        console.error('Failed to load or create roster week');
+        setError('Could not load or create roster week. Check Supabase tables and RLS policies.');
       }
     } catch (err) {
       console.error('loadData error:', err);
+      setError('Error loading roster data. Check console.');
     }
     setLoading(false);
   }
@@ -300,7 +303,15 @@ export default function RosterBuilderPage() {
   }
 
   async function handleImportFromDeputy() {
-    if (!weekRecord) return;
+    let week = weekRecord;
+    if (!week) {
+      week = await getOrCreateWeek(centreId, weekStart, user?.email);
+      if (week) setWeekRecord(week);
+    }
+    if (!week) {
+      alert('Could not create roster week. Check Supabase tables/RLS policies.');
+      return;
+    }
     if (!confirm('Import Deputy rosters for this week? Existing draft shifts for each day will be replaced.')) return;
     setImporting(true);
     const unitIds = [
@@ -314,14 +325,14 @@ export default function RosterBuilderPage() {
       try {
         const rosters = await fetchRosters(date, unitIds);
         if (rosters.length === 0) continue;
-        await deleteShiftsForDate(weekRecord.id, date);
+        await deleteShiftsForDate(week.id, date);
         for (const r of rosters) {
           const room = centre.rooms.find(rm => rm.deputyUnitId === r.unitId);
           const startM = hhmmToMinutes(r.startTime);
           const endM = hhmmToMinutes(r.endTime);
           const lunchM = Math.max(startM + 30, Math.min(endM - 60, startM + Math.floor((endM - startM) / 2)));
           const saved = await saveShift({
-            roster_week_id: weekRecord.id,
+            roster_week_id: week.id,
             centre_id: centreId,
             staff_id: String(r.employeeId),
             staff_name: r.employeeName,
@@ -341,7 +352,7 @@ export default function RosterBuilderPage() {
         failed++;
       }
     }
-    const loaded = await loadShifts(weekRecord.id);
+    const loaded = await loadShifts(week.id);
     setShifts(loaded);
     setImporting(false);
     if (failed > 0) {
@@ -978,6 +989,12 @@ export default function RosterBuilderPage() {
             </button>
           </div>
         </div>
+
+        {error && (
+          <div className="rounded-lg p-3 text-sm" style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>
+            {error}
+          </div>
+        )}
 
         {/* Main grid */}
         <div className="flex gap-4" style={{ minHeight: '60vh' }}>
