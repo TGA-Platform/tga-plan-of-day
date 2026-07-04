@@ -279,9 +279,11 @@ export default function RosterBuilderPage() {
     const startM = hhmmToMinutes(shift.start_time || '08:00');
     const endM = hhmmToMinutes(shift.end_time || '16:00');
     const leaveFromM = shift.splitLeaveFrom ? hhmmToMinutes(shift.splitLeaveFrom) : null;
-    const hasSplit = shift.leave_type && leaveFromM !== null && leaveFromM > startM && leaveFromM < endM;
+    const isSplitLeave = !!(shift.leave_type && leaveFromM !== null && leaveFromM > startM && leaveFromM < endM);
+    const isWholeLeave = !!(shift.leave_type && (leaveFromM === null || leaveFromM <= startM));
+    const isNoLeavePeriod = !!(shift.leave_type && leaveFromM !== null && leaveFromM >= endM);
 
-    if (hasSplit) {
+    if (isSplitLeave) {
       // Delete original if editing an existing shift
       if (shift.id) {
         await deleteShift(shift.id);
@@ -305,6 +307,24 @@ export default function RosterBuilderPage() {
         start_time: shift.splitLeaveFrom,
         room_id: 'leave',
         room_name: 'Leave',
+      });
+    } else if (isWholeLeave) {
+      // Whole shift on leave: move to Leave lane (or keep it there)
+      await saveShiftSingle({
+        ...shift,
+        room_id: 'leave',
+        room_name: 'Leave',
+        originalRoomId: (shift as any).originalRoomId || shift.room_id,
+        originalRoomName: (shift as any).originalRoomName || shift.room_name,
+      });
+    } else if (isNoLeavePeriod) {
+      // Leave-from at/past end means no actual leave; restore original room
+      await saveShiftSingle({
+        ...shift,
+        room_id: (shift as any).originalRoomId || shift.room_id,
+        room_name: (shift as any).originalRoomName || shift.room_name,
+        leave_type: undefined,
+        splitLeaveFrom: undefined,
       });
     } else {
       await saveShiftSingle(shift);
