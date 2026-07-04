@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS timesheet_approvals (
   approved_hours numeric(5,2) NOT NULL DEFAULT 0,
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','flagged')),
   flags text[] NOT NULL DEFAULT '{}',
+  leave_type text,
   approver_name text,
   approved_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),

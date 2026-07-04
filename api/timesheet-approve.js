@@ -89,6 +89,7 @@ export default async function handler(req, res) {
     if (!shiftsRes.ok) throw new Error('shift lookup failed');
     const shifts = await shiftsRes.json();
     const shift = shifts[0] || null;
+    const isLeave = !!shift?.leave_type;
 
     const eventsRes = await fetch(
       `${SUPABASE_URL}/rest/v1/kiosk_timeclock_events?centre_id=eq.${encodeURIComponent(centreId)}` +
@@ -111,18 +112,30 @@ export default async function handler(req, res) {
     };
 
     // 3. Compute approved values
-    const rostered = {
-      start: shift?.start_time || actual.start || '08:00',
-      end: shift?.end_time || actual.end || '16:00',
-      lunchDuration: shift?.lunch_duration ?? 30,
-    };
-    const computed = roundTimesheet(rostered, actual);
+    let approvedStart, approvedEnd, approvedLunchDuration, approvedHours, flags;
+    if (isLeave) {
+      // Leave: approve exactly rostered times
+      approvedStart = body.approvedStart || shift.start_time;
+      approvedEnd = body.approvedEnd || shift.end_time;
+      approvedLunchDuration = body.approvedLunchDuration ?? (shift.lunch_duration || 0);
+      const startM = hhmmToMinutes(approvedStart);
+      const endM = hhmmToMinutes(approvedEnd);
+      approvedHours = (endM - startM - approvedLunchDuration) / 60;
+      flags = body.flags || [];
+    } else {
+      const rostered = {
+        start: shift?.start_time || actual.start || '08:00',
+        end: shift?.end_time || actual.end || '16:00',
+        lunchDuration: shift?.lunch_duration ?? 30,
+      };
+      const computed = roundTimesheet(rostered, actual);
+      approvedStart = body.approvedStart || minutesToHhmm(computed.aStart);
+      approvedEnd = body.approvedEnd || minutesToHhmm(computed.aEnd);
+      approvedLunchDuration = body.approvedLunchDuration ?? computed.aLunch;
+      approvedHours = body.approvedHours ?? computed.hours;
+      flags = body.flags || computed.flags;
+    }
 
-    const approvedStart = body.approvedStart || minutesToHhmm(computed.aStart);
-    const approvedEnd = body.approvedEnd || minutesToHhmm(computed.aEnd);
-    const approvedLunchDuration = body.approvedLunchDuration ?? computed.aLunch;
-    const approvedHours = body.approvedHours ?? computed.hours;
-    const flags = body.flags || computed.flags;
     const status = body.status || (flags.length ? 'flagged' : 'approved');
 
     const upsertBody = {
@@ -145,6 +158,7 @@ export default async function handler(req, res) {
       approved_hours: approvedHours,
       status,
       flags,
+      leave_type: shift?.leave_type || null,
       approver_name: approverName || null,
       approved_at: approverName ? new Date().toISOString() : null,
       updated_at: new Date().toISOString(),

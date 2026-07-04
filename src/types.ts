@@ -249,6 +249,7 @@ export interface TimesheetApproval {
   approved_hours: number;
   status: TimesheetStatus;
   flags: string[];
+  leave_type?: 'sick' | 'annual' | 'other' | null;
   approver_name?: string | null;
   approved_at?: string | null;
   created_at: string;
