@@ -1,6 +1,12 @@
 /**
- * POST { mobile, pin, centreId, eventType } → records a kiosk timeclock event
- * Validates the PIN and state transitions.
+ * POST { mobile, pin, centreId, eventType, confirmed?, adjustedEndTime? }
+ * → records a kiosk timeclock event and optionally pre-approves the timesheet.
+ *
+ * When ending a shift:
+ * - If the employee confirms they completed their rostered shift (no overtime),
+ *   the timesheet is pre-approved automatically.
+ * - If they provide an adjusted end time (overtime), the timesheet is left pending
+ *   for director review.
  */
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
@@ -14,6 +20,7 @@ const HEADERS = {
 };
 
 const VALID_EVENTS = ['start_shift', 'start_lunch', 'end_lunch', 'end_shift'];
+const KIOSK_TOLERANCE_MINUTES = 10;
 
 function nowSydneyISO() {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' })).toISOString();
@@ -23,6 +30,22 @@ function todaySydney() {
   return nowSydneyISO().slice(0, 10);
 }
 
+function toHhmm(iso) {
+  return iso ? iso.slice(11, 16) : null;
+}
+
+function hhmmToMinutes(hhmm) {
+  if (!hhmm) return 0;
+  const [h, m] = String(hhmm).split(':').map(Number);
+  return h * 60 + m;
+}
+
+function minutesToHhmm(mins) {
+  const h = Math.floor(mins / 60) % 24;
+  const m = Math.max(0, mins % 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -30,7 +53,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).end();
 
-  const { mobile, pin, centreId, eventType } = req.body || {};
+  const { mobile, pin, centreId, eventType, confirmed, adjustedEndTime } = req.body || {};
   if (!mobile || !pin || !eventType) {
     return res.status(400).json({ error: 'mobile, pin, and eventType required' });
   }
@@ -81,6 +104,11 @@ export default async function handler(req, res) {
     const shiftRows = await shiftRes.json();
     const shift = shiftRows.find(s => s.roster_weeks?.status === 'published') || shiftRows[0] || null;
 
+    // Determine event time: use adjustedEndTime if provided for end_shift
+    const eventTime = (eventType === 'end_shift' && adjustedEndTime)
+      ? `${today}T${adjustedEndTime}:00+10:00`
+      : nowSydneyISO();
+
     // 5. Insert event
     const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/kiosk_timeclock_events`, {
       method: 'POST',
@@ -90,7 +118,7 @@ export default async function handler(req, res) {
         staff_id: staffId,
         staff_name: pinRecord.staff_name,
         event_type: eventType,
-        event_time: nowSydneyISO(),
+        event_time: eventTime,
         event_date: today,
         roster_shift_id: shift?.id || null,
         source: 'kiosk',
@@ -99,11 +127,91 @@ export default async function handler(req, res) {
     if (!insertRes.ok) throw new Error('failed to record event');
     const inserted = await insertRes.json();
 
-    return res.status(200).json({ ok: true, event: Array.isArray(inserted) ? inserted[0] : inserted });
+    // 6. On end_shift, create/update timesheet approval
+    let timesheet = null;
+    if (eventType === 'end_shift' && shift && !shift.leave_type) {
+      timesheet = await upsertTimesheet(staffCentreId, staffId, pinRecord.staff_name, today, shift, events, confirmed, adjustedEndTime);
+    }
+
+    return res.status(200).json({ ok: true, event: Array.isArray(inserted) ? inserted[0] : inserted, timesheet });
   } catch (e) {
     console.error('kiosk-clock error:', e);
     return res.status(500).json({ error: e.message || 'server error' });
   }
+}
+
+async function upsertTimesheet(centreId, staffId, staffName, date, shift, priorEvents, confirmed, adjustedEndTime) {
+  const startEvent = priorEvents.find(e => e.event_type === 'start_shift');
+  const lunchStartEvent = priorEvents.find(e => e.event_type === 'start_lunch');
+  const lunchEndEvent = priorEvents.find(e => e.event_type === 'end_lunch');
+
+  const actualStart = toHhmm(startEvent?.event_time) || toHhmm(shift.start_time) || null;
+  const actualEnd = adjustedEndTime || toHhmm(shift.end_time) || null;
+  const actualLunchStart = toHhmm(lunchStartEvent?.event_time) || toHhmm(shift.lunch_start) || null;
+  const actualLunchEnd = toHhmm(lunchEndEvent?.event_time) || null;
+
+  const rosterStartM = hhmmToMinutes(shift.start_time);
+  const rosterEndM = hhmmToMinutes(shift.end_time);
+  const rosterLunchM = shift.lunch_duration || 30;
+
+  const startDiff = Math.abs(hhmmToMinutes(actualStart) - rosterStartM);
+  const endDiff = Math.abs(hhmmToMinutes(actualEnd) - rosterEndM);
+
+  // If employee confirmed no overtime and within tolerance → pre-approve
+  const withinTolerance = startDiff <= KIOSK_TOLERANCE_MINUTES && endDiff <= KIOSK_TOLERANCE_MINUTES;
+  const shouldPreApprove = confirmed === true && withinTolerance && !adjustedEndTime;
+
+  const approvedStart = shouldPreApprove ? shift.start_time : actualStart;
+  const approvedEnd = shouldPreApprove ? shift.end_time : actualEnd;
+  const approvedLunchM = rosterLunchM;
+  const approvedHours = Math.max(0, (hhmmToMinutes(approvedEnd) - hhmmToMinutes(approvedStart) - approvedLunchM) / 60);
+
+  const flags = [];
+  if (!withinTolerance) {
+    if (startDiff > KIOSK_TOLERANCE_MINUTES) flags.push(`Start ${startDiff} min from rostered`);
+    if (endDiff > KIOSK_TOLERANCE_MINUTES) flags.push(`End ${endDiff} min from rostered`);
+  }
+  if (adjustedEndTime) flags.push('Employee reported overtime/change');
+
+  const status = shouldPreApprove ? 'approved' : 'pending';
+
+  const body = {
+    centre_id: centreId,
+    staff_id: staffId,
+    staff_name: staffName,
+    date,
+    roster_shift_id: shift.id,
+    roster_start_time: shift.start_time,
+    roster_end_time: shift.end_time,
+    roster_lunch_start: shift.lunch_start,
+    roster_lunch_duration: shift.lunch_duration,
+    actual_start_time: actualStart,
+    actual_end_time: actualEnd,
+    actual_lunch_start: actualLunchStart,
+    actual_lunch_end: actualLunchEnd,
+    approved_start_time: approvedStart,
+    approved_end_time: approvedEnd,
+    approved_lunch_duration: approvedLunchM,
+    approved_hours: approvedHours,
+    status,
+    flags,
+    approver_name: shouldPreApprove ? 'Kiosk auto-approval' : null,
+    approved_at: shouldPreApprove ? new Date().toISOString() : null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/timesheet_approvals`, {
+    method: 'POST',
+    headers: { ...HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const txt = await r.text();
+    console.error('timesheet upsert failed:', txt);
+    return null;
+  }
+  const rows = await r.json().catch(() => null);
+  return Array.isArray(rows) ? rows[0] : rows;
 }
 
 function checkTransition(lastType, nextType) {

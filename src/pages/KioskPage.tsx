@@ -7,7 +7,7 @@ const CENTRE_ID = new URLSearchParams(window.location.search).get('centre') || '
 const IDLE_RESET_MS = 30_000;
 const CONFIRM_MS = 3_000;
 
-type Screen = 'mobile' | 'pin' | 'shift' | 'confirm' | 'error';
+type Screen = 'mobile' | 'pin' | 'shift' | 'confirm' | 'endShiftConfirm' | 'endShiftEdit' | 'error';
 
 export default function KioskPage() {
   const [screen, setScreen] = useState<Screen>('mobile');
@@ -18,6 +18,7 @@ export default function KioskPage() {
   const [error, setError] = useState('');
   const [confirmText, setConfirmText] = useState('');
   const [verifiedPin, setVerifiedPin] = useState('');
+  const [adjustedEndTime, setAdjustedEndTime] = useState('');
 
   const idleTimer = useRef<number | null>(null);
   const confirmTimer = useRef<number | null>(null);
@@ -38,6 +39,7 @@ export default function KioskPage() {
     setError('');
     setConfirmText('');
     setVerifiedPin('');
+    setAdjustedEndTime('');
     if (idleTimer.current) window.clearTimeout(idleTimer.current);
     if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
   }
@@ -77,7 +79,7 @@ export default function KioskPage() {
     setLoading(false);
   }
 
-  async function clockEvent(eventType: KioskEventType) {
+  async function clockEvent(eventType: KioskEventType, options?: { confirmed?: boolean; adjustedEndTime?: string }) {
     if (!session) return;
     setLoading(true);
     setError('');
@@ -85,7 +87,13 @@ export default function KioskPage() {
       const res = await fetch('/api/kiosk-clock', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mobile, pin: verifiedPin, centreId: CENTRE_ID, eventType }),
+        body: JSON.stringify({
+          mobile,
+          pin: verifiedPin,
+          centreId: CENTRE_ID,
+          eventType,
+          ...options,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Could not record');
@@ -100,8 +108,10 @@ export default function KioskPage() {
 
       const label = eventLabel(eventType);
       const time = format(new Date(), 'h:mm a');
-      setConfirmText(`${label} recorded at ${time}`);
+      const autoApproved = data.timesheet?.status === 'approved';
+      setConfirmText(`${label} recorded at ${time}${autoApproved ? '\nTimesheet pre-approved' : ''}`);
       setScreen('confirm');
+      setAdjustedEndTime('');
       if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
       confirmTimer.current = window.setTimeout(() => {
         setScreen('shift');
@@ -111,6 +121,53 @@ export default function KioskPage() {
       setScreen('error');
     }
     setLoading(false);
+  }
+
+  function handleEndShift() {
+    if (!session?.shift) {
+      clockEvent('end_shift');
+      return;
+    }
+    const shift = session.shift;
+    const startEvent = session.events.find(e => e.event_type === 'start_shift');
+    const rosterStartM = hhmmToMinutes(shift.start_time);
+    const rosterEndM = hhmmToMinutes(shift.end_time);
+    const actualStartM = startEvent ? hhmmToMinutes(startEvent.event_time.slice(11, 16)) : rosterStartM;
+    const nowM = hhmmToMinutes(format(new Date(), 'HH:mm'));
+
+    const startDiff = Math.abs(actualStartM - rosterStartM);
+    const endDiff = Math.abs(nowM - rosterEndM);
+
+    if (startDiff <= 10 && endDiff <= 10) {
+      setScreen('endShiftConfirm');
+    } else {
+      // Outside tolerance — go straight to edit so they can explain overtime
+      setAdjustedEndTime(format(new Date(), 'HH:mm'));
+      setScreen('endShiftEdit');
+    }
+  }
+
+  function handleEndShiftConfirm(yes: boolean) {
+    if (yes) {
+      clockEvent('end_shift', { confirmed: true });
+    } else {
+      setAdjustedEndTime(format(new Date(), 'HH:mm'));
+      setScreen('endShiftEdit');
+    }
+  }
+
+  function submitAdjustedEndShift() {
+    if (!adjustedEndTime || !/^\d{2}:\d{2}$/.test(adjustedEndTime)) {
+      setError('Please enter a valid time');
+      setScreen('error');
+      return;
+    }
+    clockEvent('end_shift', { confirmed: false, adjustedEndTime });
+  }
+
+  function hhmmToMinutes(hhmm: string): number {
+    const [h, m] = hhmm.split(':').map(Number);
+    return h * 60 + m;
   }
 
   function eventLabel(type: KioskEventType): string {
@@ -302,7 +359,7 @@ export default function KioskPage() {
                 label="End Shift"
                 active={isEventAvailable('end_shift')}
                 color="#1e40af"
-                onClick={() => clockEvent('end_shift')}
+                onClick={handleEndShift}
                 loading={loading}
               />
             </div>
@@ -318,6 +375,86 @@ export default function KioskPage() {
             </div>
             <h2 className="text-3xl font-bold mb-2" style={{ color: '#16a34a' }}>Done</h2>
             <p className="text-2xl" style={{ color: '#050505' }}>{confirmText}</p>
+          </div>
+        )}
+
+        {screen === 'endShiftConfirm' && session?.shift && (
+          <div className="bg-white rounded-3xl shadow-xl p-10 border text-center" style={{ borderColor: '#E2F1DA' }}>
+            <h2 className="text-3xl font-bold mb-4" style={{ color: '#2d5c18' }}>Finish shift</h2>
+            <p className="text-xl mb-8" style={{ color: '#596570' }}>
+              Did you complete your rostered shift today?
+            </p>
+            <div className="inline-block rounded-2xl px-8 py-4 mb-8" style={{ backgroundColor: '#E2F1DA' }}>
+              <p className="text-3xl font-bold" style={{ color: '#2d5c18' }}>
+                {session.shift.start_time} – {session.shift.end_time}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
+              <button
+                onClick={() => handleEndShiftConfirm(true)}
+                disabled={loading}
+                className="py-5 rounded-2xl text-xl font-bold text-white active:scale-95 transition-transform disabled:opacity-50"
+                style={{ backgroundColor: '#16a34a' }}
+              >
+                Yes
+              </button>
+              <button
+                onClick={() => handleEndShiftConfirm(false)}
+                disabled={loading}
+                className="py-5 rounded-2xl text-xl font-bold text-white active:scale-95 transition-transform disabled:opacity-50"
+                style={{ backgroundColor: '#dc2626' }}
+              >
+                No, overtime
+              </button>
+            </div>
+          </div>
+        )}
+
+        {screen === 'endShiftEdit' && (
+          <div className="bg-white rounded-3xl shadow-xl p-8 border" style={{ borderColor: '#E2F1DA' }}>
+            <div className="text-center mb-6">
+              <h2 className="text-3xl font-bold mb-2" style={{ color: '#2d5c18' }}>Enter your finish time</h2>
+              <p className="text-lg" style={{ color: '#596570' }}>Rostered end: {session?.shift?.end_time || '—'}</p>
+              <div className="h-16 flex items-center justify-center mt-4">
+                <span className="text-5xl font-mono tracking-widest" style={{ color: '#050505' }}>
+                  {adjustedEndTime || '\u00A0'}
+                </span>
+              </div>
+            </div>
+
+            <Numpad
+              onKey={(key) => {
+                if (key === 'clear') { setAdjustedEndTime(''); return; }
+                if (key === 'back') { setAdjustedEndTime(t => t.slice(0, -1)); return; }
+                if (/^\d$/.test(key)) {
+                  setAdjustedEndTime(t => {
+                    const raw = t.replace(/:/g, '') + key;
+                    if (raw.length >= 4) {
+                      const hours = Math.min(23, parseInt(raw.slice(0, 2), 10));
+                      const mins = Math.min(59, parseInt(raw.slice(2, 4), 10));
+                      return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+                    }
+                    if (raw.length === 3) {
+                      const hours = parseInt(raw.slice(0, 1), 10);
+                      const mins = Math.min(59, parseInt(raw.slice(1, 3), 10));
+                      return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+                    }
+                    return raw;
+                  });
+                }
+              }}
+            />
+
+            <div className="mt-6 flex justify-center">
+              <button
+                onClick={submitAdjustedEndShift}
+                disabled={loading || adjustedEndTime.length < 5}
+                className="w-full max-w-xs py-4 rounded-2xl text-xl font-bold text-white active:scale-95 transition-transform disabled:opacity-50"
+                style={{ backgroundColor: '#1e40af' }}
+              >
+                Record finish time
+              </button>
+            </div>
           </div>
         )}
 
