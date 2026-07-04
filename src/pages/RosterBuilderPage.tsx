@@ -393,8 +393,18 @@ export default function RosterBuilderPage() {
     setModalOpen(true);
   }
 
+  function normalizeTime(t?: string): string | undefined {
+    if (!t) return undefined;
+    return t.slice(0, 5);
+  }
+
   function openEditModal(shift: RosterShift) {
-    setModalShift({ ...shift });
+    setModalShift({
+      ...shift,
+      start_time: normalizeTime(shift.start_time),
+      end_time: normalizeTime(shift.end_time),
+      lunch_start: normalizeTime(shift.lunch_start),
+    });
     setModalOpen(true);
   }
 
@@ -661,7 +671,7 @@ export default function RosterBuilderPage() {
 
   function ShiftModal() {
     const [draft, setDraft] = useState<Partial<RosterShift>>(modalShift || {});
-    const staffOptions = staffList.map(s => ({ id: s.id, name: s.name }));
+    const staffOptions = staffForDisplay.map(s => ({ id: s.id, name: s.name }));
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
