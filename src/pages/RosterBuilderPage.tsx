@@ -314,18 +314,24 @@ export default function RosterBuilderPage() {
     }
     if (!confirm('Import Deputy rosters for this week? Existing draft shifts for each day will be replaced.')) return;
     setImporting(true);
+    setError(null);
     const unitIds = [
       ...centre.rooms.map(r => r.deputyUnitId),
       ...(centre.floatUnitIds || []),
     ];
     let imported = 0;
-    let failed = 0;
+    let skipped = 0;
+    const errors: string[] = [];
     for (const day of weekDays) {
       const date = format(day, 'yyyy-MM-dd');
       try {
         const rosters = await fetchRosters(date, unitIds);
-        if (rosters.length === 0) continue;
-        await deleteShiftsForDate(week.id, date);
+        if (rosters.length === 0) { skipped++; continue; }
+        const deleted = await deleteShiftsForDate(week.id, date);
+        if (!deleted) {
+          errors.push(`${date}: could not clear existing shifts (RLS/policy issue?)`);
+          continue;
+        }
         for (const r of rosters) {
           const room = centre.rooms.find(rm => rm.deputyUnitId === r.unitId);
           const startM = hhmmToMinutes(r.startTime);
@@ -345,18 +351,19 @@ export default function RosterBuilderPage() {
             lunch_duration: 30,
             is_casual: false,
           });
-          if (saved) imported++; else failed++;
+          if (saved) imported++; else errors.push(`${date}: failed to save shift for ${r.employeeName}`);
         }
-      } catch (err) {
-        console.error('Import failed for', date, err);
-        failed++;
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        errors.push(`${date}: ${msg}`);
       }
     }
     const loaded = await loadShifts(week.id);
     setShifts(loaded);
     setImporting(false);
-    if (failed > 0) {
-      alert(`Imported ${imported} shifts, ${failed} failed. Check console for details.`);
+    if (errors.length > 0) {
+      setError(`Import errors:\n${errors.join('\n')}`);
+      alert(`Imported ${imported} shifts. ${errors.length} errors:\n${errors.join('\n')}`);
     } else if (imported === 0) {
       alert('No Deputy rosters found for this week.');
     }
