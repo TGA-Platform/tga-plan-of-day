@@ -327,10 +327,12 @@ export default function RosterBuilderPage() {
       ...(centre.floatUnitIds || []),
       ...(centre.issUnitIds || []),
       ...(centre.nonRatioUnitIds || []),
+      ...(centre.leaveUnitIds || []),
     ];
     const floatIds = new Set(centre.floatUnitIds || []);
     const issIds = new Set(centre.issUnitIds || []);
     const nonRatioIds = new Set(centre.nonRatioUnitIds || []);
+    const leaveIds = new Set(centre.leaveUnitIds || []);
     let imported = 0;
     let skipped = 0;
     const errors: string[] = [];
@@ -349,9 +351,17 @@ export default function RosterBuilderPage() {
           const uName = (r.unitName || '').toLowerCase();
           let roomName = room?.name;
           let roomId = room?.id;
+          let leaveType: RosterShift['leave_type'] = undefined;
           if (!roomName) {
             if (floatIds.has(r.unitId)) { roomName = 'Float'; roomId = 'float'; }
             else if (issIds.has(r.unitId)) { roomName = 'ISS'; roomId = 'iss'; }
+            else if (leaveIds.has(r.unitId)) {
+              roomName = 'Leave';
+              roomId = 'leave';
+              if (uName.includes('sick')) leaveType = 'sick';
+              else if (uName.includes('annual') || uName.includes('holiday')) leaveType = 'annual';
+              else leaveType = 'other';
+            }
             else if (nonRatioIds.has(r.unitId)) {
               if (uName.includes('director') || uName.includes('ed leader')) { roomName = 'Director'; roomId = 'director'; }
               else if (uName.includes('chef') || uName.includes('cook')) { roomName = 'Cook'; roomId = 'cook'; }
@@ -375,6 +385,7 @@ export default function RosterBuilderPage() {
             room_name: roomName,
             lunch_start: minutesToHhmm(lunchM),
             lunch_duration: 30,
+            leave_type: leaveType,
             is_casual: false,
           });
           if (saved) imported++; else errors.push(`${date}: failed to save shift for ${r.employeeName}`);
@@ -593,7 +604,8 @@ export default function RosterBuilderPage() {
               { id: 'director', name: 'Director', idx: centre.rooms.length + 2 },
               { id: 'cook', name: 'Cook', idx: centre.rooms.length + 3 },
               { id: 'admin', name: 'Admin', idx: centre.rooms.length + 4 },
-              { id: 'other', name: 'Other / Unassigned', idx: centre.rooms.length + 5 },
+              { id: 'leave', name: 'Leave', idx: centre.rooms.length + 5 },
+              { id: 'other', name: 'Other / Unassigned', idx: centre.rooms.length + 6 },
             ].map(area => (
               <React.Fragment key={area.id}>
                 <div className="text-sm font-medium py-2" style={{ color: '#050505' }}>{area.name}</div>
@@ -726,7 +738,8 @@ export default function RosterBuilderPage() {
                 { id: 'director', name: 'Director', idx: centre.rooms.length + 2 },
                 { id: 'cook', name: 'Cook', idx: centre.rooms.length + 3 },
                 { id: 'admin', name: 'Admin', idx: centre.rooms.length + 4 },
-                { id: 'other', name: 'Other / Unassigned', idx: centre.rooms.length + 5 },
+                { id: 'leave', name: 'Leave', idx: centre.rooms.length + 5 },
+                { id: 'other', name: 'Other / Unassigned', idx: centre.rooms.length + 6 },
               ].map(area => {
                 const cov = 'ratio' in area ? coverageByRoom.find(c => c.room.id === area.id) : null;
                 return (
@@ -848,7 +861,10 @@ export default function RosterBuilderPage() {
                 value={draft.room_id || ''}
                 onChange={e => {
                   const rid = e.target.value;
-                  const rname = centre.rooms.find(r => r.id === rid)?.name || (rid ? 'Other' : '');
+                  const fixedNames: Record<string, string> = {
+                    float: 'Float', iss: 'ISS', director: 'Director', admin: 'Admin', cook: 'Cook', leave: 'Leave', other: 'Other',
+                  };
+                  const rname = centre.rooms.find(r => r.id === rid)?.name || fixedNames[rid] || (rid ? 'Other' : '');
                   setDraft({ ...draft, room_id: rid || undefined, room_name: rname || undefined });
                 }}
                 className="w-full px-3 py-1.5 rounded-lg border text-sm"
@@ -856,8 +872,28 @@ export default function RosterBuilderPage() {
               >
                 <option value="">Unassigned / Float</option>
                 {centre.rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                <option value="float">Float</option>
+                <option value="iss">ISS</option>
+                <option value="director">Director</option>
                 <option value="admin">Admin</option>
                 <option value="cook">Cook</option>
+                <option value="leave">Leave</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold" style={{ color: '#596570' }}>Leave type</label>
+              <select
+                value={draft.leave_type || ''}
+                onChange={e => setDraft({ ...draft, leave_type: (e.target.value as RosterShift['leave_type']) || undefined })}
+                className="w-full px-3 py-1.5 rounded-lg border text-sm"
+                style={{ borderColor: '#D0E8B8' }}
+              >
+                <option value="">Not leave</option>
+                <option value="sick">Sick leave</option>
+                <option value="annual">Annual leave</option>
+                <option value="other">Other leave</option>
               </select>
             </div>
 

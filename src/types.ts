@@ -175,6 +175,7 @@ export interface RosterShift {
   room_name?: string;
   lunch_start?: string; // HH:MM
   lunch_duration: number;
+  leave_type?: 'sick' | 'annual' | 'other';
   is_casual: boolean;
   notes?: string;
   created_at: string;

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS roster_shifts (
   room_name       TEXT,
   lunch_start     TIME,
   lunch_duration  INTEGER DEFAULT 30,  -- minutes
+  leave_type      TEXT,                -- 'sick' | 'annual' | 'other' | null
   is_casual       BOOLEAN DEFAULT FALSE,
   notes           TEXT,
   created_at      TIMESTAMPTZ DEFAULT NOW(),
