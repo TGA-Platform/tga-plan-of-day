@@ -966,7 +966,7 @@ export default function RosterBuilderPage() {
             )}
             <button
               onClick={handleImportFromDeputy}
-              disabled={importing || !weekRecord}
+              disabled={importing}
               className="px-3 py-1.5 rounded-lg text-sm font-semibold border flex items-center gap-1.5 disabled:opacity-50"
               style={{ borderColor: '#D0E8B8', color: '#2d5c18', backgroundColor: 'white' }}
             >
