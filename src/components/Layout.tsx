@@ -41,6 +41,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <span style={{ color: '#D0E8B8' }}>|</span>
                 </>
               )}
+              {canAccess(user.role, 'roster') && (
+                <>
+                  <Link to="/roster" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Roster</Link>
+                  <span style={{ color: '#D0E8B8' }}>|</span>
+                </>
+              )}
               {canAccess(user.role, 'summary') && (
                 <>
                   <Link to="/summary" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">All Centres</Link>

@@ -148,3 +148,35 @@ export interface StaffMember {
 export interface FloatStaff extends RosteredStaff {
   suggestedRoom?: string;
 }
+
+// ── Roster Builder ───────────────────────────────────────────────────────────
+
+export interface RosterWeek {
+  id: string;
+  centre_id: string;
+  week_start: string; // ISO date (Monday)
+  status: 'draft' | 'published';
+  created_by?: string;
+  published_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RosterShift {
+  id: string;
+  roster_week_id: string;
+  centre_id: string;
+  staff_id: string;
+  staff_name: string;
+  date: string; // ISO date
+  start_time: string; // HH:MM
+  end_time: string; // HH:MM
+  room_id?: string;
+  room_name?: string;
+  lunch_start?: string; // HH:MM
+  lunch_duration: number;
+  is_casual: boolean;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
