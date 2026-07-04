@@ -6,6 +6,7 @@ import {
 import {
   ChevronLeft, ChevronRight, Plus, Printer,
   Trash2, Save, Upload, CheckCircle, AlertCircle, X,
+  Smartphone,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { CENTRES } from '../config';
@@ -239,6 +240,11 @@ export default function RosterBuilderPage() {
   const [printMode, setPrintMode] = useState(false);
   const [publishModalOpen, setPublishModalOpen] = useState(false);
   const [coverageOverride, setCoverageOverride] = useState(false);
+
+  const [pinsModalOpen, setPinsModalOpen] = useState(false);
+  const [pins, setPins] = useState<any[]>([]);
+  const [pinLoading, setPinLoading] = useState(false);
+  const [pinSearch, setPinSearch] = useState('');
 
   const centre = useMemo(() => CENTRES.find(c => c.id === centreId) || CENTRES[0], [centreId]);
   const weekStart = weekStartStr(weekDate);
@@ -495,6 +501,64 @@ export default function RosterBuilderPage() {
       originalRoomName: shift.room_name,
     });
     setModalOpen(true);
+  }
+
+  async function openPinsModal() {
+    setPinsModalOpen(true);
+    setPinLoading(true);
+    try {
+      const res = await fetch(`/api/kiosk-pins?centreId=${encodeURIComponent(centreId)}`);
+      const data = await res.json();
+      if (res.ok && data.ok) setPins(data.pins || []);
+    } catch {
+      setError('Failed to load kiosk PINs');
+    }
+    setPinLoading(false);
+  }
+
+  async function savePin(staffId: string, staffName: string, mobile: string, pin: string, role?: string) {
+    setPinLoading(true);
+    try {
+      const res = await fetch('/api/kiosk-pins', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          centreId,
+          staffId,
+          staffName,
+          mobile,
+          pin,
+          role,
+          createdBy: user?.email,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to save PIN');
+      setPins(prev => {
+        const idx = prev.findIndex(p => p.staff_id === staffId);
+        if (idx >= 0) {
+          const copy = [...prev];
+          copy[idx] = data.pin;
+          return copy;
+        }
+        return [...prev, data.pin];
+      });
+    } catch (e: any) {
+      setError(e.message || 'Failed to save PIN');
+    }
+    setPinLoading(false);
+  }
+
+  async function deletePin(id: string) {
+    if (!confirm('Delete this PIN?')) return;
+    setPinLoading(true);
+    try {
+      const res = await fetch(`/api/kiosk-pins?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (res.ok) setPins(prev => prev.filter(p => p.id !== id));
+    } catch {
+      setError('Failed to delete PIN');
+    }
+    setPinLoading(false);
   }
 
   const coverageByRoom = useMemo((): CoverageResult[] => {
@@ -1120,6 +1184,100 @@ export default function RosterBuilderPage() {
     );
   }
 
+  function PinModal() {
+    const [draft, setDraft] = useState<Record<string, { mobile: string; pin: string; role?: string }>>({});
+    const filteredPins = pins.filter(p => !pinSearch || p.staff_name?.toLowerCase().includes(pinSearch.toLowerCase()));
+    const staffWithoutPin = filteredStaff.filter(s => !pins.some(p => p.staff_id === s.id));
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="bg-white rounded-2xl p-5 w-full max-w-2xl space-y-4 shadow-xl" style={{ maxHeight: '90vh', overflow: 'auto' }}>
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-lg" style={{ color: '#2d5c18' }}>Kiosk PINs — {centre.name}</h3>
+            <button onClick={() => setPinsModalOpen(false)} className="p-1 hover:bg-gray-100 rounded"><X size={18} /></button>
+          </div>
+
+          <p className="text-sm" style={{ color: '#596570' }}>
+            Staff use their mobile number and 4-digit PIN to clock in/out at the kiosk.
+          </p>
+
+          <input
+            type="text"
+            placeholder="Search staff..."
+            value={pinSearch}
+            onChange={e => setPinSearch(e.target.value)}
+            className="w-full px-3 py-1.5 rounded-lg border text-sm"
+            style={{ borderColor: '#D0E8B8' }}
+          />
+
+          {pinLoading && <p className="text-sm" style={{ color: '#596570' }}>Loading…</p>}
+
+          <div className="space-y-2">
+            <h4 className="font-semibold text-sm" style={{ color: '#2d5c18' }}>Existing PINs</h4>
+            {filteredPins.length === 0 && <p className="text-sm" style={{ color: '#596570' }}>No PINs set.</p>}
+            {filteredPins.map(p => (
+              <div key={p.id} className="flex items-center gap-3 p-3 rounded-lg border" style={{ borderColor: '#E2F1DA' }}>
+                <div className="flex-1">
+                  <div className="font-medium text-sm" style={{ color: '#050505' }}>{p.staff_name}</div>
+                  <div className="text-xs" style={{ color: '#596570' }}>{p.mobile} • PIN {p.pin}{p.role ? ` • ${p.role}` : ''}</div>
+                </div>
+                <button
+                  onClick={() => deletePin(p.id)}
+                  className="p-1.5 rounded-lg text-white"
+                  style={{ backgroundColor: '#dc2626' }}
+                  title="Delete PIN"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="font-semibold text-sm" style={{ color: '#2d5c18' }}>Set PIN for staff</h4>
+            {staffWithoutPin.length === 0 && <p className="text-sm" style={{ color: '#596570' }}>All staff have PINs.</p>}
+            {staffWithoutPin.slice(0, 50).map(s => {
+              const d = draft[s.id] || { mobile: '', pin: '', role: s.position || s.roleType || '' };
+              return (
+                <div key={s.id} className="flex items-end gap-2 p-3 rounded-lg border" style={{ borderColor: '#E2F1DA' }}>
+                  <div className="flex-1">
+                    <div className="font-medium text-sm" style={{ color: '#050505' }}>{s.name}</div>
+                    <div className="text-xs" style={{ color: '#596570' }}>{s.position || s.roleType}</div>
+                  </div>
+                  <input
+                    type="tel"
+                    placeholder="Mobile"
+                    value={d.mobile}
+                    onChange={e => setDraft(prev => ({ ...prev, [s.id]: { ...d, mobile: e.target.value } }))}
+                    className="w-32 px-2 py-1.5 rounded-lg border text-sm"
+                    style={{ borderColor: '#D0E8B8' }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="4-digit PIN"
+                    maxLength={4}
+                    value={d.pin}
+                    onChange={e => setDraft(prev => ({ ...prev, [s.id]: { ...d, pin: e.target.value.replace(/\D/g, '').slice(0, 4) } }))}
+                    className="w-28 px-2 py-1.5 rounded-lg border text-sm"
+                    style={{ borderColor: '#D0E8B8' }}
+                  />
+                  <button
+                    onClick={() => savePin(s.id, s.name, d.mobile, d.pin, d.role)}
+                    disabled={!d.mobile || d.pin.length !== 4}
+                    className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
+                    style={{ backgroundColor: '#2d5c18' }}
+                  >
+                    Save
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (printMode) {
     return (
       <div className="p-8 bg-white text-black min-h-screen">
@@ -1240,6 +1398,13 @@ export default function RosterBuilderPage() {
               <Printer size={16} /> Print
             </button>
             <button
+              onClick={() => openPinsModal()}
+              className="px-3 py-1.5 rounded-lg text-sm font-semibold border flex items-center gap-1.5"
+              style={{ borderColor: '#D0E8B8', color: '#2d5c18', backgroundColor: 'white' }}
+            >
+              <Smartphone size={16} /> Kiosk PINs
+            </button>
+            <button
               onClick={() => setPublishModalOpen(true)}
               disabled={!weekRecord || weekRecord.status === 'published'}
               className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50 flex items-center gap-1.5"
@@ -1318,6 +1483,7 @@ export default function RosterBuilderPage() {
 
       {modalOpen && <ShiftModal />}
       {publishModalOpen && <PublishModal />}
+      {pinsModalOpen && <PinModal />}
     </Layout>
   );
 }
