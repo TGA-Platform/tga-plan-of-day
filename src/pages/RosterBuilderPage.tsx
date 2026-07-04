@@ -76,6 +76,10 @@ interface StaffSource {
   roleType: 'educator' | 'float' | 'director' | 'cook' | 'admin' | 'other';
   usualRoomId?: string;
   contractedHours?: number;
+  mobile?: string;
+  deputyEmployeeId?: string;
+  wwccNumber?: string;
+  wwccExpiry?: string;
 }
 
 interface CoverageSlot {
@@ -97,31 +101,35 @@ const DEFAULT_ATTENDANCE: Record<string, number> = {};
 // ── Supabase helpers ─────────────────────────────────────────────────────────
 
 async function fetchStaffList(centreId: string): Promise<StaffSource[]> {
-  const centre = CENTRES.find(c => c.id === centreId);
-  const campus = centre?.ownaName ?? centre?.name ?? '';
-  const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/staff_wwcc?centre=eq.${encodeURIComponent(campus)}&select=id,full_name,qualification,position,position_category,centre&limit=500`,
-    { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
-  );
-  if (!res.ok) return [];
-  const rows = await res.json();
+  // Use internal staff_members as the central source of truth.
+  const res = await fetch(`/api/staff-members?centreId=${encodeURIComponent(centreId)}`);
+  if (!res.ok) {
+    console.error('fetchStaffList failed:', await res.text().catch(() => 'unknown'));
+    return [];
+  }
+  const data = await res.json();
+  const rows = data.staff || [];
   const list: StaffSource[] = (rows || []).map((r: any) => {
     const pos = String(r.position || '').toLowerCase();
     let roleType: StaffSource['roleType'] = 'educator';
-    if (pos.includes('director') || pos.includes('ad')) roleType = 'director';
+    if (pos.includes('director') || pos.includes('ad') || pos.includes('educational leader')) roleType = 'director';
     else if (pos.includes('cook') || pos.includes('chef')) roleType = 'cook';
-    else if (pos.includes('admin')) roleType = 'admin';
-    else if (pos.includes('float')) roleType = 'float';
+    else if (pos.includes('admin') || pos.includes('support')) roleType = 'admin';
+    else if (pos.includes('float') || pos.includes('iss')) roleType = 'float';
     return {
-      id: String(r.id ?? r.full_name),
-      name: r.full_name || 'Unknown',
+      id: String(r.id),
+      name: r.name || 'Unknown',
       qualification: r.qualification || '',
       position: r.position || '',
       positionCategory: r.position_category || '',
-      campus: r.centre || '',
+      campus: r.campus || '',
       roleType,
       usualRoomId: undefined,
       contractedHours: undefined,
+      mobile: r.mobile || '',
+      deputyEmployeeId: r.deputy_employee_id || '',
+      wwccNumber: r.wwcc_number || '',
+      wwccExpiry: r.wwcc_expiry || '',
     };
   });
   // Dedupe by name
@@ -427,14 +435,18 @@ export default function RosterBuilderPage() {
             }
             else { roomName = r.unitName || 'Other'; roomId = 'other'; }
           }
+          // Link to internal staff profile by Deputy employee ID
+          const matchedStaff = staffList.find(s => s.deputyEmployeeId && String(s.deputyEmployeeId) === String(r.employeeId));
+          const staffId = matchedStaff?.id ?? String(r.employeeId);
+          const staffName = matchedStaff?.name ?? r.employeeName;
           const startM = hhmmToMinutes(r.startTime);
           const endM = hhmmToMinutes(r.endTime);
           const lunchM = Math.max(startM + 30, Math.min(endM - 60, startM + Math.floor((endM - startM) / 2)));
           const saved = await saveShift({
             roster_week_id: week.id,
             centre_id: centreId,
-            staff_id: String(r.employeeId),
-            staff_name: r.employeeName,
+            staff_id: staffId,
+            staff_name: staffName,
             date,
             start_time: r.startTime,
             end_time: r.endTime,
@@ -445,7 +457,7 @@ export default function RosterBuilderPage() {
             leave_type: leaveType,
             is_casual: false,
           });
-          if (saved) imported++; else errors.push(`${date}: failed to save shift for ${r.employeeName}`);
+          if (saved) imported++; else errors.push(`${date}: failed to save shift for ${staffName}`);
         }
       } catch (err: any) {
         const msg = err?.message || String(err);
@@ -1237,7 +1249,7 @@ export default function RosterBuilderPage() {
             <h4 className="font-semibold text-sm" style={{ color: '#2d5c18' }}>Set PIN for staff</h4>
             {staffWithoutPin.length === 0 && <p className="text-sm" style={{ color: '#596570' }}>All staff have PINs.</p>}
             {staffWithoutPin.slice(0, 50).map(s => {
-              const d = draft[s.id] || { mobile: '', pin: '', role: s.position || s.roleType || '' };
+              const d = draft[s.id] || { mobile: s.mobile || '', pin: '', role: s.position || s.roleType || '' };
               return (
                 <div key={s.id} className="flex items-end gap-2 p-3 rounded-lg border" style={{ borderColor: '#E2F1DA' }}>
                   <div className="flex-1">
