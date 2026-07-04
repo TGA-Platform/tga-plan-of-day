@@ -459,13 +459,21 @@ export default function RosterBuilderPage() {
     }
   }
 
+  const staffForDisplay = useMemo(() => {
+    const fromShifts = shifts.map(s => ({ id: s.staff_id, name: s.staff_name, roleType: 'educator' as const }));
+    const map = new Map<string, StaffSource>();
+    for (const s of staffList) map.set(s.id, s);
+    for (const s of fromShifts) if (!map.has(s.id)) map.set(s.id, s);
+    return Array.from(map.values());
+  }, [staffList, shifts]);
+
   const filteredStaff = useMemo(() => {
-    return staffList.filter(s => {
+    return staffForDisplay.filter(s => {
       if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false;
       if (roleFilter !== 'all' && s.roleType !== roleFilter) return false;
       return true;
     });
-  }, [staffList, search, roleFilter]);
+  }, [staffForDisplay, search, roleFilter]);
 
   function WeekView() {
     return (
