@@ -59,14 +59,14 @@ export default async function handler(req, res) {
 
       const r = await fetch(`${SUPABASE_URL}/rest/v1/kiosk_staff_pins`, {
         method: 'POST',
-        headers: { ...HEADERS, Prefer: 'resolution=merge-duplicates' },
+        headers: { ...HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
         body: JSON.stringify(body),
       });
       if (!r.ok) {
         const txt = await r.text();
         throw new Error(`upsert failed: ${txt}`);
       }
-      const rows = await r.json();
+      const rows = await r.json().catch(() => null);
       return res.status(200).json({ ok: true, pin: Array.isArray(rows) ? rows[0] : rows });
     }
 

@@ -152,14 +152,14 @@ export default async function handler(req, res) {
 
     const r = await fetch(`${SUPABASE_URL}/rest/v1/timesheet_approvals`, {
       method: 'POST',
-      headers: { ...HEADERS, Prefer: 'resolution=merge-duplicates' },
+      headers: { ...HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
       body: JSON.stringify(upsertBody),
     });
     if (!r.ok) {
       const txt = await r.text();
       throw new Error(`approval upsert failed: ${txt}`);
     }
-    const rows = await r.json();
+    const rows = await r.json().catch(() => null);
     return res.status(200).json({ ok: true, row: Array.isArray(rows) ? rows[0] : rows });
   } catch (e) {
     console.error('timesheet-approve error:', e);
