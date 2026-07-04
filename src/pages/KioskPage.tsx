@@ -225,6 +225,28 @@ export default function KioskPage() {
             </div>
 
             <Numpad onKey={handleNumpad} />
+
+            <div className="mt-6 flex justify-center">
+              {screen === 'mobile' ? (
+                <button
+                  onClick={() => mobile.length >= 10 && setScreen('pin')}
+                  disabled={mobile.length < 10 || loading}
+                  className="w-full max-w-xs py-4 rounded-2xl text-xl font-bold text-white active:scale-95 transition-transform disabled:opacity-50"
+                  style={{ backgroundColor: '#5a9228' }}
+                >
+                  Next
+                </button>
+              ) : (
+                <button
+                  onClick={() => pin.length === 4 && verifyPin(pin)}
+                  disabled={pin.length < 4 || loading}
+                  className="w-full max-w-xs py-4 rounded-2xl text-xl font-bold text-white active:scale-95 transition-transform disabled:opacity-50"
+                  style={{ backgroundColor: '#5a9228' }}
+                >
+                  Login
+                </button>
+              )}
+            </div>
           </div>
         )}
 
