@@ -372,6 +372,8 @@ export default function RosterBuilderPage() {
       alert(`Imported ${imported} shifts. ${errors.length} errors:\n${errors.join('\n')}`);
     } else if (imported === 0) {
       alert('No Deputy rosters found for this week.');
+    } else {
+      alert(`Imported ${imported} shifts for ${format(weekDays[0], 'd MMM')} – ${format(weekDays[4], 'd MMM')}.`);
     }
   }
 
