@@ -234,6 +234,7 @@ export default function RosterBuilderPage() {
 
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [weekViewMode, setWeekViewMode] = useState<'staff' | 'room'>('staff');
 
   const [printMode, setPrintMode] = useState(false);
   const [publishModalOpen, setPublishModalOpen] = useState(false);
@@ -488,32 +489,101 @@ export default function RosterBuilderPage() {
   function WeekView() {
     return (
       <div className="space-y-4">
-        <div className="grid" style={{ gridTemplateColumns: '180px repeat(5, 1fr)', gap: '8px' }}>
-          <div className="text-xs font-semibold" style={{ color: '#596570' }}>Staff / Day</div>
-          {weekDays.map(d => (
-            <div key={format(d, 'yyyy-MM-dd')} className="text-xs font-semibold text-center py-2 rounded-lg" style={{ color: '#2d5c18', backgroundColor: '#F5FAF3' }}>
-              {format(d, 'EEE d MMM')}
-            </div>
-          ))}
-          {filteredStaff.map(staff => (
-            <React.Fragment key={staff.id}>
-              <div className="text-sm font-medium py-2" style={{ color: '#050505' }}>{staff.name}</div>
-              {weekDays.map(d => {
-                const date = format(d, 'yyyy-MM-dd');
-                const dayShifts = shifts.filter(s => s.date === date && s.staff_id === staff.id);
-                return (
-                  <div
-                    key={date}
-                    onDragOver={e => e.preventDefault()}
-                    onDrop={e => handleDropOnCell(e, date, staff.id)}
-                    onClick={() => openAddModal(date, staff)}
-                    className="min-h-[60px] rounded-lg border border-dashed p-1.5 cursor-pointer hover:bg-white"
-                    style={{ borderColor: '#D0E8B8', backgroundColor: '#F5FAF3' }}
-                  >
-                    {dayShifts.length === 0 && <Plus size={14} className="mx-auto mt-3" style={{ color: '#D0E8B8' }} />}
-                    {dayShifts.map(s => {
-                      const roomIdx = centre.rooms.findIndex(r => r.id === s.room_id);
-                      return (
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium" style={{ color: '#596570' }}>View by:</span>
+          <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: '#D0E8B8' }}>
+            <button
+              onClick={() => setWeekViewMode('staff')}
+              className="px-3 py-1 text-xs font-semibold"
+              style={{ backgroundColor: weekViewMode === 'staff' ? '#2d5c18' : 'white', color: weekViewMode === 'staff' ? 'white' : '#596570' }}
+            >
+              Staff
+            </button>
+            <button
+              onClick={() => setWeekViewMode('room')}
+              className="px-3 py-1 text-xs font-semibold"
+              style={{ backgroundColor: weekViewMode === 'room' ? '#2d5c18' : 'white', color: weekViewMode === 'room' ? 'white' : '#596570' }}
+            >
+              Room
+            </button>
+          </div>
+        </div>
+
+        {weekViewMode === 'staff' ? (
+          <div className="grid" style={{ gridTemplateColumns: '180px repeat(5, 1fr)', gap: '8px' }}>
+            <div className="text-xs font-semibold" style={{ color: '#596570' }}>Staff / Day</div>
+            {weekDays.map(d => (
+              <div key={format(d, 'yyyy-MM-dd')} className="text-xs font-semibold text-center py-2 rounded-lg" style={{ color: '#2d5c18', backgroundColor: '#F5FAF3' }}>
+                {format(d, 'EEE d MMM')}
+              </div>
+            ))}
+            {filteredStaff.map(staff => (
+              <React.Fragment key={staff.id}>
+                <div className="text-sm font-medium py-2" style={{ color: '#050505' }}>{staff.name}</div>
+                {weekDays.map(d => {
+                  const date = format(d, 'yyyy-MM-dd');
+                  const dayShifts = shifts.filter(s => s.date === date && s.staff_id === staff.id);
+                  return (
+                    <div
+                      key={date}
+                      onDragOver={e => e.preventDefault()}
+                      onDrop={e => handleDropOnCell(e, date, staff.id)}
+                      onClick={() => openAddModal(date, staff)}
+                      className="min-h-[60px] rounded-lg border border-dashed p-1.5 cursor-pointer hover:bg-white"
+                      style={{ borderColor: '#D0E8B8', backgroundColor: '#F5FAF3' }}
+                    >
+                      {dayShifts.length === 0 && <Plus size={14} className="mx-auto mt-3" style={{ color: '#D0E8B8' }} />}
+                      {dayShifts.map(s => {
+                        const roomIdx = centre.rooms.findIndex(r => r.id === s.room_id);
+                        return (
+                          <div
+                            key={s.id}
+                            draggable
+                            onDragStart={e => { e.stopPropagation(); e.dataTransfer.setData('application/json', JSON.stringify({ shiftId: s.id })); }}
+                            onClick={e => { e.stopPropagation(); openEditModal(s); }}
+                            className="text-xs rounded px-1.5 py-1 mb-1 border"
+                            style={{
+                              backgroundColor: s.room_id ? getRoomColour(roomIdx >= 0 ? roomIdx : centre.rooms.length) : '#f3f4f6',
+                              borderColor: s.room_id ? getRoomBorder(roomIdx >= 0 ? roomIdx : centre.rooms.length) : '#d1d5db',
+                              color: '#050505',
+                            }}
+                          >
+                            <div className="font-medium">{s.start_time}–{s.end_time}</div>
+                            <div className="truncate">{s.room_name || 'Unassigned'}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+        ) : (
+          <div className="grid" style={{ gridTemplateColumns: '180px repeat(5, 1fr)', gap: '8px' }}>
+            <div className="text-xs font-semibold" style={{ color: '#596570' }}>Room / Day</div>
+            {weekDays.map(d => (
+              <div key={format(d, 'yyyy-MM-dd')} className="text-xs font-semibold text-center py-2 rounded-lg" style={{ color: '#2d5c18', backgroundColor: '#F5FAF3' }}>
+                {format(d, 'EEE d MMM')}
+              </div>
+            ))}
+            {centre.rooms.map((room, roomIdx) => (
+              <React.Fragment key={room.id}>
+                <div className="text-sm font-medium py-2" style={{ color: '#050505' }}>{room.name}</div>
+                {weekDays.map(d => {
+                  const date = format(d, 'yyyy-MM-dd');
+                  const dayShifts = shifts.filter(s => s.date === date && s.room_id === room.id);
+                  return (
+                    <div
+                      key={date}
+                      onDragOver={e => e.preventDefault()}
+                      onDrop={e => handleDropOnCell(e, date)}
+                      onClick={() => openAddModal(date)}
+                      className="min-h-[60px] rounded-lg border border-dashed p-1.5 cursor-pointer hover:bg-white"
+                      style={{ borderColor: '#D0E8B8', backgroundColor: '#F5FAF3' }}
+                    >
+                      {dayShifts.length === 0 && <Plus size={14} className="mx-auto mt-3" style={{ color: '#D0E8B8' }} />}
+                      {dayShifts.map(s => (
                         <div
                           key={s.id}
                           draggable
@@ -521,22 +591,22 @@ export default function RosterBuilderPage() {
                           onClick={e => { e.stopPropagation(); openEditModal(s); }}
                           className="text-xs rounded px-1.5 py-1 mb-1 border"
                           style={{
-                            backgroundColor: s.room_id ? getRoomColour(roomIdx >= 0 ? roomIdx : centre.rooms.length) : '#f3f4f6',
-                            borderColor: s.room_id ? getRoomBorder(roomIdx >= 0 ? roomIdx : centre.rooms.length) : '#d1d5db',
+                            backgroundColor: getRoomColour(roomIdx),
+                            borderColor: getRoomBorder(roomIdx),
                             color: '#050505',
                           }}
                         >
                           <div className="font-medium">{s.start_time}–{s.end_time}</div>
-                          <div className="truncate">{s.room_name || 'Unassigned'}</div>
+                          <div className="truncate">{s.staff_name}</div>
                         </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </React.Fragment>
-          ))}
-        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
