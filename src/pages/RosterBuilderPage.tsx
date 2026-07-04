@@ -577,17 +577,22 @@ export default function RosterBuilderPage() {
                 {format(d, 'EEE d MMM')}
               </div>
             ))}
-            {centre.rooms.map((room, roomIdx) => (
-              <React.Fragment key={room.id}>
-                <div className="text-sm font-medium py-2" style={{ color: '#050505' }}>{room.name}</div>
+            {[
+              ...centre.rooms.map((r, i) => ({ id: r.id, name: r.name, idx: i })),
+              { id: 'float', name: 'Float', idx: centre.rooms.length },
+              { id: 'iss', name: 'ISS', idx: centre.rooms.length + 1 },
+              { id: 'other', name: 'Other / Unassigned', idx: centre.rooms.length + 2 },
+            ].map(area => (
+              <React.Fragment key={area.id}>
+                <div className="text-sm font-medium py-2" style={{ color: '#050505' }}>{area.name}</div>
                 {weekDays.map(d => {
                   const date = format(d, 'yyyy-MM-dd');
-                  const dayShifts = shifts.filter(s => s.date === date && s.room_id === room.id);
+                  const dayShifts = shifts.filter(s => s.date === date && s.room_id === area.id);
                   return (
                     <div
                       key={date}
                       onDragOver={e => e.preventDefault()}
-                      onDrop={e => handleDropOnCell(e, date)}
+                      onDrop={e => handleDropOnRoomLane(e, area.id, area.name)}
                       onClick={() => openAddModal(date)}
                       className="min-h-[60px] rounded-lg border border-dashed p-1.5 cursor-pointer hover:bg-white"
                       style={{ borderColor: '#D0E8B8', backgroundColor: '#F5FAF3' }}
@@ -601,8 +606,8 @@ export default function RosterBuilderPage() {
                           onClick={e => { e.stopPropagation(); openEditModal(s); }}
                           className="text-xs rounded px-1.5 py-1 mb-1 border"
                           style={{
-                            backgroundColor: getRoomColour(roomIdx),
-                            borderColor: getRoomBorder(roomIdx),
+                            backgroundColor: getRoomColour(area.idx),
+                            borderColor: getRoomBorder(area.idx),
                             color: '#050505',
                           }}
                         >
@@ -702,27 +707,32 @@ export default function RosterBuilderPage() {
             {/* Room lanes */}
             <div className="mt-6 space-y-3">
               <div className="font-semibold text-sm" style={{ color: '#2d5c18' }}>Room assignments</div>
-              {centre.rooms.map((room, idx) => {
-                const cov = coverageByRoom.find(c => c.room.id === room.id);
+              {[
+                ...centre.rooms.map((r, i) => ({ id: r.id, name: r.name, idx: i, ratio: r.ratio })),
+                { id: 'float', name: 'Float', idx: centre.rooms.length },
+                { id: 'iss', name: 'ISS', idx: centre.rooms.length + 1 },
+                { id: 'other', name: 'Other / Unassigned', idx: centre.rooms.length + 2 },
+              ].map(area => {
+                const cov = 'ratio' in area ? coverageByRoom.find(c => c.room.id === area.id) : null;
                 return (
-                  <div key={room.id}>
+                  <div key={area.id}>
                     <div className="flex items-center justify-between mb-1">
-                      <div className="text-sm font-medium" style={{ color: '#050505' }}>{room.name}</div>
+                      <div className="text-sm font-medium" style={{ color: '#050505' }}>{area.name}</div>
                       <div className="flex items-center gap-1">
                         {cov?.worstStatus === 'red' && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
                         {cov?.worstStatus === 'amber' && <span className="w-2 h-2 rounded-full bg-yellow-500"></span>}
                         {cov?.worstStatus === 'green' && <span className="w-2 h-2 rounded-full bg-green-500"></span>}
-                        <span className="text-xs" style={{ color: '#596570' }}>ratio {room.ratio}:1</span>
+                        {'ratio' in area && <span className="text-xs" style={{ color: '#596570' }}>ratio {area.ratio}:1</span>}
                       </div>
                     </div>
                     <div
                       onDragOver={e => e.preventDefault()}
-                      onDrop={e => handleDropOnRoomLane(e, room.id, room.name)}
+                      onDrop={e => handleDropOnRoomLane(e, area.id, area.name)}
                       className="h-10 rounded-lg border border-dashed"
-                      style={{ borderColor: getRoomBorder(idx), backgroundColor: getRoomColour(idx) }}
+                      style={{ borderColor: getRoomBorder(area.idx), backgroundColor: getRoomColour(area.idx) }}
                     >
                       <div className="flex h-full">
-                        {cov?.slots.map(slot => (
+                        {cov ? cov.slots.map(slot => (
                           <div
                             key={slot.time}
                             className="flex-1 h-full border-r"
@@ -732,6 +742,8 @@ export default function RosterBuilderPage() {
                             }}
                             title={`${slot.time}: ${slot.assigned}/${slot.required}`}
                           />
+                        )) : Array.from({ length: 24 }).map((_, i) => (
+                          <div key={i} className="flex-1 h-full border-r" style={{ borderColor: 'rgba(0,0,0,0.05)' }} />
                         ))}
                       </div>
                     </div>
