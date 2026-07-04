@@ -7,10 +7,10 @@ const CENTRE_ID = new URLSearchParams(window.location.search).get('centre') || '
 const IDLE_RESET_MS = 30_000;
 const CONFIRM_MS = 3_000;
 
-type Screen = 'welcome' | 'mobile' | 'pin' | 'shift' | 'confirm' | 'error';
+type Screen = 'mobile' | 'pin' | 'shift' | 'confirm' | 'error';
 
 export default function KioskPage() {
-  const [screen, setScreen] = useState<Screen>('welcome');
+  const [screen, setScreen] = useState<Screen>('mobile');
   const [mobile, setMobile] = useState('');
   const [pin, setPin] = useState('');
   const [session, setSession] = useState<KioskSession | null>(null);
@@ -24,14 +24,14 @@ export default function KioskPage() {
 
   function resetIdleTimer() {
     if (idleTimer.current) window.clearTimeout(idleTimer.current);
-    if (screen === 'welcome' || screen === 'confirm') return;
+    if (screen === 'confirm') return;
     idleTimer.current = window.setTimeout(() => {
       resetToWelcome();
     }, IDLE_RESET_MS);
   }
 
   function resetToWelcome() {
-    setScreen('welcome');
+    setScreen('mobile');
     setMobile('');
     setPin('');
     setSession(null);
@@ -123,8 +123,6 @@ export default function KioskPage() {
   }
 
   function handleNumpad(key: string) {
-    if (screen === 'welcome') setScreen('mobile');
-
     if (screen === 'mobile') {
       if (key === 'clear') { setMobile(''); return; }
       if (key === 'back') { setMobile(m => m.slice(0, -1)); return; }
@@ -200,20 +198,18 @@ export default function KioskPage() {
 
       {/* Main card */}
       <div className="w-full max-w-2xl px-6">
-        {screen === 'welcome' && (
-          <div className="text-center space-y-8">
-            <div className="text-6xl mb-4">👋</div>
-            <h2 className="text-3xl font-bold" style={{ color: '#050505' }}>Tap anywhere to start</h2>
-            <p className="text-xl" style={{ color: '#596570' }}>Enter your mobile number and 4-digit PIN to clock in or out.</p>
-          </div>
-        )}
-
         {(screen === 'mobile' || screen === 'pin') && (
           <div className="bg-white rounded-3xl shadow-xl p-8 border" style={{ borderColor: '#E2F1DA' }}>
             <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold mb-2" style={{ color: '#2d5c18' }}>
-                {screen === 'mobile' ? 'Enter your mobile number' : 'Enter your 4-digit PIN'}
-              </h2>
+              {screen === 'mobile' && (
+                <div className="mb-4">
+                  <h2 className="text-3xl font-bold mb-2" style={{ color: '#2d5c18' }}>Welcome to The Grove Academy</h2>
+                  <p className="text-lg" style={{ color: '#596570' }}>Enter your mobile number</p>
+                </div>
+              )}
+              {screen === 'pin' && (
+                <h2 className="text-2xl font-bold mb-2" style={{ color: '#2d5c18' }}>Enter your 4-digit PIN</h2>
+              )}
               <div className="h-16 flex items-center justify-center gap-2">
                 {screen === 'mobile' ? (
                   <span className="text-4xl font-mono tracking-widest" style={{ color: '#050505' }}>
