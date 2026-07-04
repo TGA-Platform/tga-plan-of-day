@@ -4,7 +4,7 @@
  * includes leave shifts, and flags rostered shifts with no clock events and no leave.
  */
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SERVICE_KEY = *** || 'eyJhbG…6f1c';
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbG…6f1c';
 
 const HEADERS = {
   apikey: SERVICE_KEY,
