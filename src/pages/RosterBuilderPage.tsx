@@ -406,6 +406,28 @@ export default function RosterBuilderPage() {
       try {
         const rosters = await fetchRosters(date, unitIds);
         if (rosters.length === 0) { skipped++; continue; }
+
+        // Link Deputy employees to internal staff_members
+        const uniqueEmployees = [...new Map(rosters.map(r => [r.employeeId, r.employeeName])).entries()];
+        const linkRes = await fetch('/api/deputy-staff-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            centreId,
+            employees: uniqueEmployees.map(([employeeId, employeeName]) => ({ employeeId, employeeName })),
+          }),
+        });
+        let staffLinks: Record<string, string> = {};
+        if (linkRes.ok) {
+          const linkData = await linkRes.json();
+          staffLinks = linkData.links || {};
+          // Refresh staff list so new auto-created staff appear in the sidebar
+          if (linkData.staff?.length) {
+            const fresh = await fetchStaffList(centreId);
+            setStaffList(fresh);
+          }
+        }
+
         const deleted = await deleteShiftsForDate(week.id, date);
         if (!deleted) {
           errors.push(`${date}: could not clear existing shifts (RLS/policy issue?)`);
@@ -436,9 +458,11 @@ export default function RosterBuilderPage() {
             else { roomName = r.unitName || 'Other'; roomId = 'other'; }
           }
           // Link to internal staff profile by Deputy employee ID
-          const matchedStaff = staffList.find(s => s.deputyEmployeeId && String(s.deputyEmployeeId) === String(r.employeeId));
-          const staffId = matchedStaff?.id ?? String(r.employeeId);
-          const staffName = matchedStaff?.name ?? r.employeeName;
+          const linkedStaffId = staffLinks[String(r.employeeId)];
+          const matchedStaff = staffList.find(s => s.id === linkedStaffId) ||
+            staffList.find(s => s.deputyEmployeeId && String(s.deputyEmployeeId) === String(r.employeeId));
+          const staffId = linkedStaffId || matchedStaff?.id || String(r.employeeId);
+          const staffName = matchedStaff?.name || r.employeeName;
           const startM = hhmmToMinutes(r.startTime);
           const endM = hhmmToMinutes(r.endTime);
           const lunchM = Math.max(startM + 30, Math.min(endM - 60, startM + Math.floor((endM - startM) / 2)));
