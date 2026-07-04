@@ -318,9 +318,9 @@ async function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlot
       // Need someone who starts after opening and whose shift ends at or before the
       // window end (but close enough that moving later reaches the window).
       const candidates = staffList.filter(s => !skipIds.has(s.employeeId) && s.startM > 7 * 60 && s.endM <= windowEndM && s.endM > windowStartM - 60);
-      // Prefer the candidate whose end time is closest to the end of the window
-      // (gives the biggest coverage gain inside the window).
-      candidates.sort((a, b) => b.endM - a.endM);
+      // Prefer morning starters first (their loss falls in the morning surplus),
+      // then the candidate whose end time is closest to the end of the window.
+      candidates.sort((a, b) => a.startM - b.startM || b.endM - a.endM);
       return candidates[0] ?? null;
     }
   };
@@ -369,7 +369,7 @@ async function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlot
       if (!candidate) break;
       skipIds.add(candidate.employeeId);
 
-      const windowMinSurplusBeforeMove = Math.min(...simulatedCoverage.slice(w.startIdx, w.endIdx + 1).map(s => s.surplus));
+      const windowSurplusBeforeMove = simulatedCoverage.slice(w.startIdx, w.endIdx + 1).map(s => s.surplus);
 
       // Move just enough to cover the window, capped at 60 min and rounded to 15-min increments
       let moveMins = shiftEarlier
@@ -383,8 +383,8 @@ async function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlot
       const openOk = staffMeetsMin(simulatedCoverage[0]);
       const closeOk = staffMeetsMin(simulatedCoverage[simulatedCoverage.length - 1]);
       const createdNewShortfall = simulatedCoverage.some((s, i) => s.surplus < -0.001 && slotCoverage[i].surplus >= -0.001);
-      const windowMinSurplusAfterMove = Math.min(...simulatedCoverage.slice(w.startIdx, w.endIdx + 1).map(s => s.surplus));
-      const improvesWindow = windowMinSurplusAfterMove > windowMinSurplusBeforeMove + 0.001;
+      const windowSurplusAfterMove = simulatedCoverage.slice(w.startIdx, w.endIdx + 1).map(s => s.surplus);
+      const improvesWindow = windowSurplusAfterMove.some((s, i) => s > windowSurplusBeforeMove[i] + 0.001);
       const moveIsValid = openOk && closeOk && !createdNewShortfall && improvesWindow;
 
       if (moveIsValid) {
