@@ -51,11 +51,12 @@ export async function fetchRosters(date: string, unitIds: number[], force = fals
     });
     
     if (!res.ok) {
-      console.error('Deputy proxy failed:', res.status, await res.text());
-      throw new Error(`Deputy proxy ${res.status}`);
+      const text = await res.text().catch(() => '');
+      console.error('Deputy proxy failed:', res.status, text);
+      throw new Error(`Deputy proxy ${res.status}: ${text || 'empty response'}`);
     }
-    
-    const rosters = await res.json();
+
+    const rosters = await res.json().catch(() => []);
     if (!Array.isArray(rosters) || rosters.length === 0) return [];
     
     // Get employee names
