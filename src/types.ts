@@ -176,6 +176,9 @@ export interface RosterShift {
   lunch_start?: string; // HH:MM
   lunch_duration: number;
   leave_type?: 'sick' | 'annual' | 'other';
+  splitLeaveFrom?: string; // HH:MM — UI-only field for splitting a shift into worked + leave portions
+  originalRoomId?: string; // UI-only: room before converting to leave
+  originalRoomName?: string; // UI-only
   is_casual: boolean;
   notes?: string;
   created_at: string;

@@ -275,20 +275,51 @@ export default function RosterBuilderPage() {
   async function handleSaveShift(shift: Partial<RosterShift>) {
     if (!weekRecord) return;
     setSaving(true);
-    const saved = await saveShift({ ...shift, centre_id: centreId, roster_week_id: weekRecord.id });
-    if (saved) {
-      setShifts(prev => {
-        const idx = prev.findIndex(s => s.id === saved.id);
-        if (idx >= 0) {
-          const next = [...prev];
-          next[idx] = saved;
-          return next;
-        }
-        return [...prev, saved];
+
+    const startM = hhmmToMinutes(shift.start_time || '08:00');
+    const endM = hhmmToMinutes(shift.end_time || '16:00');
+    const leaveFromM = shift.splitLeaveFrom ? hhmmToMinutes(shift.splitLeaveFrom) : null;
+    const hasSplit = shift.leave_type && leaveFromM !== null && leaveFromM > startM && leaveFromM < endM;
+
+    if (hasSplit) {
+      // Delete original if editing an existing shift
+      if (shift.id) {
+        await deleteShift(shift.id);
+        setShifts(prev => prev.filter(s => s.id !== shift.id));
+      }
+      // Worked portion: original room, start to leave-from
+      const workedRoomId = (shift as any).originalRoomId || shift.room_id;
+      const workedRoomName = (shift as any).originalRoomName || shift.room_name;
+      await saveShiftSingle({
+        ...shift,
+        id: undefined,
+        end_time: shift.splitLeaveFrom,
+        room_id: workedRoomId,
+        room_name: workedRoomName,
+        leave_type: undefined,
       });
+      // Leave portion: leave room, leave-from to end
+      await saveShiftSingle({
+        ...shift,
+        id: undefined,
+        start_time: shift.splitLeaveFrom,
+        room_id: 'leave',
+        room_name: 'Leave',
+      });
+    } else {
+      await saveShiftSingle(shift);
     }
+
+    const loaded = await loadShifts(weekRecord.id);
+    setShifts(loaded);
     setSaving(false);
     setModalOpen(false);
+  }
+
+  async function saveShiftSingle(shift: Partial<RosterShift>) {
+    if (!weekRecord) return null;
+    const saved = await saveShift({ ...shift, centre_id: centreId, roster_week_id: weekRecord.id });
+    return saved;
   }
 
   async function handleDeleteShift(shiftId: string) {
@@ -417,6 +448,10 @@ export default function RosterBuilderPage() {
       end_time: '16:00',
       room_id: '',
       lunch_start: '12:00',
+      leave_type: undefined,
+      splitLeaveFrom: undefined,
+      originalRoomId: undefined,
+      originalRoomName: undefined,
       lunch_duration: 30,
       is_casual: false,
       notes: '',
@@ -435,6 +470,9 @@ export default function RosterBuilderPage() {
       start_time: normalizeTime(shift.start_time),
       end_time: normalizeTime(shift.end_time),
       lunch_start: normalizeTime(shift.lunch_start),
+      splitLeaveFrom: shift.leave_type ? normalizeTime(shift.start_time) : undefined,
+      originalRoomId: shift.room_id,
+      originalRoomName: shift.room_name,
     });
     setModalOpen(true);
   }
@@ -886,7 +924,14 @@ export default function RosterBuilderPage() {
               <label className="text-xs font-semibold" style={{ color: '#596570' }}>Leave type</label>
               <select
                 value={draft.leave_type || ''}
-                onChange={e => setDraft({ ...draft, leave_type: (e.target.value as RosterShift['leave_type']) || undefined })}
+                onChange={e => {
+                  const lt = (e.target.value as RosterShift['leave_type']) || undefined;
+                  setDraft({
+                    ...draft,
+                    leave_type: lt,
+                    splitLeaveFrom: lt ? (draft.start_time || '08:00') : undefined,
+                  });
+                }}
                 className="w-full px-3 py-1.5 rounded-lg border text-sm"
                 style={{ borderColor: '#D0E8B8' }}
               >
@@ -896,6 +941,25 @@ export default function RosterBuilderPage() {
                 <option value="other">Other leave</option>
               </select>
             </div>
+
+            {draft.leave_type && (
+              <div>
+                <label className="text-xs font-semibold" style={{ color: '#596570' }}>Leave from</label>
+                <select
+                  value={draft.splitLeaveFrom || draft.start_time || '08:00'}
+                  onChange={e => setDraft({ ...draft, splitLeaveFrom: e.target.value })}
+                  className="w-full px-3 py-1.5 rounded-lg border text-sm"
+                  style={{ borderColor: '#D0E8B8' }}
+                >
+                  {TIME_OPTIONS.filter(t => t >= (draft.start_time || '08:00') && t <= (draft.end_time || '16:00')).map(t => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+                <div className="text-[10px] mt-0.5" style={{ color: '#596570' }}>
+                  Default = full shift on leave. Change to split into worked + leave portions.
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <div>
