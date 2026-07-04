@@ -305,18 +305,19 @@ async function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlot
     }
   };
 
-  const findCandidate = (w: typeof windows[0], shiftEarlier: boolean) => {
+  const findCandidate = (w: typeof windows[0], shiftEarlier: boolean, skipIds: Set<number>) => {
+    const windowStartM = slotToMinutes(w.startSlot);
     const windowEndM = slotToMinutes(w.endSlot) + SLOT_MINS;
     if (shiftEarlier) {
       // Need someone who starts at or after the window ends so they can be moved earlier.
       // Prefer the closest start time to the end of the window (smallest move).
-      const candidates = staffList.filter(s => s.startM >= windowEndM);
+      const candidates = staffList.filter(s => !skipIds.has(s.employeeId) && s.startM >= windowEndM && s.startM < windowEndM + 60);
       candidates.sort((a, b) => a.startM - b.startM);
       return candidates[0] ?? null;
     } else {
       // Need someone who starts after opening and whose shift ends at or before the
-      // window end, so moving later extends coverage into the afternoon shortfall.
-      const candidates = staffList.filter(s => s.startM > 7 * 60 && s.endM <= windowEndM);
+      // window end (but close enough that moving later reaches the window).
+      const candidates = staffList.filter(s => !skipIds.has(s.employeeId) && s.startM > 7 * 60 && s.endM <= windowEndM && s.endM > windowStartM - 60);
       // Prefer the candidate whose end time is closest to the end of the window
       // (gives the biggest coverage gain inside the window).
       candidates.sort((a, b) => b.endM - a.endM);
@@ -355,47 +356,58 @@ async function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlot
   for (const w of windows) {
     const windowStartM = slotToMinutes(w.startSlot);
     const windowEndM = slotToMinutes(w.endSlot) + SLOT_MINS;
-    const durationMins = windowEndM - windowStartM;
     const windowMidMins = (windowStartM + windowEndM) / 2;
     const shiftEarlier = windowMidMins <= middayMins;
 
-    const candidate = findCandidate(w, shiftEarlier);
-    if (!candidate) continue;
+    let windowResolved = false;
+    let attempts = 0;
+    const skipIds = new Set<number>();
 
-    // Move amount = window duration, capped at 60 min and rounded to 15-min increments
-    let moveMins = Math.min(durationMins, 60);
-    moveMins = Math.ceil(moveMins / 15) * 15;
+    while (!windowResolved && attempts < 5) {
+      attempts++;
+      const candidate = findCandidate(w, shiftEarlier, skipIds);
+      if (!candidate) break;
+      skipIds.add(candidate.employeeId);
 
-    applyMove(candidate, shiftEarlier, moveMins);
-    recomputeSurplus();
+      const windowMinSurplusBeforeMove = Math.min(...simulatedCoverage.slice(w.startIdx, w.endIdx + 1).map(s => s.surplus));
 
-    const openOk = staffMeetsMin(simulatedCoverage[0]);
-    const closeOk = staffMeetsMin(simulatedCoverage[simulatedCoverage.length - 1]);
-    const createdNewShortfall = simulatedCoverage.some((s, i) => s.surplus < -0.001 && slotCoverage[i].surplus >= -0.001);
-    const windowFixed = simulatedCoverage.slice(w.startIdx, w.endIdx + 1).every(s => s.surplus >= -0.001);
-    const moveIsValid = openOk && closeOk && !createdNewShortfall && windowFixed;
+      // Move just enough to cover the window, capped at 60 min and rounded to 15-min increments
+      let moveMins = shiftEarlier
+        ? Math.ceil((candidate.startM - windowStartM) / 15) * 15
+        : Math.ceil((windowEndM - candidate.endM) / 15) * 15;
+      moveMins = Math.min(Math.max(moveMins, 15), 60);
 
-    if (moveIsValid) {
-      const newStartM = shiftEarlier ? candidate.startM - moveMins : candidate.startM + moveMins;
-      const newEndM = shiftEarlier ? candidate.endM - moveMins : candidate.endM + moveMins;
-      const text = `Move ${candidate.name}'s shift from ${minsToHhmm(candidate.startM)}–${minsToHhmm(candidate.endM)} to ${minsToHhmm(newStartM)}–${minsToHhmm(newEndM)} to cover the ${w.startSlot}–${minsToHhmm(windowEndM)} shortfall in ${campus}.`;
-      suggestions.push({
-        type: shiftEarlier ? 'shift-start' : 'shift-end',
-        staffName: candidate.name,
-        fromTime: minsToHhmm(candidate.startM),
-        toTime: minsToHhmm(newStartM),
-        coversStart: w.startSlot,
-        coversEnd: minsToHhmm(windowEndM),
-        shortfallFte: w.peakShortfall,
-        text,
-      });
-      // Update the candidate's times in staffList so subsequent windows don't reuse them
-      candidate.startM = newStartM;
-      candidate.endM = newEndM;
-      staffList = staffList.filter(s => s.employeeId !== candidate.employeeId).concat(candidate).sort((a, b) => a.startM - b.startM);
-    } else {
-      applyMove(candidate, shiftEarlier, moveMins, true);
+      applyMove(candidate, shiftEarlier, moveMins);
       recomputeSurplus();
+
+      const openOk = staffMeetsMin(simulatedCoverage[0]);
+      const closeOk = staffMeetsMin(simulatedCoverage[simulatedCoverage.length - 1]);
+      const createdNewShortfall = simulatedCoverage.some((s, i) => s.surplus < -0.001 && slotCoverage[i].surplus >= -0.001);
+      const windowMinSurplusAfterMove = Math.min(...simulatedCoverage.slice(w.startIdx, w.endIdx + 1).map(s => s.surplus));
+      const improvesWindow = windowMinSurplusAfterMove > windowMinSurplusBeforeMove + 0.001;
+      const moveIsValid = openOk && closeOk && !createdNewShortfall && improvesWindow;
+
+      if (moveIsValid) {
+        const newStartM = shiftEarlier ? candidate.startM - moveMins : candidate.startM + moveMins;
+        const newEndM = shiftEarlier ? candidate.endM - moveMins : candidate.endM + moveMins;
+        const text = `Move ${candidate.name}'s shift from ${minsToHhmm(candidate.startM)}–${minsToHhmm(candidate.endM)} to ${minsToHhmm(newStartM)}–${minsToHhmm(newEndM)} to cover the ${w.startSlot}–${minsToHhmm(windowEndM)} shortfall in ${campus}.`;
+        suggestions.push({
+          type: shiftEarlier ? 'shift-start' : 'shift-end',
+          staffName: candidate.name,
+          fromTime: minsToHhmm(candidate.startM),
+          toTime: minsToHhmm(newStartM),
+          coversStart: w.startSlot,
+          coversEnd: minsToHhmm(windowEndM),
+          shortfallFte: w.peakShortfall,
+          text,
+        });
+        // Remove this candidate from the pool so each staff member is moved at most once
+        staffList = staffList.filter(s => s.employeeId !== candidate.employeeId);
+        windowResolved = simulatedCoverage.slice(w.startIdx, w.endIdx + 1).every(s => s.surplus >= -0.001);
+      } else {
+        applyMove(candidate, shiftEarlier, moveMins, true);
+        recomputeSurplus();
+      }
     }
   }
 
