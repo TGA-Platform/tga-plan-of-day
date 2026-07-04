@@ -37,3 +37,15 @@ CREATE TABLE IF NOT EXISTS roster_shifts (
 CREATE INDEX IF NOT EXISTS idx_roster_shifts_week ON roster_shifts(roster_week_id);
 CREATE INDEX IF NOT EXISTS idx_roster_shifts_centre_date ON roster_shifts(centre_id, date);
 CREATE INDEX IF NOT EXISTS idx_roster_shifts_staff ON roster_shifts(staff_id);
+
+-- RLS policies for anonymous app access (matches existing POD pattern)
+ALTER TABLE roster_weeks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE roster_shifts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS anon_all_roster_weeks ON roster_weeks;
+CREATE POLICY anon_all_roster_weeks ON roster_weeks
+  FOR ALL TO anon USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS anon_all_roster_shifts ON roster_shifts;
+CREATE POLICY anon_all_roster_shifts ON roster_shifts
+  FOR ALL TO anon USING (true) WITH CHECK (true);

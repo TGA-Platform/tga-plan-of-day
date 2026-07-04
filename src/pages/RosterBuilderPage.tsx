@@ -243,15 +243,21 @@ export default function RosterBuilderPage() {
 
   async function loadData() {
     setLoading(true);
-    const [staff, week] = await Promise.all([
-      fetchStaffList(centreId),
-      getOrCreateWeek(centreId, weekStart, user?.email),
-    ]);
-    setStaffList(staff);
-    if (week) {
-      setWeekRecord(week);
-      const loaded = await loadShifts(week.id);
-      setShifts(loaded);
+    try {
+      const [staff, week] = await Promise.all([
+        fetchStaffList(centreId),
+        getOrCreateWeek(centreId, weekStart, user?.email),
+      ]);
+      setStaffList(staff);
+      if (week) {
+        setWeekRecord(week);
+        const loaded = await loadShifts(week.id);
+        setShifts(loaded);
+      } else {
+        console.error('Failed to load or create roster week');
+      }
+    } catch (err) {
+      console.error('loadData error:', err);
     }
     setLoading(false);
   }
@@ -301,31 +307,48 @@ export default function RosterBuilderPage() {
       ...centre.rooms.map(r => r.deputyUnitId),
       ...(centre.floatUnitIds || []),
     ];
+    let imported = 0;
+    let failed = 0;
     for (const day of weekDays) {
       const date = format(day, 'yyyy-MM-dd');
-      const rosters = await fetchRosters(date, unitIds);
-      if (rosters.length === 0) continue;
-      await deleteShiftsForDate(weekRecord.id, date);
-      for (const r of rosters) {
-        const room = centre.rooms.find(rm => rm.deputyUnitId === r.unitId);
-        await saveShift({
-          roster_week_id: weekRecord.id,
-          centre_id: centreId,
-          staff_id: String(r.employeeId),
-          staff_name: r.employeeName,
-          date,
-          start_time: r.startTime,
-          end_time: r.endTime,
-          room_id: room?.id,
-          room_name: room?.name || r.unitName,
-          lunch_duration: 30,
-          is_casual: false,
-        });
+      try {
+        const rosters = await fetchRosters(date, unitIds);
+        if (rosters.length === 0) continue;
+        await deleteShiftsForDate(weekRecord.id, date);
+        for (const r of rosters) {
+          const room = centre.rooms.find(rm => rm.deputyUnitId === r.unitId);
+          const startM = hhmmToMinutes(r.startTime);
+          const endM = hhmmToMinutes(r.endTime);
+          const lunchM = Math.max(startM + 30, Math.min(endM - 60, startM + Math.floor((endM - startM) / 2)));
+          const saved = await saveShift({
+            roster_week_id: weekRecord.id,
+            centre_id: centreId,
+            staff_id: String(r.employeeId),
+            staff_name: r.employeeName,
+            date,
+            start_time: r.startTime,
+            end_time: r.endTime,
+            room_id: room?.id,
+            room_name: room?.name || r.unitName,
+            lunch_start: minutesToHhmm(lunchM),
+            lunch_duration: 30,
+            is_casual: false,
+          });
+          if (saved) imported++; else failed++;
+        }
+      } catch (err) {
+        console.error('Import failed for', date, err);
+        failed++;
       }
     }
     const loaded = await loadShifts(weekRecord.id);
     setShifts(loaded);
     setImporting(false);
+    if (failed > 0) {
+      alert(`Imported ${imported} shifts, ${failed} failed. Check console for details.`);
+    } else if (imported === 0) {
+      alert('No Deputy rosters found for this week.');
+    }
   }
 
   function openAddModal(date: string, staff?: StaffSource) {
