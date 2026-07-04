@@ -326,9 +326,11 @@ export default function RosterBuilderPage() {
       ...centre.rooms.map(r => r.deputyUnitId),
       ...(centre.floatUnitIds || []),
       ...(centre.issUnitIds || []),
+      ...(centre.nonRatioUnitIds || []),
     ];
     const floatIds = new Set(centre.floatUnitIds || []);
     const issIds = new Set(centre.issUnitIds || []);
+    const nonRatioIds = new Set(centre.nonRatioUnitIds || []);
     let imported = 0;
     let skipped = 0;
     const errors: string[] = [];
@@ -344,11 +346,18 @@ export default function RosterBuilderPage() {
         }
         for (const r of rosters) {
           const room = centre.rooms.find(rm => rm.deputyUnitId === r.unitId);
+          const uName = (r.unitName || '').toLowerCase();
           let roomName = room?.name;
           let roomId = room?.id;
           if (!roomName) {
             if (floatIds.has(r.unitId)) { roomName = 'Float'; roomId = 'float'; }
             else if (issIds.has(r.unitId)) { roomName = 'ISS'; roomId = 'iss'; }
+            else if (nonRatioIds.has(r.unitId)) {
+              if (uName.includes('director') || uName.includes('ed leader')) { roomName = 'Director'; roomId = 'director'; }
+              else if (uName.includes('chef') || uName.includes('cook')) { roomName = 'Cook'; roomId = 'cook'; }
+              else if (uName.includes('admin')) { roomName = 'Admin'; roomId = 'admin'; }
+              else { roomName = r.unitName || 'Other'; roomId = 'other'; }
+            }
             else { roomName = r.unitName || 'Other'; roomId = 'other'; }
           }
           const startM = hhmmToMinutes(r.startTime);
@@ -581,7 +590,10 @@ export default function RosterBuilderPage() {
               ...centre.rooms.map((r, i) => ({ id: r.id, name: r.name, idx: i })),
               { id: 'float', name: 'Float', idx: centre.rooms.length },
               { id: 'iss', name: 'ISS', idx: centre.rooms.length + 1 },
-              { id: 'other', name: 'Other / Unassigned', idx: centre.rooms.length + 2 },
+              { id: 'director', name: 'Director', idx: centre.rooms.length + 2 },
+              { id: 'cook', name: 'Cook', idx: centre.rooms.length + 3 },
+              { id: 'admin', name: 'Admin', idx: centre.rooms.length + 4 },
+              { id: 'other', name: 'Other / Unassigned', idx: centre.rooms.length + 5 },
             ].map(area => (
               <React.Fragment key={area.id}>
                 <div className="text-sm font-medium py-2" style={{ color: '#050505' }}>{area.name}</div>
@@ -711,7 +723,10 @@ export default function RosterBuilderPage() {
                 ...centre.rooms.map((r, i) => ({ id: r.id, name: r.name, idx: i, ratio: r.ratio })),
                 { id: 'float', name: 'Float', idx: centre.rooms.length },
                 { id: 'iss', name: 'ISS', idx: centre.rooms.length + 1 },
-                { id: 'other', name: 'Other / Unassigned', idx: centre.rooms.length + 2 },
+                { id: 'director', name: 'Director', idx: centre.rooms.length + 2 },
+                { id: 'cook', name: 'Cook', idx: centre.rooms.length + 3 },
+                { id: 'admin', name: 'Admin', idx: centre.rooms.length + 4 },
+                { id: 'other', name: 'Other / Unassigned', idx: centre.rooms.length + 5 },
               ].map(area => {
                 const cov = 'ratio' in area ? coverageByRoom.find(c => c.room.id === area.id) : null;
                 return (
