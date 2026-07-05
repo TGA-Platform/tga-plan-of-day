@@ -205,6 +205,19 @@ export default function KioskPage() {
     return events.filter(e => e.event_type === type).pop();
   }
 
+  function currentStatus(): { label: string; color: string; bg: string } | null {
+    const events = session?.events || [];
+    if (!events.length) return null;
+    const last = events[events.length - 1].event_type;
+    switch (last) {
+      case 'start_shift': return { label: 'On shift', color: '#166534', bg: '#dcfce7' };
+      case 'start_lunch': return { label: 'On lunch break', color: '#92400e', bg: '#fef3c7' };
+      case 'end_lunch': return { label: 'On shift', color: '#166534', bg: '#dcfce7' };
+      case 'end_shift': return { label: 'Shift finished', color: '#596570', bg: '#f3f4f6' };
+      default: return null;
+    }
+  }
+
   function formatEventTime(iso?: string) {
     if (!iso) return null;
     try {
@@ -347,6 +360,19 @@ export default function KioskPage() {
             <div className="bg-white rounded-3xl shadow-xl p-8 border text-center" style={{ borderColor: '#E2F1DA' }}>
               <h2 className="text-3xl font-bold mb-1" style={{ color: '#050505' }}>{session.staff_name}</h2>
               {session.role && <p className="text-lg mb-4" style={{ color: '#596570' }}>{session.role}</p>}
+              {(() => {
+                const status = currentStatus();
+                return status ? (
+                  <div className="mb-4">
+                    <span
+                      className="inline-block px-4 py-1.5 rounded-full text-sm font-bold"
+                      style={{ backgroundColor: status.bg, color: status.color }}
+                    >
+                      {status.label}
+                    </span>
+                  </div>
+                ) : null;
+              })()}
               {session.shift ? (
                 <div className="inline-block rounded-2xl px-8 py-4" style={{ backgroundColor: '#E2F1DA' }}>
                   <p className="text-sm font-semibold uppercase tracking-wide mb-1" style={{ color: '#2d5c18' }}>Rostered shift</p>
