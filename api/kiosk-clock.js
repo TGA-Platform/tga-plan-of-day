@@ -22,12 +22,41 @@ const HEADERS = {
 
 const VALID_EVENTS = ['start_shift', 'start_lunch', 'end_lunch', 'end_shift'];
 
+function getSydneyOffsetMinutes(date) {
+  const utc = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const sydney = new Date(date.toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+  return (sydney - utc) / 60000;
+}
+
+function offsetString(offsetMinutes) {
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMinutes);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  return `${sign}${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function sydneyParts(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Sydney',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type) => parts.find(p => p.type === type)?.value || '00';
+  return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour'), minute: get('minute'), second: get('second') };
+}
+
 function nowSydneyISO() {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' })).toISOString();
+  const now = new Date();
+  const { year, month, day, hour, minute, second } = sydneyParts(now);
+  const offset = getSydneyOffsetMinutes(now);
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}${offsetString(offset)}`;
 }
 
 function todaySydney() {
-  return nowSydneyISO().slice(0, 10);
+  const { year, month, day } = sydneyParts(new Date());
+  return `${year}-${month}-${day}`;
 }
 
 function toHhmm(iso) {
@@ -105,9 +134,10 @@ export default async function handler(req, res) {
     const shift = shiftRows.find(s => s.roster_weeks?.status === 'published') || shiftRows[0] || null;
 
     // Determine event time: use adjusted time if provided for end_shift
+    const offset = offsetString(getSydneyOffsetMinutes(new Date()));
     let eventTime = nowSydneyISO();
     if (eventType === 'end_shift' && adjustedEndTime) {
-      eventTime = `${today}T${adjustedEndTime}:00+10:00`;
+      eventTime = `${today}T${adjustedEndTime}:00${offset}`;
     }
 
     // 5. Insert event
