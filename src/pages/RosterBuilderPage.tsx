@@ -659,18 +659,31 @@ export default function RosterBuilderPage() {
     }
   }
 
+  function normalizeName(name: string) {
+    return String(name || '')
+      .toLowerCase()
+      .replace(/\s*[\[(<].*?[\])>]\s*$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   const staffForDisplay = useMemo(() => {
     const fromShifts = shifts.map(s => ({ id: s.staff_id, name: s.staff_name, roleType: 'educator' as const }));
     const map = new Map<string, StaffSource>();
-    const names = new Set<string>();
+    const normalizedNames = new Map<string, string>(); // normalized -> canonical name
     for (const s of staffList) {
       map.set(s.id, s);
-      names.add(s.name.toLowerCase().trim());
+      const norm = normalizeName(s.name);
+      if (!normalizedNames.has(norm)) normalizedNames.set(norm, s.name);
     }
     for (const s of fromShifts) {
-      // Skip if this staff is already in the list by ID or by name (prevents Deputy-ID duplicates)
-      if (!map.has(s.id) && !names.has(s.name.toLowerCase().trim())) {
+      const norm = normalizeName(s.name);
+      const canonical = normalizedNames.get(norm);
+      // Skip if this staff is already in the list by ID or by normalized name.
+      // Prefer the staffing-section name when merging.
+      if (!map.has(s.id) && !canonical) {
         map.set(s.id, s);
+        normalizedNames.set(norm, s.name);
       }
     }
     return Array.from(map.values());
