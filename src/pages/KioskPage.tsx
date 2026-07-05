@@ -1,11 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { format } from 'date-fns';
-import { LogOut, Clock, Coffee, Utensils, DoorOpen, CheckCircle, AlertCircle } from 'lucide-react';
+import { LogOut, Clock, Coffee, Utensils, DoorOpen, CheckCircle, AlertCircle, Megaphone } from 'lucide-react';
 import type { KioskEventType, KioskSession } from '../types';
 
 const CENTRE_ID = new URLSearchParams(window.location.search).get('centre') || '';
 const IDLE_RESET_MS = 30_000;
 const CONFIRM_MS = 3_000;
+
+interface KioskNewsItem {
+  id: string;
+  title: string;
+  body: string;
+  target_type: 'centre' | 'room' | 'person';
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  posted_by: string;
+  created_at: string;
+}
 
 type Screen = 'mobile' | 'pin' | 'shift' | 'confirm' | 'endShiftConfirm' | 'endShiftEdit' | 'error';
 
@@ -21,6 +31,7 @@ export default function KioskPage() {
   const [adjustedEndTime, setAdjustedEndTime] = useState('');
   const [adjustedStartTime, setAdjustedStartTime] = useState('');
   const [editMode, setEditMode] = useState<'start' | 'end'>('end');
+  const [news, setNews] = useState<KioskNewsItem[]>([]);
 
   const idleTimer = useRef<number | null>(null);
   const confirmTimer = useRef<number | null>(null);
@@ -58,6 +69,12 @@ export default function KioskPage() {
   useEffect(() => {
     resetIdleTimer();
   }, [screen, mobile, pin]);
+
+  useEffect(() => {
+    if (screen === 'shift' && session) {
+      loadNews();
+    }
+  }, [screen, session?.staff_id, session?.shift?.room_id]);
 
   async function verifyPin(pinValue: string) {
     setLoading(true);
@@ -159,6 +176,19 @@ export default function KioskPage() {
       return;
     }
     clockEvent('end_shift', { confirmed: false, adjustedStartTime: start, adjustedEndTime: end });
+  }
+
+  async function loadNews() {
+    if (!session) return;
+    try {
+      const roomId = session.shift?.room_id || '';
+      const url = `/api/kiosk-news?centreId=${encodeURIComponent(CENTRE_ID)}&staffId=${encodeURIComponent(session.staff_id)}${roomId ? `&roomId=${encodeURIComponent(roomId)}` : ''}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (res.ok && data.ok) setNews(data.news || []);
+    } catch {
+      setNews([]);
+    }
   }
 
   function eventLabel(type: KioskEventType): string {
@@ -386,6 +416,39 @@ export default function KioskPage() {
                 loading={loading}
               />
             </div>
+
+            {news.length > 0 && (
+              <div className="bg-white rounded-3xl shadow-xl p-6 border" style={{ borderColor: '#E2F1DA' }}>
+                <div className="flex items-center gap-2 mb-4">
+                  <Megaphone size={22} style={{ color: '#2d5c18' }} />
+                  <h3 className="text-lg font-bold" style={{ color: '#2d5c18' }}>Latest News</h3>
+                </div>
+                <div className="space-y-3">
+                  {news.map(item => (
+                    <div key={item.id} className="rounded-xl p-4 border" style={{ borderColor: '#E2F1DA', backgroundColor: '#F5FAF3' }}>
+                      <div className="flex items-start justify-between gap-3">
+                        <h4 className="font-bold" style={{ color: '#050505' }}>{item.title}</h4>
+                        {item.priority !== 'normal' && (
+                          <span
+                            className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase"
+                            style={{
+                              backgroundColor: item.priority === 'urgent' ? '#fee2e2' : item.priority === 'high' ? '#fef3c7' : '#f3f4f6',
+                              color: item.priority === 'urgent' ? '#dc2626' : item.priority === 'high' ? '#92400e' : '#4b5563',
+                            }}
+                          >
+                            {item.priority}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm mt-1 whitespace-pre-wrap" style={{ color: '#596570' }}>{item.body}</p>
+                      <p className="text-xs mt-2" style={{ color: '#9ca3af' }}>
+                        Posted by {item.posted_by} on {format(new Date(item.created_at), 'd MMM yyyy')}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

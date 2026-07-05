@@ -23,6 +23,7 @@ export const PAGES: PagePermission[] = [
   { key: 'timesheets', label: 'Timesheets',             description: 'Review and approve staff timesheets' },
   { key: 'config',     label: 'Centre Configuration',   description: 'Room & break configuration' },
   { key: 'settings',   label: 'Settings / User Mgmt',   description: 'User management & role permissions' },
+  { key: 'kiosk_news', label: 'Kiosk News',             description: 'Post announcements to the staff kiosk' },
 ];
 
 export type RolePermissions = Record<string, boolean>;
@@ -46,6 +47,7 @@ export function getBuiltinDefaults(role: AppRole): RolePermissions {
         timesheets:true,
         config:    false,
         settings:  false,
+        kiosk_news:true,
       };
     case 'assistant_director':
       // Assistant Directors: Plan of Day + Ratio Check + Summary. No reports/config/settings.

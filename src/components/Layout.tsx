@@ -92,6 +92,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <span style={{ color: '#D0E8B8' }}>|</span>
                 </>
               )}
+              {canAccess(user.role, 'kiosk_news') && (
+                <>
+                  <Link to="/kiosk-news" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Kiosk News</Link>
+                  <span style={{ color: '#D0E8B8' }}>|</span>
+                </>
+              )}
               {/* Staff nav hidden — work in progress */}
               <span style={{ color: '#D0E8B8' }}>|</span>
               <a href="/guide" target="_blank" rel="noopener noreferrer" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Guide</a>
