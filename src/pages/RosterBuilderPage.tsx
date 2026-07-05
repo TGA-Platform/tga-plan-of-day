@@ -661,8 +661,17 @@ export default function RosterBuilderPage() {
   const staffForDisplay = useMemo(() => {
     const fromShifts = shifts.map(s => ({ id: s.staff_id, name: s.staff_name, roleType: 'educator' as const }));
     const map = new Map<string, StaffSource>();
-    for (const s of staffList) map.set(s.id, s);
-    for (const s of fromShifts) if (!map.has(s.id)) map.set(s.id, s);
+    const names = new Set<string>();
+    for (const s of staffList) {
+      map.set(s.id, s);
+      names.add(s.name.toLowerCase().trim());
+    }
+    for (const s of fromShifts) {
+      // Skip if this staff is already in the list by ID or by name (prevents Deputy-ID duplicates)
+      if (!map.has(s.id) && !names.has(s.name.toLowerCase().trim())) {
+        map.set(s.id, s);
+      }
+    }
     return Array.from(map.values());
   }, [staffList, shifts]);
 
