@@ -13,7 +13,7 @@
  *      Deletes an announcement. Directors/admins only.
  */
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SERVICE_KEY = proces…KEY;
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 const HEADERS = {
   apikey: SERVICE_KEY,
