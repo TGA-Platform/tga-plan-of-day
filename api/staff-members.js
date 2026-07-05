@@ -3,7 +3,7 @@
  * Used by Roster Builder and Kiosk PIN management as the central staff source.
  */
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbG…6f1c';
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 const HEADERS = {
   apikey: SERVICE_KEY,
@@ -13,6 +13,7 @@ const HEADERS = {
 };
 
 export default async function handler(req, res) {
+  if (!SERVICE_KEY) return res.status(500).json({ error: 'SUPABASE_SERVICE_KEY not configured' });
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
