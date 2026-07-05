@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { format, parseISO } from 'date-fns';
-import { CheckCircle, AlertCircle, Clock, Download, UserCheck, CalendarRange, Brain } from 'lucide-react';
+import { CheckCircle, AlertCircle, Clock, Download, UserCheck, CalendarRange, Brain, X, Edit3 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { getUser, getAllowedCentres } from '../auth';
 import { CENTRES } from '../config';
-import { formatHours } from '../lib/roundingEngine';
+import { formatHours, roundTimesheet } from '../lib/roundingEngine';
 import type { TimesheetApproval } from '../types';
 
 interface TimesheetSummary {
@@ -31,6 +31,11 @@ export default function TimesheetsPage() {
   const [error, setError] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
   const [aiNotes, setAiNotes] = useState<string[]>([]);
+  const [editingRow, setEditingRow] = useState<TimesheetApproval | null>(null);
+  const [approvedStart, setApprovedStart] = useState('');
+  const [approvedEnd, setApprovedEnd] = useState('');
+  const [approvedLunch, setApprovedLunch] = useState('');
+  const [editFlags, setEditFlags] = useState<string[]>([]);
 
   useEffect(() => {
     if (!user) { navigate('/login'); return; }
@@ -70,24 +75,109 @@ export default function TimesheetsPage() {
     setAiNotes(notes);
   }
 
-  async function approveRow(row: TimesheetApproval) {
+  function computeApprovedValues(row: TimesheetApproval) {
+    if (row.status === 'approved' && row.approved_start_time && row.approved_end_time) {
+      return {
+        start: row.approved_start_time,
+        end: row.approved_end_time,
+        lunch: String(row.approved_lunch_duration ?? row.roster_lunch_duration ?? 30),
+        flags: row.flags || [],
+      };
+    }
+    const rostered = {
+      start: row.roster_start_time || row.actual_start_time || '08:00',
+      end: row.roster_end_time || row.actual_end_time || '16:00',
+      lunchDuration: row.roster_lunch_duration ?? 30,
+    };
+    const actual = {
+      start: row.actual_start_time || undefined,
+      end: row.actual_end_time || undefined,
+      lunchStart: row.actual_lunch_start || undefined,
+      lunchEnd: row.actual_lunch_end || undefined,
+    };
+    const computed = roundTimesheet(rostered, actual);
+    return {
+      start: computed.approvedStart,
+      end: computed.approvedEnd,
+      lunch: String(computed.approvedLunchDuration),
+      flags: computed.flags,
+    };
+  }
+
+  function openEditModal(row: TimesheetApproval) {
+    const values = computeApprovedValues(row);
+    setEditingRow(row);
+    setApprovedStart(values.start);
+    setApprovedEnd(values.end);
+    setApprovedLunch(values.lunch);
+    setEditFlags(values.flags);
+  }
+
+  function closeEditModal() {
+    setEditingRow(null);
+    setApprovedStart('');
+    setApprovedEnd('');
+    setApprovedLunch('');
+    setEditFlags([]);
+  }
+
+  function recomputeFlagsFromEdit(): string[] {
+    if (!editingRow) return [];
+    const flags: string[] = [];
+    const rosterStart = editingRow.roster_start_time;
+    const rosterEnd = editingRow.roster_end_time;
+    const rosterLunch = editingRow.roster_lunch_duration ?? 30;
+    if (rosterStart && approvedStart && approvedStart !== rosterStart) {
+      flags.push(`Approved start ${approvedStart} differs from rostered ${rosterStart}`);
+    }
+    if (rosterEnd && approvedEnd && approvedEnd !== rosterEnd) {
+      flags.push(`Approved end ${approvedEnd} differs from rostered ${rosterEnd}`);
+    }
+    if (String(rosterLunch) !== approvedLunch) {
+      flags.push(`Approved lunch ${approvedLunch} min differs from rostered ${rosterLunch} min`);
+    }
+    return flags.length ? flags : editFlags;
+  }
+
+  function approvedHoursFromEdit(): number {
+    if (!approvedStart || !approvedEnd || !approvedLunch) return 0;
+    const [sh, sm] = approvedStart.split(':').map(Number);
+    const [eh, em] = approvedEnd.split(':').map(Number);
+    const startM = sh * 60 + sm;
+    const endM = eh * 60 + em;
+    const lunchM = Math.max(0, Number(approvedLunch) || 0);
+    return Math.max(0, (endM - startM - lunchM) / 60);
+  }
+
+  async function saveApproval(row: TimesheetApproval, approve: boolean) {
     setSavingId(row.id || `${row.staff_id}:${row.date}`);
+    setError('');
     try {
+      const body: any = {
+        centreId: row.centre_id,
+        staffId: row.staff_id,
+        date: row.date,
+        approverName: user?.name || user?.email || 'Director',
+      };
+      if (approve) {
+        body.approvedStart = approvedStart;
+        body.approvedEnd = approvedEnd;
+        body.approvedLunchDuration = Number(approvedLunch) || 0;
+        body.approvedHours = approvedHoursFromEdit();
+        body.flags = recomputeFlagsFromEdit();
+        body.status = body.flags.length ? 'flagged' : 'approved';
+      }
       const res = await fetch('/api/timesheet-approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          centreId: row.centre_id,
-          staffId: row.staff_id,
-          date: row.date,
-          approverName: user?.name || user?.email || 'Director',
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to approve');
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to save');
       setRows(prev => prev.map(r => (r.staff_id === row.staff_id && r.date === row.date ? data.row : r)));
+      closeEditModal();
     } catch (e: any) {
-      setError(e.message || 'Failed to approve');
+      setError(e.message || 'Failed to save');
     }
     setSavingId(null);
   }
@@ -95,7 +185,25 @@ export default function TimesheetsPage() {
   async function approveAll() {
     const pending = rows.filter(r => r.status === 'pending' || r.status === 'flagged');
     for (const row of pending) {
-      await approveRow(row);
+      setSavingId(row.id || `${row.staff_id}:${row.date}`);
+      try {
+        const res = await fetch('/api/timesheet-approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            centreId: row.centre_id,
+            staffId: row.staff_id,
+            date: row.date,
+            approverName: user?.name || user?.email || 'Director',
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to approve');
+        setRows(prev => prev.map(r => (r.staff_id === row.staff_id && r.date === row.date ? data.row : r)));
+      } catch (e: any) {
+        setError(e.message || 'Failed to approve');
+      }
+      setSavingId(null);
     }
   }
 
@@ -279,27 +387,122 @@ export default function TimesheetsPage() {
                         <StatusBadge status={row.status} flags={row.flags || []} />
                       </td>
                       <td className="px-4 py-3">
-                        {(row.status === 'pending' || row.status === 'flagged') ? (
-                          <button
-                            onClick={() => approveRow(row)}
-                            disabled={savingId === (row.id || `${row.staff_id}:${row.date}`)}
-                            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-white active:scale-95 transition-transform disabled:opacity-50"
-                            style={{ backgroundColor: '#5a9228' }}
-                          >
-                            <CheckCircle size={14} />
-                            {savingId === (row.id || `${row.staff_id}:${row.date}`) ? 'Saving…' : 'Approve'}
-                          </button>
-                        ) : (
-                          <div className="text-xs" style={{ color: '#596570' }}>
-                            {row.approver_name || 'Approved'}
-                            {row.approved_at && <div>{format(parseISO(row.approved_at), 'd MMM h:mm a')}</div>}
-                          </div>
-                        )}
+                        <button
+                          onClick={() => openEditModal(row)}
+                          disabled={savingId === (row.id || `${row.staff_id}:${row.date}`)}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-white active:scale-95 transition-transform disabled:opacity-50"
+                          style={{ backgroundColor: row.status === 'approved' ? '#596570' : '#5a9228' }}
+                        >
+                          {row.status === 'approved' ? <Edit3 size={14} /> : <CheckCircle size={14} />}
+                          {savingId === (row.id || `${row.staff_id}:${row.date}`) ? 'Saving…' : (row.status === 'approved' ? 'Edit' : 'Review')}
+                        </button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {editingRow && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+              <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: '#E2F1DA', backgroundColor: '#F5FAF3' }}>
+                <h3 className="text-lg font-bold" style={{ color: '#2d5c18' }}>Review & approve</h3>
+                <button onClick={closeEditModal} className="p-1 rounded hover:bg-gray-100" style={{ color: '#596570' }}>
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <div className="font-semibold" style={{ color: '#050505' }}>{editingRow.staff_name}</div>
+                  <div className="text-xs" style={{ color: '#596570' }}>{format(parseISO(editingRow.date), 'EEEE, d MMMM yyyy')}</div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="rounded-xl p-3" style={{ backgroundColor: '#F5FAF3' }}>
+                    <div className="text-xs font-semibold uppercase mb-1" style={{ color: '#596570' }}>Rostered</div>
+                    <div style={{ color: '#050505' }}>{editingRow.roster_start_time || '—'} – {editingRow.roster_end_time || '—'}</div>
+                    {editingRow.roster_lunch_duration ? <div className="text-xs" style={{ color: '#596570' }}>Lunch {editingRow.roster_lunch_duration} min</div> : null}
+                  </div>
+                  <div className="rounded-xl p-3" style={{ backgroundColor: '#F5FAF3' }}>
+                    <div className="text-xs font-semibold uppercase mb-1" style={{ color: '#596570' }}>Actual</div>
+                    <div style={{ color: '#050505' }}>{editingRow.actual_start_time || '—'} – {editingRow.actual_end_time || '—'}</div>
+                    {editingRow.actual_lunch_start && editingRow.actual_lunch_end ? <div className="text-xs" style={{ color: '#596570' }}>Lunch {editingRow.actual_lunch_start}–{editingRow.actual_lunch_end}</div> : null}
+                  </div>
+                </div>
+
+                <div className="border-t pt-4" style={{ borderColor: '#E2F1DA' }}>
+                  <div className="text-sm font-semibold mb-2" style={{ color: '#2d5c18' }}>Approved times</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs mb-1" style={{ color: '#596570' }}>Start</label>
+                      <input
+                        type="time"
+                        value={approvedStart}
+                        onChange={e => setApprovedStart(e.target.value)}
+                        className="w-full px-2 py-1.5 rounded-lg border text-sm"
+                        style={{ borderColor: '#D0E8B8' }}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1" style={{ color: '#596570' }}>End</label>
+                      <input
+                        type="time"
+                        value={approvedEnd}
+                        onChange={e => setApprovedEnd(e.target.value)}
+                        className="w-full px-2 py-1.5 rounded-lg border text-sm"
+                        style={{ borderColor: '#D0E8B8' }}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1" style={{ color: '#596570' }}>Lunch (min)</label>
+                      <input
+                        type="number"
+                        value={approvedLunch}
+                        onChange={e => setApprovedLunch(e.target.value)}
+                        className="w-full px-2 py-1.5 rounded-lg border text-sm"
+                        style={{ borderColor: '#D0E8B8' }}
+                        min={0}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 p-3 rounded-xl" style={{ backgroundColor: '#E2F1DA' }}>
+                    <div className="text-xs" style={{ color: '#596570' }}>Approved hours</div>
+                    <div className="text-2xl font-bold" style={{ color: '#2d5c18' }}>{formatHours(approvedHoursFromEdit())}</div>
+                  </div>
+                </div>
+
+                {editFlags.length > 0 && (
+                  <div className="rounded-xl p-3 text-xs" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>
+                    {editFlags.map((f, i) => <div key={i}>• {f}</div>)}
+                  </div>
+                )}
+
+                {editingRow.leave_type && (
+                  <div className="rounded-xl p-3 text-xs" style={{ backgroundColor: '#f3e8ff', color: '#7c3aed' }}>
+                    Leave shift: approved times match rostered.
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center justify-end gap-2 p-4 border-t" style={{ borderColor: '#E2F1DA' }}>
+                <button
+                  onClick={closeEditModal}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold border"
+                  style={{ borderColor: '#D0E8B8', color: '#596570' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => saveApproval(editingRow, true)}
+                  disabled={savingId === (editingRow.id || `${editingRow.staff_id}:${editingRow.date}`) || !approvedStart || !approvedEnd}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold text-white active:scale-95 transition-transform disabled:opacity-50"
+                  style={{ backgroundColor: '#5a9228' }}
+                >
+                  {savingId === (editingRow.id || `${editingRow.staff_id}:${editingRow.date}`) ? 'Saving…' : (editingRow.status === 'approved' ? 'Save changes' : 'Approve')}
+                </button>
+              </div>
             </div>
           </div>
         )}
