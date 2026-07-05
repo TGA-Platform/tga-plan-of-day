@@ -121,16 +121,10 @@ export default function KioskPage() {
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Could not record');
 
-      const updated = await fetch('/api/kiosk-auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mobile, pin: verifiedPin, centreId: CENTRE_ID }),
-      });
-      const updatedData = await updated.json();
-      if (updated.ok && updatedData.ok) setSession(updatedData);
-
+      // Show confirmation immediately — don't wait for session refresh
       const label = eventLabel(eventType);
-      const time = format(new Date(), 'h:mm a');
+      const eventTime = data.event?.event_time;
+      const time = eventTime ? format(new Date(eventTime), 'h:mm a') : format(new Date(), 'h:mm a');
       const autoApproved = data.timesheet?.status === 'approved';
       setConfirmText(`${label} recorded at ${time}${autoApproved ? '\nTimesheet pre-approved' : ''}`);
       setScreen('confirm');
@@ -141,6 +135,18 @@ export default function KioskPage() {
       confirmTimer.current = window.setTimeout(() => {
         setScreen('shift');
       }, CONFIRM_MS);
+
+      // Refresh session in the background so status/times update when returning
+      fetch('/api/kiosk-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mobile, pin: verifiedPin, centreId: CENTRE_ID }),
+      })
+        .then(r => r.json())
+        .then(updatedData => {
+          if (updatedData.ok) setSession(updatedData);
+        })
+        .catch(() => { /* ignore background refresh errors */ });
     } catch (e: any) {
       setError(e.message || 'Could not record');
       setScreen('error');
