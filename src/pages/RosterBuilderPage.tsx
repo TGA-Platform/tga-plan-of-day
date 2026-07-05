@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import RosterTabs from '../components/RosterTabs';
+import { isStagingOrPreview } from '../lib/env';
 import { CENTRES } from '../config';
 import { getUser, getAllowedCentres } from '../auth';
 import { fetchRosters } from '../deputy';
@@ -1382,7 +1383,7 @@ export default function RosterBuilderPage() {
   return (
     <Layout>
       <div className="space-y-4">
-        <RosterTabs centreId={centreId} />
+        {isStagingOrPreview() && <RosterTabs centreId={centreId} />}
         {/* Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 flex-wrap">

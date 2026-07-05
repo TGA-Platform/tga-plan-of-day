@@ -4,6 +4,7 @@ import { format, parseISO } from 'date-fns';
 import { CheckCircle, AlertCircle, Clock, Download, UserCheck, CalendarRange, Brain, X, Edit3 } from 'lucide-react';
 import Layout from '../components/Layout';
 import RosterTabs from '../components/RosterTabs';
+import { isStagingOrPreview } from '../lib/env';
 import { getUser, getAllowedCentres } from '../auth';
 import { CENTRES } from '../config';
 import { formatHours, roundTimesheet } from '../lib/roundingEngine';
@@ -247,8 +248,7 @@ export default function TimesheetsPage() {
   return (
     <Layout>
       <div className="space-y-4">
-        <RosterTabs centreId={centreId} />
-        {/* Toolbar */}
+        {isStagingOrPreview() && <RosterTabs centreId={centreId} />}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-xl font-bold" style={{ color: '#2d5c18' }}>Timesheets</h1>
