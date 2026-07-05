@@ -170,6 +170,20 @@ export default function KioskPage() {
     }
   }
 
+  function latestEvent(type: KioskEventType) {
+    const events = session?.events || [];
+    return events.filter(e => e.event_type === type).pop();
+  }
+
+  function formatEventTime(iso?: string) {
+    if (!iso) return null;
+    try {
+      return format(new Date(iso), 'h:mm a');
+    } catch {
+      return null;
+    }
+  }
+
   function handleNumpad(key: string) {
     if (screen === 'mobile') {
       if (key === 'clear') { setMobile(''); return; }
@@ -316,6 +330,24 @@ export default function KioskPage() {
               ) : (
                 <div className="rounded-2xl px-8 py-6" style={{ backgroundColor: '#fef3c7' }}>
                   <p className="text-xl font-semibold" style={{ color: '#92400e' }}>No rostered shift today</p>
+                </div>
+              )}
+
+              {(session.events || []).length > 0 && (
+                <div className="mt-6 inline-block rounded-2xl px-8 py-4 text-left" style={{ backgroundColor: '#F5FAF3', border: '2px solid #E2F1DA' }}>
+                  <p className="text-sm font-semibold uppercase tracking-wide mb-2 text-center" style={{ color: '#2d5c18' }}>Actual times</p>
+                  <div className="space-y-1">
+                    {(['start_shift', 'start_lunch', 'end_lunch', 'end_shift'] as KioskEventType[]).map(type => {
+                      const ev = latestEvent(type);
+                      if (!ev) return null;
+                      return (
+                        <p key={type} className="text-lg" style={{ color: '#050505' }}>
+                          <span style={{ color: '#596570' }}>{eventLabel(type)}:</span>{' '}
+                          <span className="font-bold">{formatEventTime(ev.event_time)}</span>
+                        </p>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
