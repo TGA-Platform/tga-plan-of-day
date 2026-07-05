@@ -26,7 +26,7 @@ export default async function handler(req, res) {
   try {
     let url = `${SUPABASE_URL}/rest/v1/staff_members?centre_id=eq.${encodeURIComponent(centreId)}&order=name.asc&select=*`;
     if (includeInactive !== 'true') {
-      url += `&employment_status=not.in.(Inactive,Resigned,Exited)`;
+      url += `&employment_status=not.in.(Inactive,Resigned,Exited)&is_active_group=eq.true`;
     }
     const r = await fetch(url, { headers: HEADERS });
     if (!r.ok) throw new Error('staff lookup failed');
