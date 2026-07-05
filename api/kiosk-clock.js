@@ -53,7 +53,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).end();
 
-  const { mobile, pin, centreId, eventType, confirmed, adjustedStartTime, adjustedEndTime } = req.body || {};
+  const { mobile, pin, centreId, eventType, confirmed, adjustedStartTime, adjustedEndTime, comment } = req.body || {};
   if (!mobile || !pin || !eventType) {
     return res.status(400).json({ error: 'mobile, pin, and eventType required' });
   }
@@ -123,6 +123,7 @@ export default async function handler(req, res) {
         event_date: today,
         roster_shift_id: shift?.id || null,
         source: 'kiosk',
+        comment: comment || null,
       }),
     });
     if (!insertRes.ok) throw new Error('failed to record event');
@@ -130,8 +131,8 @@ export default async function handler(req, res) {
 
     // 6. On end_shift, create/update timesheet approval
     let timesheet = null;
-    if (eventType === 'end_shift' && shift && !shift.leave_type) {
-      timesheet = await upsertTimesheet(staffCentreId, staffId, pinRecord.staff_name, today, shift, events, confirmed, adjustedStartTime, adjustedEndTime);
+    if (eventType === 'end_shift' && (!shift || !shift.leave_type)) {
+      timesheet = await upsertTimesheet(staffCentreId, staffId, pinRecord.staff_name, today, shift, events, confirmed, adjustedStartTime, adjustedEndTime, comment);
     }
 
     return res.status(200).json({ ok: true, event: Array.isArray(inserted) ? inserted[0] : inserted, timesheet });
@@ -141,30 +142,29 @@ export default async function handler(req, res) {
   }
 }
 
-async function upsertTimesheet(centreId, staffId, staffName, date, shift, priorEvents, confirmed, adjustedStartTime, adjustedEndTime) {
+async function upsertTimesheet(centreId, staffId, staffName, date, shift, priorEvents, confirmed, adjustedStartTime, adjustedEndTime, comment) {
   const startEvent = priorEvents.find(e => e.event_type === 'start_shift');
   const lunchStartEvent = priorEvents.find(e => e.event_type === 'start_lunch');
   const lunchEndEvent = priorEvents.find(e => e.event_type === 'end_lunch');
 
   // Actual clock times are always recorded for compliance
-  const actualStart = adjustedStartTime || toHhmm(startEvent?.event_time) || toHhmm(shift.start_time) || null;
-  const actualEnd = adjustedEndTime || toHhmm(priorEvents.filter(e => e.event_type === 'end_shift').pop()?.event_time) || toHhmm(shift.end_time) || null;
-  const actualLunchStart = toHhmm(lunchStartEvent?.event_time) || toHhmm(shift.lunch_start) || null;
+  const actualStart = adjustedStartTime || toHhmm(startEvent?.event_time) || null;
+  const actualEnd = adjustedEndTime || toHhmm(priorEvents.filter(e => e.event_type === 'end_shift').pop()?.event_time) || null;
+  const actualLunchStart = toHhmm(lunchStartEvent?.event_time) || null;
   const actualLunchEnd = toHhmm(lunchEndEvent?.event_time) || null;
 
-  const rosterStartM = hhmmToMinutes(shift.start_time);
-  const rosterEndM = hhmmToMinutes(shift.end_time);
-  const rosterLunchM = shift.lunch_duration || 30;
-
   // Employee confirmed they finished on time → round approved times to rostered
-  const shouldPreApprove = confirmed === true && !adjustedStartTime && !adjustedEndTime;
+  const shouldPreApprove = shift && confirmed === true && !adjustedStartTime && !adjustedEndTime;
 
   const approvedStart = shouldPreApprove ? shift.start_time : actualStart;
   const approvedEnd = shouldPreApprove ? shift.end_time : actualEnd;
-  const approvedLunchM = rosterLunchM;
+  const approvedLunchM = shift?.lunch_duration || 30;
   const approvedHours = Math.max(0, (hhmmToMinutes(approvedEnd) - hhmmToMinutes(approvedStart) - approvedLunchM) / 60);
 
   const flags = [];
+  if (!shift) {
+    flags.push('No rostered shift — review comment');
+  }
   if (!shouldPreApprove) {
     if (adjustedStartTime) flags.push('Employee adjusted start time');
     if (adjustedEndTime) flags.push('Employee adjusted finish time');
@@ -177,11 +177,11 @@ async function upsertTimesheet(centreId, staffId, staffName, date, shift, priorE
     staff_id: staffId,
     staff_name: staffName,
     date,
-    roster_shift_id: shift.id,
-    roster_start_time: shift.start_time,
-    roster_end_time: shift.end_time,
-    roster_lunch_start: shift.lunch_start,
-    roster_lunch_duration: shift.lunch_duration,
+    roster_shift_id: shift?.id || null,
+    roster_start_time: shift?.start_time || null,
+    roster_end_time: shift?.end_time || null,
+    roster_lunch_start: shift?.lunch_start || null,
+    roster_lunch_duration: shift?.lunch_duration || null,
     actual_start_time: actualStart,
     actual_end_time: actualEnd,
     actual_lunch_start: actualLunchStart,
@@ -192,6 +192,7 @@ async function upsertTimesheet(centreId, staffId, staffName, date, shift, priorE
     approved_hours: approvedHours,
     status,
     flags,
+    employee_comment: comment || null,
     approver_name: shouldPreApprove ? 'Kiosk auto-approval' : null,
     approved_at: shouldPreApprove ? new Date().toISOString() : null,
     updated_at: new Date().toISOString(),

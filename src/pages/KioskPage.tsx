@@ -31,6 +31,7 @@ export default function KioskPage() {
   const [adjustedEndTime, setAdjustedEndTime] = useState('');
   const [adjustedStartTime, setAdjustedStartTime] = useState('');
   const [editMode, setEditMode] = useState<'start' | 'end'>('end');
+  const [endShiftComment, setEndShiftComment] = useState('');
   const [news, setNews] = useState<KioskNewsItem[]>([]);
 
   const idleTimer = useRef<number | null>(null);
@@ -55,6 +56,7 @@ export default function KioskPage() {
     setAdjustedEndTime('');
     setAdjustedStartTime('');
     setEditMode('end');
+    setEndShiftComment('');
     if (idleTimer.current) window.clearTimeout(idleTimer.current);
     if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
   }
@@ -100,7 +102,7 @@ export default function KioskPage() {
     setLoading(false);
   }
 
-  async function clockEvent(eventType: KioskEventType, options?: { confirmed?: boolean; adjustedStartTime?: string; adjustedEndTime?: string }) {
+  async function clockEvent(eventType: KioskEventType, options?: { confirmed?: boolean; adjustedStartTime?: string; adjustedEndTime?: string; comment?: string }) {
     if (!session) return;
     setLoading(true);
     setError('');
@@ -147,17 +149,13 @@ export default function KioskPage() {
   }
 
   function handleEndShift() {
-    if (!session?.shift) {
-      clockEvent('end_shift');
-      return;
-    }
-    // Always ask the employee whether they finished on time
+    // Always ask the employee for confirmation/comment before ending shift
     setScreen('endShiftConfirm');
   }
 
   function handleEndShiftConfirm(yes: boolean) {
     if (yes) {
-      clockEvent('end_shift', { confirmed: true });
+      clockEvent('end_shift', { confirmed: true, comment: endShiftComment });
     } else {
       const startEvent = session?.events.find(e => e.event_type === 'start_shift');
       setAdjustedStartTime(startEvent ? startEvent.event_time.slice(11, 16) : session?.shift?.start_time || '');
@@ -175,7 +173,7 @@ export default function KioskPage() {
       setScreen('error');
       return;
     }
-    clockEvent('end_shift', { confirmed: false, adjustedStartTime: start, adjustedEndTime: end });
+    clockEvent('end_shift', { confirmed: false, adjustedStartTime: start, adjustedEndTime: end, comment: endShiftComment });
   }
 
   async function loadNews() {
@@ -490,17 +488,44 @@ export default function KioskPage() {
           </div>
         )}
 
-        {screen === 'endShiftConfirm' && session?.shift && (
-          <div className="bg-white rounded-3xl shadow-xl p-10 border text-center" style={{ borderColor: '#E2F1DA' }}>
-            <h2 className="text-3xl font-bold mb-4" style={{ color: '#2d5c18' }}>Finish shift</h2>
-            <p className="text-xl mb-8" style={{ color: '#596570' }}>
-              Did you complete your rostered shift today?
-            </p>
-            <div className="inline-block rounded-2xl px-8 py-4 mb-8" style={{ backgroundColor: '#E2F1DA' }}>
-              <p className="text-3xl font-bold" style={{ color: '#2d5c18' }}>
-                {session.shift.start_time} – {session.shift.end_time}
-              </p>
+        {screen === 'endShiftConfirm' && session && (
+          <div className="bg-white rounded-3xl shadow-xl p-8 border" style={{ borderColor: '#E2F1DA' }}>
+            <h2 className="text-3xl font-bold mb-4 text-center" style={{ color: '#2d5c18' }}>Finish shift</h2>
+
+            {session.shift ? (
+              <>
+                <p className="text-xl mb-6 text-center" style={{ color: '#596570' }}>
+                  Did you complete your rostered shift today?
+                </p>
+                <div className="text-center mb-6">
+                  <div className="inline-block rounded-2xl px-8 py-4" style={{ backgroundColor: '#E2F1DA' }}>
+                    <p className="text-3xl font-bold" style={{ color: '#2d5c18' }}>
+                      {session.shift.start_time} – {session.shift.end_time}
+                    </p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="rounded-2xl px-6 py-4 mb-6 text-center" style={{ backgroundColor: '#fef3c7' }}>
+                  <p className="text-lg font-semibold" style={{ color: '#92400e' }}>There is no rostered shift for you today.</p>
+                  <p className="text-sm mt-1" style={{ color: '#92400e' }}>Please let us know why you came in.</p>
+                </div>
+              </>
+            )}
+
+            <div className="mb-6">
+              <label className="block text-sm font-medium mb-2" style={{ color: '#596570' }}>Comments</label>
+              <textarea
+                value={endShiftComment}
+                onChange={e => setEndShiftComment(e.target.value)}
+                rows={3}
+                className="w-full px-4 py-3 rounded-xl border text-lg"
+                style={{ borderColor: '#D0E8B8' }}
+                placeholder={session.shift ? 'Add a note about your shift (optional)' : 'Why did you come in today?'}
+              />
             </div>
+
             <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
               <button
                 onClick={() => handleEndShiftConfirm(true)}
@@ -508,7 +533,7 @@ export default function KioskPage() {
                 className="py-5 rounded-2xl text-xl font-bold text-white active:scale-95 transition-transform disabled:opacity-50"
                 style={{ backgroundColor: '#16a34a' }}
               >
-                Yes
+                {session.shift ? 'Yes' : 'Finish'}
               </button>
               <button
                 onClick={() => handleEndShiftConfirm(false)}
@@ -516,7 +541,7 @@ export default function KioskPage() {
                 className="py-5 rounded-2xl text-xl font-bold text-white active:scale-95 transition-transform disabled:opacity-50"
                 style={{ backgroundColor: '#dc2626' }}
               >
-                No, overtime
+                {session.shift ? 'No, overtime' : 'Adjust times'}
               </button>
             </div>
           </div>

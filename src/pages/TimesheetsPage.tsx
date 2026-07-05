@@ -485,6 +485,13 @@ export default function TimesheetsPage() {
                     Leave shift: approved times match rostered.
                   </div>
                 )}
+
+                {editingRow.employee_comment && (
+                  <div className="rounded-xl p-3 text-sm" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
+                    <div className="font-semibold text-xs mb-1">Employee comment</div>
+                    {editingRow.employee_comment}
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-end gap-2 p-4 border-t" style={{ borderColor: '#E2F1DA' }}>
                 <button
