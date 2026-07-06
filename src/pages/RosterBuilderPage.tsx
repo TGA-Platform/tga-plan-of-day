@@ -288,10 +288,22 @@ export default function RosterBuilderPage() {
     setLoading(false);
   }
 
-  async function handleSaveShift(shift: Partial<RosterShift>) {
+  async function handleSaveShift(shift: Partial<RosterShift>, dates?: string[]) {
     if (!weekRecord) return;
     setSaving(true);
 
+    const targetDates = dates?.length ? dates : [shift.date!];
+    for (const date of targetDates) {
+      await saveShiftForDate({ ...shift, date });
+    }
+
+    const loaded = await loadShifts(weekRecord.id);
+    setShifts(loaded);
+    setSaving(false);
+    setModalOpen(false);
+  }
+
+  async function saveShiftForDate(shift: Partial<RosterShift>) {
     const startM = hhmmToMinutes(shift.start_time || '08:00');
     const endM = hhmmToMinutes(shift.end_time || '16:00');
     const leaveFromM = shift.splitLeaveFrom ? hhmmToMinutes(shift.splitLeaveFrom) : null;
@@ -345,11 +357,6 @@ export default function RosterBuilderPage() {
     } else {
       await saveShiftSingle(shift);
     }
-
-    const loaded = await loadShifts(weekRecord.id);
-    setShifts(loaded);
-    setSaving(false);
-    setModalOpen(false);
   }
 
   async function saveShiftSingle(shift: Partial<RosterShift>) {
@@ -639,9 +646,18 @@ export default function RosterBuilderPage() {
     const data = e.dataTransfer.getData('application/json');
     if (!data) return;
     const parsed = JSON.parse(data);
-    const sid = staffId || parsed.staffId;
-    const sname = parsed.staffName || staffList.find(s => s.id === sid)?.name || 'Unknown';
-    openAddModal(date, { id: sid, name: sname } as StaffSource);
+    const shiftId = parsed.shiftId;
+    if (shiftId) {
+      const shift = shifts.find(s => s.id === shiftId);
+      if (!shift) return;
+      const sid = staffId || shift.staff_id;
+      const sname = staffList.find(s => s.id === sid)?.name || shift.staff_name;
+      handleSaveShift({ ...shift, staff_id: sid, staff_name: sname, date });
+    } else {
+      const sid = staffId || parsed.staffId;
+      const sname = parsed.staffName || staffList.find(s => s.id === sid)?.name || 'Unknown';
+      openAddModal(date, { id: sid, name: sname } as StaffSource);
+    }
   }
 
   function handleDropOnRoomLane(e: React.DragEvent, roomId: string, roomName: string) {
@@ -973,7 +989,17 @@ export default function RosterBuilderPage() {
 
   function ShiftModal() {
     const [draft, setDraft] = useState<Partial<RosterShift>>(modalShift || {});
+    const [applyDates, setApplyDates] = useState<Record<string, boolean>>({});
     const staffOptions = staffForDisplay.map(s => ({ id: s.id, name: s.name }));
+
+    useEffect(() => {
+      const initial: Record<string, boolean> = {};
+      for (const d of weekDays) {
+        const ds = format(d, 'yyyy-MM-dd');
+        initial[ds] = ds === draft.date;
+      }
+      setApplyDates(initial);
+    }, [draft.date]);
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -1011,6 +1037,33 @@ export default function RosterBuilderPage() {
                 style={{ borderColor: '#D0E8B8' }}
               />
             </div>
+
+            {!draft.id && (
+              <div>
+                <label className="text-xs font-semibold" style={{ color: '#596570' }}>Apply to days</label>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {weekDays.map(d => {
+                    const ds = format(d, 'yyyy-MM-dd');
+                    const label = format(d, 'EEE');
+                    const checked = applyDates[ds] || false;
+                    return (
+                      <label
+                        key={ds}
+                        className="flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-lg border cursor-pointer"
+                        style={{ borderColor: '#D0E8B8', backgroundColor: checked ? '#E2F1DA' : 'white' }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={e => setApplyDates(prev => ({ ...prev, [ds]: e.target.checked }))}
+                        />
+                        {label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -1175,8 +1228,20 @@ export default function RosterBuilderPage() {
                 Cancel
               </button>
               <button
-                onClick={() => handleSaveShift(draft)}
-                disabled={saving || !draft.staff_id || !draft.date || !draft.start_time || !draft.end_time}
+                onClick={() => {
+                  const selectedDates = draft.id
+                    ? [draft.date!]
+                    : Object.entries(applyDates).filter(([_, checked]) => checked).map(([date]) => date);
+                  handleSaveShift(draft, selectedDates);
+                }}
+                disabled={
+                  saving ||
+                  !draft.staff_id ||
+                  !draft.date ||
+                  !draft.start_time ||
+                  !draft.end_time ||
+                  (!draft.id && !Object.values(applyDates).some(Boolean))
+                }
                 className="px-4 py-1.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50 flex items-center gap-1.5"
                 style={{ backgroundColor: '#2d5c18' }}
               >
