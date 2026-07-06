@@ -29,16 +29,16 @@ const DEFAULT_RECIPIENTS = (process.env.FORECAST_EMAIL_TO || SMTP_USER)
 
 const CLUSTERS = {
   'South West':   ['mount-annan','spring-farm','denham-court','ed-park-1','ed-park-2','wilton'],
-  'South Coast':  ['wollongong','dapto-1','dapto-2','north-wollongong','shell-cove'],
-  'South Sydney': ['bexley','oatley','belfield','bankstown'],
-  'North Coast':  ['glendale','edgeworth','charlestown'],
+  'South Coast':  ['wollongong','dapto-1','dapto-2','north-wollongong','shell-cove','south-nowra','bomaderry'],
+  'South Sydney': ['bexley','oatley','belfield','bankstown','moorebank'],
+  'North Coast':  ['glendale','edgeworth','charlestown','aberglasslyn','tuggerah'],
 };
 
 const AM_EMAILS = {
   'South West':   process.env.FORECAST_EMAIL_AM_SOUTH_WEST   || 'lilian@tga.edu.au',
   'South Coast':  process.env.FORECAST_EMAIL_AM_SOUTH_COAST  || 'rebeccasapienza@tga.edu.au',
   'South Sydney': process.env.FORECAST_EMAIL_AM_SOUTH_SYDNEY || 'olivia@tga.edu.au',
-  'North Coast':  process.env.FORECAST_EMAIL_AM_NORTH_COAST  || 'carlye@tga.edu.au',
+  'North Coast':  process.env.FORECAST_EMAIL_AM_NORTH_COAST  || 'kandas@tga.edu.au',
 };
 
 function sydneyNow() {
