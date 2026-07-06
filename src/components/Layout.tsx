@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { logout, getUser } from '../auth';
 import { getAllowedCentres } from '../auth';
 import { canAccess } from '../lib/rolePermissions';
-import { isProduction, isStagingOrPreview } from '../lib/env';
+import { isStagingOrPreview } from '../lib/env';
 
 function usePendingTimesheetCount(user: ReturnType<typeof getUser>) {
   const [count, setCount] = useState(0);
@@ -62,29 +62,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <span style={{ color: '#D0E8B8' }}>|</span>
                 </>
               )}
-              {canAccess(user.role, 'roster') && isProduction() && (
+              {canAccess(user.role, 'roster') && isStagingOrPreview() && (
                 <>
                   <Link to="/roster" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Roster</Link>
                   <span style={{ color: '#D0E8B8' }}>|</span>
                 </>
               )}
-              {canAccess(user.role, 'timesheets') && isProduction() && (
+              {canAccess(user.role, 'timesheets') && isStagingOrPreview() && (
                 <>
                   <Link to="/timesheets" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity flex items-center gap-1">
                     Timesheets
-                    {pendingCount > 0 && (
-                      <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-bold text-white" style={{ backgroundColor: '#dc2626', minWidth: '18px' }}>
-                        {pendingCount > 99 ? '99+' : pendingCount}
-                      </span>
-                    )}
-                  </Link>
-                  <span style={{ color: '#D0E8B8' }}>|</span>
-                </>
-              )}
-              {canAccess(user.role, 'roster') && isStagingOrPreview() && (
-                <>
-                  <Link to="/roster" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity flex items-center gap-1">
-                    Roster
                     {pendingCount > 0 && (
                       <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-bold text-white" style={{ backgroundColor: '#dc2626', minWidth: '18px' }}>
                         {pendingCount > 99 ? '99+' : pendingCount}
