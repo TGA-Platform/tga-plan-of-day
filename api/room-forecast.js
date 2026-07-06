@@ -64,10 +64,10 @@ function calcRequiredStaff(children) {
   return totalStaff;
 }
 
-async function loadPlanOfDayRequired(campus, date) {
+async function loadPlanOfDayRequired(centreId, date) {
   try {
-    // ratio_check_data uses centre name (campus) and date
-    const rows = await supaFetch(`/rest/v1/ratio_check_data?centre=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=session,data`);
+    // ratio_check_data uses centre_id (short id) and date
+    const rows = await supaFetch(`/rest/v1/ratio_check_data?centre_id=eq.${encodeURIComponent(centreId)}&date=eq.${date}&select=session,data`);
     if (!Array.isArray(rows) || rows.length === 0) return {};
 
     const requiredByRoom = {};
@@ -93,7 +93,7 @@ async function loadPlanOfDayRequired(campus, date) {
   }
 }
 
-async function forecastForCampus(campus, date, lastWeekStr, todayStr, allLastWeekRows, allOccRows, allTodayRows) {
+async function forecastForCampus(centreId, campus, date, lastWeekStr, todayStr, allLastWeekRows, allOccRows, allTodayRows) {
   const attRows = allLastWeekRows.filter(r => r.campus === campus);
   const lastWeekByRoom = {};
   for (const row of attRows) {
@@ -113,7 +113,7 @@ async function forecastForCampus(campus, date, lastWeekStr, todayStr, allLastWee
     }
   }
 
-  const planRequiredByRoom = await loadPlanOfDayRequired(campus, date);
+  const planRequiredByRoom = await loadPlanOfDayRequired(centreId, date);
 
   const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual), ...Object.keys(planRequiredByRoom)]);
   const roomsOut = {};
@@ -145,7 +145,7 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { campus, date } = req.query;
+  const { campus, date, centreId } = req.query;
   if (!campus || !date) return res.status(400).json({ error: 'campus and date required' });
 
   const target = new Date(date + 'T12:00:00Z');
@@ -173,7 +173,7 @@ export default async function handler(req, res) {
 
       const out = {};
       for (const c of campuses) {
-        out[c] = await forecastForCampus(c, date, lastWeekStr, todayStr, allLastWeekRows, allOccRows, allTodayRows);
+        out[c] = await forecastForCampus(null, c, date, lastWeekStr, todayStr, allLastWeekRows, allOccRows, allTodayRows);
       }
       return res.status(200).json(out);
     }
@@ -206,7 +206,7 @@ export default async function handler(req, res) {
       }
     }
 
-    const planRequiredByRoom = await loadPlanOfDayRequired(campus, date);
+    const planRequiredByRoom = await loadPlanOfDayRequired(centreId, date);
 
     const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual), ...Object.keys(planRequiredByRoom)]);
     const roomsOut = {};

@@ -293,17 +293,17 @@ export default function RosterBuilderPage() {
   async function loadRoomForecasts() {
     const dates = weekDays.map(d => format(d, 'yyyy-MM-dd'));
     const campus = centre.ownaName || centre.name;
-    const results: Record<string, Record<string, { expected: number | null; booked: number | null; actual: number | null; weeksUsed: number }>> = {};
+    const results: Record<string, Record<string, { expected: number | null; booked: number | null; actual: number | null; weeksUsed: number; required?: number | null }>> = {};
     await Promise.all(dates.map(async date => {
       try {
-        const res = await fetch(`/api/room-forecast?campus=${encodeURIComponent(campus)}&date=${date}`);
+        const res = await fetch(`/api/room-forecast?campus=${encodeURIComponent(campus)}&date=${date}&centreId=${encodeURIComponent(centreId)}`);
         const data = await res.json();
         if (res.ok && data.rooms) {
           results[date] = {};
           for (const [roomName, info] of Object.entries(data.rooms)) {
             const room = centre.rooms.find(r => r.ownaRoomName === roomName);
             if (room) {
-              results[date][room.id] = info as { expected: number | null; booked: number | null; actual: number | null; weeksUsed: number };
+              results[date][room.id] = info as { expected: number | null; booked: number | null; actual: number | null; weeksUsed: number; required?: number | null };
             }
           }
         }
