@@ -38,6 +38,8 @@ export default function TimesheetsPage() {
   const [approvedEnd, setApprovedEnd] = useState('');
   const [approvedLunch, setApprovedLunch] = useState('');
   const [editFlags, setEditFlags] = useState<string[]>([]);
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
 
   useEffect(() => {
     if (!user) { navigate('/login'); return; }
@@ -191,30 +193,7 @@ export default function TimesheetsPage() {
     setSavingId(null);
   }
 
-  async function approveAll() {
-    const pending = rows.filter(r => r.status === 'pending' || r.status === 'flagged');
-    for (const row of pending) {
-      setSavingId(row.id || `${row.staff_id}:${row.date}`);
-      try {
-        const res = await fetch('/api/timesheet-approve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            centreId: row.centre_id,
-            staffId: row.staff_id,
-            date: row.date,
-            approverName: user?.name || user?.email || 'Director',
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to approve');
-        setRows(prev => prev.map(r => (r.staff_id === row.staff_id && r.date === row.date ? data.row : r)));
-      } catch (e: any) {
-        setError(e.message || 'Failed to approve');
-      }
-      setSavingId(null);
-    }
-  }
+
 
   function exportCSV() {
     const centreName = allowedCentres.find(c => c.id === centreId)?.name || centreId;
@@ -252,6 +231,168 @@ export default function TimesheetsPage() {
 
   const pendingCount = useMemo(() => rows.filter(r => r.status === 'pending' || r.status === 'flagged').length, [rows]);
 
+  function rowKey(row: TimesheetApproval): string {
+    return row.id || `${row.staff_id}:${row.date}`;
+  }
+
+  function toggleRow(row: TimesheetApproval) {
+    const key = rowKey(row);
+    setSelectedRows(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    const selectable = rows.filter(r => r.status === 'pending' || r.status === 'flagged');
+    const allSelected = selectable.length > 0 && selectable.every(r => selectedRows.has(rowKey(r)));
+    setSelectedRows(prev => {
+      const next = new Set(prev);
+      if (allSelected) {
+        selectable.forEach(r => next.delete(rowKey(r)));
+      } else {
+        selectable.forEach(r => next.add(rowKey(r)));
+      }
+      return next;
+    });
+  }
+
+  async function approveRowWithComputed(row: TimesheetApproval) {
+    setSavingId(row.id || `${row.staff_id}:${row.date}`);
+    setError('');
+    try {
+      const values = computeApprovedValues(row);
+      const res = await fetch('/api/timesheet-approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          centreId: row.centre_id,
+          staffId: row.staff_id,
+          date: row.date,
+          approverName: user?.name || user?.email || 'Director',
+          approvedStart: values.start,
+          approvedEnd: values.end,
+          approvedLunchDuration: Number(values.lunch) || 0,
+          approvedHours: values.hours,
+          flags: values.flags,
+          status: values.flags.length ? 'flagged' : 'approved',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to save');
+      setRows(prev => prev.map(r => (r.staff_id === row.staff_id && r.date === row.date ? data.row : r)));
+    } catch (e: any) {
+      setError(e.message || 'Failed to save');
+    }
+    setSavingId(null);
+  }
+
+  async function approveSelected() {
+    const toApprove = rows.filter(r => selectedRows.has(rowKey(r)) && (r.status === 'pending' || r.status === 'flagged'));
+    for (const row of toApprove) {
+      await approveRowWithComputed(row);
+    }
+    setSelectedRows(new Set());
+    setBulkModalOpen(false);
+  }
+
+  function BulkApproveModal() {
+    const toApprove = rows.filter(r => selectedRows.has(rowKey(r)) && (r.status === 'pending' || r.status === 'flagged'));
+    const totalHours = toApprove.reduce((sum, r) => sum + computeApprovedValues(r).hours, 0);
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden" style={{ borderColor: '#E2F1DA', maxHeight: '90vh' }}>
+          <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: '#E2F1DA', backgroundColor: '#F5FAF3' }}>
+            <h3 className="text-lg font-bold" style={{ color: '#2d5c18' }}>Approve selected timesheets</h3>
+            <button onClick={() => setBulkModalOpen(false)} className="p-1 rounded hover:bg-gray-100" style={{ color: '#596570' }}>
+              <X size={20} />
+            </button>
+          </div>
+
+          <div className="p-4 overflow-auto" style={{ maxHeight: '60vh' }}>
+            <div className="text-sm mb-3" style={{ color: '#596570' }}>
+              {toApprove.length} shift{toApprove.length !== 1 ? 's' : ''} selected • {formatHours(totalHours)} hours total
+            </div>
+
+            {toApprove.length === 0 ? (
+              <div className="text-sm" style={{ color: '#596570' }}>No timesheets selected.</div>
+            ) : (
+              <div className="space-y-2">
+                {toApprove.map(row => {
+                  const values = computeApprovedValues(row);
+                  return (
+                    <div key={rowKey(row)} className="rounded-xl border p-3" style={{ borderColor: '#E2F1DA' }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <div>
+                          <div className="font-medium text-sm" style={{ color: '#050505' }}>{row.staff_name}</div>
+                          <div className="text-xs" style={{ color: '#596570' }}>{format(parseISO(row.date), 'EEE d MMM')}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-semibold" style={{ color: '#2d5c18' }}>{formatHours(values.hours)} hrs</div>
+                          {row.leave_type && <div className="text-[10px]" style={{ color: '#7c3aed' }}>{row.leave_type} leave</div>}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 text-xs mt-2">
+                        <div className="rounded-lg p-2" style={{ backgroundColor: '#F5FAF3' }}>
+                          <div className="font-semibold" style={{ color: '#596570' }}>Rostered</div>
+                          <div style={{ color: '#050505' }}>{row.roster_start_time || '—'} – {row.roster_end_time || '—'}</div>
+                          {row.roster_lunch_duration ? <div style={{ color: '#596570' }}>{row.roster_lunch_duration} min lunch</div> : null}
+                        </div>
+                        <div className="rounded-lg p-2" style={{ backgroundColor: '#F5FAF3' }}>
+                          <div className="font-semibold" style={{ color: '#596570' }}>Actual</div>
+                          <div style={{ color: '#050505' }}>{row.actual_start_time || '—'} – {row.actual_end_time || '—'}</div>
+                          {row.actual_lunch_start && row.actual_lunch_end ? <div style={{ color: '#596570' }}>{row.actual_lunch_start}–{row.actual_lunch_end}</div> : null}
+                        </div>
+                        <div className="rounded-lg p-2" style={{ backgroundColor: '#E2F1DA' }}>
+                          <div className="font-semibold" style={{ color: '#2d5c18' }}>Approved</div>
+                          <div style={{ color: '#050505' }}>{values.start} – {values.end}</div>
+                          <div style={{ color: '#596570' }}>{values.lunch} min lunch</div>
+                        </div>
+                      </div>
+
+                      {values.flags.length > 0 && (
+                        <div className="mt-2 text-xs rounded-lg p-2" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>
+                          {values.flags.map((f, i) => <div key={i}>• {f}</div>)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between p-4 border-t" style={{ borderColor: '#E2F1DA' }}>
+            <div className="text-sm" style={{ color: '#596570' }}>
+              {toApprove.filter(r => computeApprovedValues(r).flags.length > 0).length} will be flagged
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setBulkModalOpen(false)}
+                className="px-4 py-2 rounded-lg text-sm font-semibold border"
+                style={{ borderColor: '#D0E8B8', color: '#596570' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={approveSelected}
+                disabled={toApprove.length === 0}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-white active:scale-95 transition-transform disabled:opacity-50"
+                style={{ backgroundColor: '#5a9228' }}
+              >
+                Approve {toApprove.length} selected
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Layout>
       <div className="space-y-4">
@@ -287,14 +428,14 @@ export default function TimesheetsPage() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            {pendingCount > 0 && (
+            {selectedRows.size > 0 && (
               <button
-                onClick={approveAll}
+                onClick={() => setBulkModalOpen(true)}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-white active:scale-95 transition-transform"
                 style={{ backgroundColor: '#5a9228' }}
               >
                 <UserCheck size={18} />
-                Approve all ({pendingCount})
+                Approve selected ({selectedRows.size})
               </button>
             )}
             <button
@@ -354,6 +495,14 @@ export default function TimesheetsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ backgroundColor: '#F5FAF3' }}>
+                    <th className="px-4 py-3" style={{ color: '#596570', width: '40px' }}>
+                      <input
+                        type="checkbox"
+                        checked={pendingCount > 0 && rows.filter(r => r.status === 'pending' || r.status === 'flagged').every(r => selectedRows.has(rowKey(r)))}
+                        onChange={toggleSelectAll}
+                        title="Select all pending/flagged"
+                      />
+                    </th>
                     <th className="text-left px-4 py-3 font-semibold" style={{ color: '#596570' }}>Date / Staff</th>
                     <th className="text-left px-4 py-3 font-semibold" style={{ color: '#596570' }}>Rostered</th>
                     <th className="text-left px-4 py-3 font-semibold" style={{ color: '#596570' }}>Actual</th>
@@ -364,8 +513,19 @@ export default function TimesheetsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(row => (
-                    <tr key={row.id || `${row.staff_id}:${row.date}`} className="border-t" style={{ borderColor: '#E2F1DA' }}>
+                  {rows.map(row => {
+                    const key = rowKey(row);
+                    const selectable = row.status === 'pending' || row.status === 'flagged';
+                    return (
+                    <tr key={key} className="border-t" style={{ borderColor: '#E2F1DA' }}>
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedRows.has(key)}
+                          disabled={!selectable}
+                          onChange={() => toggleRow(row)}
+                        />
+                      </td>
                       <td className="px-4 py-3">
                         <div className="font-medium" style={{ color: '#050505' }}>{row.staff_name}</div>
                         <div className="text-xs" style={{ color: '#596570' }}>{format(parseISO(row.date), 'EEE d MMM')}</div>
@@ -407,7 +567,7 @@ export default function TimesheetsPage() {
                         </button>
                       </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>
@@ -522,6 +682,8 @@ export default function TimesheetsPage() {
             </div>
           </div>
         )}
+
+        {bulkModalOpen && <BulkApproveModal />}
       </div>
     </Layout>
   );

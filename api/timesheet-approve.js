@@ -172,7 +172,7 @@ export default async function handler(req, res) {
       updated_at: new Date().toISOString(),
     };
 
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/timesheet_approvals`, {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/timesheet_approvals?on_conflict=centre_id,staff_id,date`, {
       method: 'POST',
       headers: { ...HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
       body: JSON.stringify(upsertBody),
