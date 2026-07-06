@@ -106,12 +106,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <span style={{ color: '#D0E8B8' }}>|</span>
                 </>
               )}
-              {canAccess(user.role, 'kiosk_news') && (
-                <>
-                  <Link to="/kiosk-news" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Kiosk News</Link>
-                  <span style={{ color: '#D0E8B8' }}>|</span>
-                </>
-              )}
               {canAccess(user.role, 'roster') && isStagingOrPreview() && (
                 <>
                   <Link to="/staffing" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Staffing</Link>
