@@ -256,7 +256,7 @@ export default function RosterBuilderPage() {
   const [pinLoading, setPinLoading] = useState(false);
   const [pinSearch, setPinSearch] = useState('');
 
-  const [roomForecasts, setRoomForecasts] = useState<Record<string, Record<string, { expected: number | null; booked: number | null; actual: number | null; weeksUsed: number }>>>({});
+  const [roomForecasts, setRoomForecasts] = useState<Record<string, Record<string, { expected: number | null; booked: number | null; actual: number | null; weeksUsed: number; required?: number | null }>>>({});
 
   const centre = useMemo(() => CENTRES.find(c => c.id === centreId) || CENTRES[0], [centreId]);
   const weekStart = weekStartStr(weekDate);
@@ -879,7 +879,8 @@ export default function RosterBuilderPage() {
                         const forecast = roomForecasts[date]?.[area.id];
                         if (!forecast || !('ratio' in area)) return null;
                         const expected = forecast.expected ?? forecast.booked ?? 0;
-                        const required = expected > 0 && area.ratio ? Math.ceil(expected / area.ratio) : 0;
+                        const fallbackRequired = expected > 0 && area.ratio ? Math.ceil(expected / area.ratio) : 0;
+                        const required = forecast.required ?? fallbackRequired;
                         const actual = dayShifts.length;
                         const under = required > 0 && actual < required;
                         return (

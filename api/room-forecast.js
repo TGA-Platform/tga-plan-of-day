@@ -37,6 +37,62 @@ async function supaFetch(path) {
   return r.json();
 }
 
+// NSW cascade ratios by age in months
+function calcRequiredStaff(children) {
+  const brackets = [
+    { minMonths: 0, maxMonths: 24, ratio: 4 },
+    { minMonths: 24, maxMonths: 36, ratio: 5 },
+    { minMonths: 36, maxMonths: 999, ratio: 10 },
+  ];
+  const groups = brackets.map(b => ({
+    ...b,
+    count: children.filter(c => c.ageMonths >= b.minMonths && c.ageMonths < b.maxMonths && c.ageMonths >= 0).length,
+  }));
+
+  let totalStaff = 0;
+  let carryover = 0;
+  for (const group of groups) {
+    if (group.count === 0) continue;
+    const coveredByCarryover = Math.min(group.count, carryover);
+    const stillNeeded = group.count - coveredByCarryover;
+    const newStaff = Math.ceil(stillNeeded / group.ratio);
+    totalStaff += newStaff;
+    const unusedFromNew = newStaff * group.ratio - stillNeeded;
+    const unusedFromCarryover = carryover - coveredByCarryover;
+    carryover = unusedFromNew + unusedFromCarryover;
+  }
+  return totalStaff;
+}
+
+async function loadPlanOfDayRequired(campus, date) {
+  try {
+    // ratio_check_data uses centre name (campus) and date
+    const rows = await supaFetch(`/rest/v1/ratio_check_data?centre=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=session,data`);
+    if (!Array.isArray(rows) || rows.length === 0) return {};
+
+    const requiredByRoom = {};
+    for (const row of rows) {
+      const data = row.data || {};
+      const children = Array.isArray(data.children) ? data.children : [];
+      // Group children by room name
+      const byRoom = {};
+      for (const child of children) {
+        if (!child.room) continue;
+        byRoom[child.room] = byRoom[child.room] || [];
+        byRoom[child.room].push(child);
+      }
+      for (const [roomName, roomChildren] of Object.entries(byRoom)) {
+        const req = calcRequiredStaff(roomChildren);
+        requiredByRoom[roomName] = Math.max(requiredByRoom[roomName] || 0, req);
+      }
+    }
+    return requiredByRoom;
+  } catch (e) {
+    console.error('[room-forecast] plan-of-day load failed:', e.message);
+    return {};
+  }
+}
+
 async function forecastForCampus(campus, date, lastWeekStr, todayStr, allLastWeekRows, allOccRows, allTodayRows) {
   const attRows = allLastWeekRows.filter(r => r.campus === campus);
   const lastWeekByRoom = {};
@@ -57,7 +113,9 @@ async function forecastForCampus(campus, date, lastWeekStr, todayStr, allLastWee
     }
   }
 
-  const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual)]);
+  const planRequiredByRoom = await loadPlanOfDayRequired(campus, date);
+
+  const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual), ...Object.keys(planRequiredByRoom)]);
   const roomsOut = {};
   for (const room of allRoomNames) {
     const bookedCount = roomBooked[room] ?? null;
@@ -67,6 +125,7 @@ async function forecastForCampus(campus, date, lastWeekStr, todayStr, allLastWee
       weeksUsed: expectedCount !== null ? 1 : 0,
       booked: bookedCount,
       actual: roomActual[room] ?? null,
+      required: planRequiredByRoom[room] ?? null,
     };
   }
 
@@ -147,7 +206,9 @@ export default async function handler(req, res) {
       }
     }
 
-    const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual)]);
+    const planRequiredByRoom = await loadPlanOfDayRequired(campus, date);
+
+    const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual), ...Object.keys(planRequiredByRoom)]);
     const roomsOut = {};
     for (const room of allRoomNames) {
       const bookedCount = roomBooked[room] ?? null;
@@ -157,6 +218,7 @@ export default async function handler(req, res) {
         weeksUsed: expectedCount !== null ? 1 : 0,
         booked: bookedCount,
         actual: roomActual[room] ?? null,
+        required: planRequiredByRoom[room] ?? null,
       };
     }
 
