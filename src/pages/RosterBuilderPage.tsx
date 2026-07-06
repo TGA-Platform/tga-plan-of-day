@@ -884,7 +884,7 @@ export default function RosterBuilderPage() {
                         const under = required > 0 && actual < required;
                         return (
                           <div className={`text-[10px] mt-1 px-1 py-0.5 rounded ${under ? 'bg-red-100 text-red-700 font-medium' : 'text-gray-500'}`}>
-                            {expected} exp • {required} need • {actual} have
+                            {expected} exp • {required} req • {actual} rostered
                           </div>
                         );
                       })()}
