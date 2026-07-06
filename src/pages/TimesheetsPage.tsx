@@ -125,16 +125,21 @@ export default function TimesheetsPage() {
     setEditFlags([]);
   }
 
+  function normalizeTimeString(t?: string | null): string {
+    if (!t) return '';
+    return t.slice(0, 5);
+  }
+
   function recomputeFlagsFromEdit(): string[] {
     if (!editingRow) return [];
     const flags: string[] = [];
-    const rosterStart = editingRow.roster_start_time;
-    const rosterEnd = editingRow.roster_end_time;
+    const rosterStart = normalizeTimeString(editingRow.roster_start_time);
+    const rosterEnd = normalizeTimeString(editingRow.roster_end_time);
     const rosterLunch = editingRow.roster_lunch_duration ?? 30;
-    if (rosterStart && approvedStart && approvedStart !== rosterStart) {
+    if (rosterStart && approvedStart && normalizeTimeString(approvedStart) !== rosterStart) {
       flags.push(`Approved start ${approvedStart} differs from rostered ${rosterStart}`);
     }
-    if (rosterEnd && approvedEnd && approvedEnd !== rosterEnd) {
+    if (rosterEnd && approvedEnd && normalizeTimeString(approvedEnd) !== rosterEnd) {
       flags.push(`Approved end ${approvedEnd} differs from rostered ${rosterEnd}`);
     }
     if (String(rosterLunch) !== approvedLunch) {
