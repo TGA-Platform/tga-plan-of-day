@@ -6,7 +6,6 @@ import {
 import {
   ChevronLeft, ChevronRight, Plus, Printer,
   Trash2, Save, Upload, CheckCircle, AlertCircle, X,
-  Smartphone,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import RosterTabs from '../components/RosterTabs';
@@ -573,19 +572,6 @@ export default function RosterBuilderPage() {
       originalRoomName: shift.room_name,
     });
     setModalOpen(true);
-  }
-
-  async function openPinsModal() {
-    setPinsModalOpen(true);
-    setPinLoading(true);
-    try {
-      const res = await fetch(`/api/kiosk-pins?centreId=${encodeURIComponent(centreId)}`);
-      const data = await res.json();
-      if (res.ok && data.ok) setPins(data.pins || []);
-    } catch {
-      setError('Failed to load kiosk PINs');
-    }
-    setPinLoading(false);
   }
 
   async function savePin(staffId: string, staffName: string, mobile: string, pin: string, role?: string) {
@@ -1577,13 +1563,6 @@ export default function RosterBuilderPage() {
               style={{ borderColor: '#D0E8B8', color: '#2d5c18', backgroundColor: 'white' }}
             >
               <Printer size={16} /> Print
-            </button>
-            <button
-              onClick={() => openPinsModal()}
-              className="px-3 py-1.5 rounded-lg text-sm font-semibold border flex items-center gap-1.5"
-              style={{ borderColor: '#D0E8B8', color: '#2d5c18', backgroundColor: 'white' }}
-            >
-              <Smartphone size={16} /> Kiosk PINs
             </button>
             <button
               onClick={() => setPublishModalOpen(true)}
