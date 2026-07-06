@@ -164,12 +164,13 @@ function buildRow(centreId, date, staffId, shift, events, actual, existing) {
   }
 
   if (existing) {
+    const isLeaveExisting = !!existing.leave_type;
     return {
       ...existing,
-      actual_start_time: actual.start || existing.actual_start_time,
-      actual_end_time: actual.end || existing.actual_end_time,
-      actual_lunch_start: actual.lunchStart || existing.actual_lunch_start,
-      actual_lunch_end: actual.lunchEnd || existing.actual_lunch_end,
+      actual_start_time: actual.start || existing.actual_start_time || (isLeaveExisting ? existing.roster_start_time : null),
+      actual_end_time: actual.end || existing.actual_end_time || (isLeaveExisting ? existing.roster_end_time : null),
+      actual_lunch_start: actual.lunchStart || existing.actual_lunch_start || (isLeaveExisting ? existing.roster_lunch_start : null),
+      actual_lunch_end: actual.lunchEnd || existing.actual_lunch_end || (isLeaveExisting && existing.roster_lunch_start && existing.roster_lunch_duration ? minutesToHhmm(hhmmToMinutes(existing.roster_lunch_start) + existing.roster_lunch_duration) : null),
       flags: existing.flags?.length ? existing.flags : flags,
     };
   }

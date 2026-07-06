@@ -101,7 +101,7 @@ export default async function handler(req, res) {
     if (!eventsRes.ok) throw new Error('events lookup failed');
     const events = await eventsRes.json();
 
-    // 2. Compute actuals
+    // 2. Compute actuals (for leave shifts, fall back to rostered times so actuals are preserved)
     const first = (type) => events.find(e => e.event_type === type);
     const lastEnd = [...events].reverse().find(e => e.event_type === 'end_shift');
     const actual = {
@@ -110,6 +110,14 @@ export default async function handler(req, res) {
       lunchStart: first('start_lunch')?.event_time?.slice(11, 16),
       lunchEnd: first('end_lunch')?.event_time?.slice(11, 16),
     };
+    if (isLeave && shift) {
+      if (!actual.start) actual.start = shift.start_time;
+      if (!actual.end) actual.end = shift.end_time;
+      if (!actual.lunchStart && shift.lunch_start) actual.lunchStart = shift.lunch_start;
+      if (!actual.lunchEnd && shift.lunch_start && shift.lunch_duration) {
+        actual.lunchEnd = minutesToHhmm(hhmmToMinutes(shift.lunch_start) + shift.lunch_duration);
+      }
+    }
 
     // 3. Compute approved values
     let approvedStart, approvedEnd, approvedLunchDuration, approvedHours, flags;
