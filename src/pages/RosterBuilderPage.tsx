@@ -99,6 +99,18 @@ interface CoverageResult {
 
 const DEFAULT_ATTENDANCE: Record<string, number> = {};
 
+function defaultPositionForRoom(roomId?: string): string | undefined {
+  switch (roomId) {
+    case 'director': return 'Off Floor Team';
+    case 'cook': return 'Cook';
+    case 'admin': return 'Admin';
+    case 'leave': return 'Leave';
+    case 'float': return 'Float';
+    case 'iss': return 'ISS';
+    default: return undefined;
+  }
+}
+
 // ── Supabase helpers ─────────────────────────────────────────────────────────
 
 async function fetchStaffList(centreId: string): Promise<StaffSource[]> {
@@ -443,13 +455,30 @@ export default function RosterBuilderPage() {
         if (rosters.length === 0) { skipped++; continue; }
 
         // Link Deputy employees to internal staff_members
-        const uniqueEmployees = [...new Map(rosters.map(r => [r.employeeId, r.employeeName])).entries()];
+        // Infer a fallback position from the Deputy operational unit so auto-created
+        // non-ratio staff (director, cook, admin, etc.) display with a role.
+        const employeeMeta = new Map<number | string, { name: string; position: string }>();
+        for (const r of rosters) {
+          const existing = employeeMeta.get(r.employeeId);
+          const uName = (r.unitName || '').toLowerCase();
+          let position = '';
+          if (uName.includes('director') || uName.includes('ed leader')) position = 'Off Floor Team';
+          else if (uName.includes('chef') || uName.includes('cook')) position = 'Cook';
+          else if (uName.includes('admin')) position = 'Admin';
+          else if (uName.includes('float')) position = 'Float';
+          else if (uName.includes('iss')) position = 'ISS';
+          if (!existing) {
+            employeeMeta.set(r.employeeId, { name: r.employeeName, position });
+          } else if (!existing.position && position) {
+            existing.position = position;
+          }
+        }
         const linkRes = await fetch('/api/deputy-staff-link', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             centreId,
-            employees: uniqueEmployees.map(([employeeId, employeeName]) => ({ employeeId, employeeName })),
+            employees: [...employeeMeta.entries()].map(([employeeId, meta]) => ({ employeeId, employeeName: meta.name, position: meta.position })),
           }),
         });
         let staffLinks: Record<string, string> = {};
@@ -795,7 +824,8 @@ export default function RosterBuilderPage() {
                             <div className="font-medium">{s.start_time}–{s.end_time}</div>
                             <div className="truncate">{s.room_name || 'Unassigned'}</div>
                             {(() => {
-                              const pos = staffList.find(st => st.id === s.staff_id || st.deputyEmployeeId === s.staff_id || st.name === s.staff_name)?.position;
+                              const staff = staffList.find(st => st.id === s.staff_id || st.deputyEmployeeId === s.staff_id || st.name === s.staff_name);
+                              const pos = staff?.position || defaultPositionForRoom(s.room_id);
                               return pos ? <div className="truncate text-[10px] opacity-75">{pos}</div> : null;
                             })()}
                           </div>
@@ -856,7 +886,8 @@ export default function RosterBuilderPage() {
                           <div className="font-medium">{s.start_time}–{s.end_time}</div>
                           <div className="truncate">{s.staff_name}</div>
                           {(() => {
-                            const pos = staffList.find(st => st.id === s.staff_id || st.deputyEmployeeId === s.staff_id || st.name === s.staff_name)?.position;
+                            const staff = staffList.find(st => st.id === s.staff_id || st.deputyEmployeeId === s.staff_id || st.name === s.staff_name);
+                            const pos = staff?.position || defaultPositionForRoom(area.id);
                             return pos ? <div className="truncate text-[10px] opacity-75">{pos}</div> : null;
                           })()}
                         </div>

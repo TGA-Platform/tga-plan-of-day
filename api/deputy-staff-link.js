@@ -1,8 +1,9 @@
 /**
- * POST { centreId, employees: [{ employeeId, employeeName }] }
+ * POST { centreId, employees: [{ employeeId, employeeName, position? }] }
  * → links Deputy employees to internal staff_members records.
  * Matches by deputy_employee_id first, then by name. Creates a minimal
  * staff_members row if no match is found so Deputy imports always link.
+ * Optional position is applied to newly-created records.
  */
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -31,6 +32,7 @@ export default async function handler(req, res) {
   try {
     const employeeIds = [...new Set(employees.map(e => String(e.employeeId)))];
     const byId = new Map(employees.map(e => [String(e.employeeId), e.employeeName || '']));
+    const byPosition = new Map(employees.map(e => [String(e.employeeId), e.position || '']));
 
     // 1. Load existing staff by deputy_employee_id
     const idFilter = employeeIds.map(id => `deputy_employee_id=eq.${encodeURIComponent(id)}`).join(',');
@@ -96,6 +98,7 @@ export default async function handler(req, res) {
           centre_id: centreId,
           name: byId.get(id) || `Deputy Staff ${id}`,
           deputy_employee_id: id,
+          position: byPosition.get(id) || undefined,
           employment_status: 'Active',
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
