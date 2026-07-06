@@ -3,20 +3,25 @@
  * Returns expected attendance per room for a campus + date,
  * based on a 4-week rolling average of the same weekday.
  *
- * Also returns today's booked count (campus-level) from daily_occupancy.
+ * Also returns today's booked count (campus-level) from daily_occupancy
+ * and required staff per room computed from the age breakdown of children.
  *
  * Query params:
- *   campus  - centre name
- *   date    - YYYY-MM-DD (the date being viewed)
+ *   campus   - centre name
+ *   date     - YYYY-MM-DD (the date being viewed)
+ *   centreId - optional short centre id for ratio_check_data lookup
  *
  * Response:
  * {
- *   booked: number | null,          // total booked for campus that day
- *   capacity: number | null,        // centre capacity
+ *   booked: number | null,
+ *   capacity: number | null,
  *   rooms: {
  *     [roomName]: {
- *       expected: number | null,    // 4-week rolling avg (null if no history)
- *       weeksUsed: number,          // how many weeks contributed to average
+ *       expected: number | null,
+ *       weeksUsed: number,
+ *       booked: number | null,
+ *       actual: number | null,
+ *       required: number | null,
  *     }
  *   }
  * }
@@ -35,6 +40,15 @@ async function supaFetch(path) {
   });
   if (!r.ok) throw new Error(`Supabase ${r.status}: ${await r.text()}`);
   return r.json();
+}
+
+function parseAgeMonths(ageStr) {
+  if (!ageStr) return -1;
+  const yearMatch  = String(ageStr).match(/(\d+)y/);
+  const monthMatch = String(ageStr).match(/(\d+)m/);
+  const years  = yearMatch  ? parseInt(yearMatch[1])  : 0;
+  const months = monthMatch ? parseInt(monthMatch[1]) : 0;
+  return years * 12 + months;
 }
 
 // NSW cascade ratios by age in months
@@ -64,17 +78,38 @@ function calcRequiredStaff(children) {
   return totalStaff;
 }
 
+function requiredFromRows(rows) {
+  const byRoom = {};
+  for (const row of rows) {
+    if (!row.room) continue;
+    byRoom[row.room] = byRoom[row.room] || [];
+    byRoom[row.room].push({ ageMonths: parseAgeMonths(row.age) });
+  }
+  const requiredByRoom = {};
+  for (const [room, children] of Object.entries(byRoom)) {
+    requiredByRoom[room] = calcRequiredStaff(children);
+  }
+  return requiredByRoom;
+}
+
 async function loadPlanOfDayRequired(centreId, date) {
+  if (!centreId) return {};
   try {
-    // ratio_check_data uses centre_id (short id) and date
     const rows = await supaFetch(`/rest/v1/ratio_check_data?centre_id=eq.${encodeURIComponent(centreId)}&date=eq.${date}&select=session,data`);
     if (!Array.isArray(rows) || rows.length === 0) return {};
 
     const requiredByRoom = {};
     for (const row of rows) {
       const data = row.data || {};
+      // Prefer stored requiredByRoom if present (computed by plan-of-day)
+      if (data.requiredByRoom && typeof data.requiredByRoom === 'object') {
+        for (const [roomName, req] of Object.entries(data.requiredByRoom)) {
+          requiredByRoom[roomName] = Math.max(requiredByRoom[roomName] || 0, Number(req) || 0);
+        }
+        continue;
+      }
+      // Fallback: compute from stored children (older saves may have empty children arrays)
       const children = Array.isArray(data.children) ? data.children : [];
-      // Group children by room name
       const byRoom = {};
       for (const child of children) {
         if (!child.room) continue;
@@ -99,33 +134,50 @@ async function forecastForCampus(centreId, campus, date, lastWeekStr, todayStr, 
   for (const row of attRows) {
     lastWeekByRoom[row.room] = (lastWeekByRoom[row.room] || 0) + 1;
   }
+  const lastWeekRequiredByRoom = requiredFromRows(attRows);
 
   const occ = allOccRows.find(r => r.campus === campus) || null;
   const roomBooked = (occ?.room_booked && typeof occ.room_booked === 'object') ? occ.room_booked : {};
 
   let actualAttendance = null;
   let roomActual = {};
+  let actualRequiredByRoom = {};
   if (date === todayStr) {
     const todayRows = allTodayRows.filter(r => r.campus === campus);
     actualAttendance = todayRows.length;
     for (const row of todayRows) {
       roomActual[row.room] = (roomActual[row.room] || 0) + 1;
     }
+    actualRequiredByRoom = requiredFromRows(todayRows);
   }
 
+  // Plan-of-day override takes precedence if available
   const planRequiredByRoom = await loadPlanOfDayRequired(centreId, date);
 
-  const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual), ...Object.keys(planRequiredByRoom)]);
+  const allRoomNames = new Set([
+    ...Object.keys(lastWeekByRoom),
+    ...Object.keys(roomBooked),
+    ...Object.keys(roomActual),
+    ...Object.keys(lastWeekRequiredByRoom),
+    ...Object.keys(actualRequiredByRoom),
+    ...Object.keys(planRequiredByRoom),
+  ]);
+
   const roomsOut = {};
   for (const room of allRoomNames) {
     const bookedCount = roomBooked[room] ?? null;
     const expectedCount = lastWeekByRoom[room] ?? null;
+    const required = planRequiredByRoom[room]
+      ?? actualRequiredByRoom[room]
+      ?? lastWeekRequiredByRoom[room]
+      ?? null;
+
     roomsOut[room] = {
       expected: expectedCount,
       weeksUsed: expectedCount !== null ? 1 : 0,
       booked: bookedCount,
       actual: roomActual[room] ?? null,
-      required: planRequiredByRoom[room] ?? null,
+      required,
     };
   }
 
@@ -158,10 +210,11 @@ export default async function handler(req, res) {
     // Bulk mode: return forecasts for all campuses in one call
     if (campus === 'all') {
       const [allLastWeekRows, allOccRows, allTodayRows] = await Promise.all([
-        supaFetch(`/rest/v1/attendance_daily?date=eq.${lastWeekStr}&select=campus,room,child_name&limit=5000`),
+        // limit=10000: Supabase default is 1000 which cuts off centres alphabetically (Wollongong/Spring Farm/Wilton missing)
+        supaFetch(`/rest/v1/attendance_daily?date=eq.${lastWeekStr}&select=campus,room,child_name,age&limit=10000`),
         supaFetch(`/rest/v1/daily_occupancy?date=eq.${date}&select=campus,booked,capacity,room_booked&limit=5000`),
         date === todayStr
-          ? supaFetch(`/rest/v1/attendance_daily?date=eq.${date}&select=campus,room,child_name&limit=5000`)
+          ? supaFetch(`/rest/v1/attendance_daily?date=eq.${date}&select=campus,room,child_name,age&limit=10000`)
           : Promise.resolve([]),
       ]);
 
@@ -180,10 +233,10 @@ export default async function handler(req, res) {
 
     // Single campus mode
     const [attRows, occRows, todayRows] = await Promise.all([
-      supaFetch(`/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${lastWeekStr}&select=date,room,child_name&limit=5000`),
+      supaFetch(`/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${lastWeekStr}&select=date,room,child_name,age&limit=5000`),
       supaFetch(`/rest/v1/daily_occupancy?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=booked,capacity,room_booked&limit=1`),
       date === todayStr
-        ? supaFetch(`/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=room,child_name&limit=5000`)
+        ? supaFetch(`/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=room,child_name,age&limit=5000`)
         : Promise.resolve([]),
     ]);
 
@@ -191,34 +244,50 @@ export default async function handler(req, res) {
     for (const row of (Array.isArray(attRows) ? attRows : [])) {
       lastWeekByRoom[row.room] = (lastWeekByRoom[row.room] || 0) + 1;
     }
+    const lastWeekRequiredByRoom = requiredFromRows(Array.isArray(attRows) ? attRows : []);
 
     const occ = Array.isArray(occRows) && occRows.length > 0 ? occRows[0] : null;
     const roomBooked = (occ?.room_booked && typeof occ.room_booked === 'object') ? occ.room_booked : {};
 
     let actualAttendance = null;
     let roomActual = {};
+    let actualRequiredByRoom = {};
     if (date === todayStr) {
       if (Array.isArray(todayRows)) {
         actualAttendance = todayRows.length;
         for (const row of todayRows) {
           roomActual[row.room] = (roomActual[row.room] || 0) + 1;
         }
+        actualRequiredByRoom = requiredFromRows(todayRows);
       }
     }
 
     const planRequiredByRoom = await loadPlanOfDayRequired(centreId, date);
 
-    const allRoomNames = new Set([...Object.keys(lastWeekByRoom), ...Object.keys(roomBooked), ...Object.keys(roomActual), ...Object.keys(planRequiredByRoom)]);
+    const allRoomNames = new Set([
+      ...Object.keys(lastWeekByRoom),
+      ...Object.keys(roomBooked),
+      ...Object.keys(roomActual),
+      ...Object.keys(lastWeekRequiredByRoom),
+      ...Object.keys(actualRequiredByRoom),
+      ...Object.keys(planRequiredByRoom),
+    ]);
+
     const roomsOut = {};
     for (const room of allRoomNames) {
       const bookedCount = roomBooked[room] ?? null;
       const expectedCount = lastWeekByRoom[room] ?? null;
+      const required = planRequiredByRoom[room]
+        ?? actualRequiredByRoom[room]
+        ?? lastWeekRequiredByRoom[room]
+        ?? null;
+
       roomsOut[room] = {
         expected: expectedCount,
         weeksUsed: expectedCount !== null ? 1 : 0,
         booked: bookedCount,
         actual: roomActual[room] ?? null,
-        required: planRequiredByRoom[room] ?? null,
+        required,
       };
     }
 
@@ -230,7 +299,7 @@ export default async function handler(req, res) {
       lastWeek: lastWeekStr,
     });
   } catch (e) {
-    console.error('[room-forecast] Error:', e.message);
-    return res.status(500).json({ error: e.message });
+    console.error('[room-forecast] error:', e.message);
+    return res.status(500).json({ error: e.message || 'Server error' });
   }
 }

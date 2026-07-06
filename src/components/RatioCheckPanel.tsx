@@ -601,7 +601,20 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const save = useCallback(async (session: 'morning' | 'midday' | 'afternoon', data: RatioCheckSession) => {
     if (!centreId || !date) return; // guard: don't attempt save without required props
     setSaveStatus('saving');
-    const result = await enqueueSave('/api/ratio-check', { centre_id: centreId, date, session, data });
+
+    // Compute required staff per room from the current children list so the roster
+    // forecast can read the same numbers as the plan of the day.
+    const requiredByRoom: Record<string, number> = {};
+    for (const room of rooms) {
+      const roomChildren = children.filter(c => {
+        const roomName = room.ownaRoomName || room.name;
+        return c.room && c.room.toLowerCase().includes(roomName.toLowerCase());
+      });
+      requiredByRoom[room.id] = calcRequiredStaff(roomChildren).required;
+    }
+    const dataWithRequired = { ...data, requiredByRoom };
+
+    const result = await enqueueSave('/api/ratio-check', { centre_id: centreId, date, session, data: dataWithRequired });
     if (result === 'saved') {
       setSaveStatus('saved');
     } else if (result === 'queued') {
