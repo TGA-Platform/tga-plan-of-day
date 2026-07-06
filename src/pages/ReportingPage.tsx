@@ -434,7 +434,12 @@ async function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlot
 }
 
 async function fetchZCasualsForDate(centreName: string, date: string) {
-  const r = await fetch(`/api/z-casuals?centre=${encodeURIComponent(centreName)}&date=${date}`);
+  // Strip common prefix so it matches TGA_WORKSPACE_MAP keys in the API
+  const normalized = centreName
+    .replace(/^The Grove Academy\s*[-–]?\s*/i, '')
+    .replace(/^The Grove Academy$/i, 'Wollongong')
+    .trim();
+  const r = await fetch(`/api/z-casuals?centre=${encodeURIComponent(normalized)}&date=${date}`);
   if (!r.ok) return [];
   const records: {
     zJobId: string; name: string; start: string; end: string;
