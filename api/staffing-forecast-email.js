@@ -140,19 +140,42 @@ function calcCentreForecast(centre, date, forecasts, childrenExpected, rosters, 
   const roomData = centre.rooms.map(room => {
     const owna = (room.ownaRoomName ?? room.name).toLowerCase();
     let expected = 0;
+    let required = 0;
     for (const [roomName, data] of Object.entries(fc.rooms || {})) {
       if (roomName.toLowerCase().includes(owna) || owna.includes(roomName.toLowerCase())) {
         expected += (data.expected ?? 0);
+        if ((data.required ?? null) !== null) {
+          required += data.required;
+        } else {
+          const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
+          required += data.expected > 0 ? Math.ceil(data.expected / ratio) : 0;
+        }
       }
     }
     const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
-    const required = expected > 0 ? Math.ceil(expected / ratio) : 0;
+    if (required === 0 && expected > 0) {
+      required = Math.ceil(expected / ratio);
+    }
     const roomStaff = rosters.filter(r => r.OperationalUnit === room.deputyUnitId && r.Employee && r.Employee !== 0).length;
     return { room: room.name, expected, required, staffCount: roomStaff };
   });
 
   const totalExpectedFromRooms = roomData.reduce((s, r) => s + r.expected, 0);
-  const totalRequired = roomData.reduce((s, r) => s + r.required, 0);
+  let totalRequired = roomData.reduce((s, r) => s + r.required, 0);
+
+  // If room name matching failed to produce a required total, fall back to the
+  // sum of required values returned by room-forecast regardless of room mapping.
+  if (totalRequired === 0 && Object.keys(fc.rooms || {}).length > 0) {
+    totalRequired = Object.values(fc.rooms).reduce((s, data) => s + (data.required ?? 0), 0);
+  }
+
+  // Last resort: estimate from total expected children using an average ratio.
+  if (totalRequired === 0 && totalExpectedFromRooms > 0) {
+    totalRequired = centre.rooms.reduce((s, room) => {
+      const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
+      return s + Math.ceil((totalExpectedFromRooms / centre.rooms.length) / ratio);
+    }, 0);
+  }
   // Match the Ratio Dashboard "Expected" number, which uses children-expected (last week's same-weekday attendance).
   const totalExpected = Array.isArray(childrenExpected) && childrenExpected.length > 0
     ? childrenExpected.length

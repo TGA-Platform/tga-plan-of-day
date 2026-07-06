@@ -42,6 +42,14 @@ async function supaFetch(path) {
   return r.json();
 }
 
+function ratioForRoom(roomName) {
+  const lower = (roomName ?? '').toLowerCase();
+  if (lower.includes('0-1') || lower.includes('0-2') || lower.includes('1-2')) return 4;
+  if (lower.includes('2-3') || lower.includes('2.5-3.5') || lower.includes('2.5-3')) return 5;
+  if (lower.includes('3-4') || lower.includes('3-5') || lower.includes('3.5-5') || lower.includes('4-5')) return 10;
+  return 5; // default conservative
+}
+
 function parseAgeMonths(ageStr) {
   if (!ageStr) return -1;
   const yearMatch  = String(ageStr).match(/(\d+)y/);
@@ -167,10 +175,13 @@ async function forecastForCampus(centreId, campus, date, lastWeekStr, todayStr, 
   for (const room of allRoomNames) {
     const bookedCount = roomBooked[room] ?? null;
     const expectedCount = lastWeekByRoom[room] ?? null;
-    const required = planRequiredByRoom[room]
+    let required = planRequiredByRoom[room]
       ?? actualRequiredByRoom[room]
       ?? lastWeekRequiredByRoom[room]
       ?? null;
+    if (required === null && expectedCount > 0) {
+      required = Math.ceil(expectedCount / ratioForRoom(room));
+    }
 
     roomsOut[room] = {
       expected: expectedCount,
@@ -277,10 +288,13 @@ export default async function handler(req, res) {
     for (const room of allRoomNames) {
       const bookedCount = roomBooked[room] ?? null;
       const expectedCount = lastWeekByRoom[room] ?? null;
-      const required = planRequiredByRoom[room]
+      let required = planRequiredByRoom[room]
         ?? actualRequiredByRoom[room]
         ?? lastWeekRequiredByRoom[room]
         ?? null;
+      if (required === null && expectedCount > 0) {
+        required = Math.ceil(expectedCount / ratioForRoom(room));
+      }
 
       roomsOut[room] = {
         expected: expectedCount,
