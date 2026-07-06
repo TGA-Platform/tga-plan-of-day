@@ -37,6 +37,7 @@ export default function TimesheetsPage() {
   const [approvedStart, setApprovedStart] = useState('');
   const [approvedEnd, setApprovedEnd] = useState('');
   const [approvedLunch, setApprovedLunch] = useState('');
+  const [approvedLeaveType, setApprovedLeaveType] = useState('');
   const [editFlags, setEditFlags] = useState<string[]>([]);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
@@ -116,6 +117,7 @@ export default function TimesheetsPage() {
     setApprovedStart(values.start);
     setApprovedEnd(values.end);
     setApprovedLunch(values.lunch);
+    setApprovedLeaveType(row.leave_type || '');
     setEditFlags(values.flags);
   }
 
@@ -124,6 +126,7 @@ export default function TimesheetsPage() {
     setApprovedStart('');
     setApprovedEnd('');
     setApprovedLunch('');
+    setApprovedLeaveType('');
     setEditFlags([]);
   }
 
@@ -177,6 +180,7 @@ export default function TimesheetsPage() {
         body.approvedHours = approvedHoursFromEdit();
         body.flags = recomputeFlagsFromEdit();
         body.status = body.flags.length ? 'flagged' : 'approved';
+        if (approvedLeaveType) body.leaveType = approvedLeaveType;
       }
       const res = await fetch('/api/timesheet-approve', {
         method: 'POST',
@@ -649,11 +653,21 @@ export default function TimesheetsPage() {
                   </div>
                 )}
 
-                {editingRow.leave_type && (
-                  <div className="rounded-xl p-3 text-xs" style={{ backgroundColor: '#f3e8ff', color: '#7c3aed' }}>
-                    Leave shift: approved times match rostered.
-                  </div>
-                )}
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: '#596570' }}>Leave type</label>
+                  <select
+                    value={approvedLeaveType}
+                    onChange={e => setApprovedLeaveType(e.target.value)}
+                    className="w-full px-2 py-1.5 rounded-lg border text-sm"
+                    style={{ borderColor: '#D0E8B8', backgroundColor: 'white' }}
+                  >
+                    <option value="">Not leave</option>
+                    <option value="annual">Annual leave</option>
+                    <option value="sick">Sick leave</option>
+                    <option value="public_holiday">Public holiday</option>
+                    <option value="other">Other leave</option>
+                  </select>
+                </div>
 
                 {editingRow.employee_comment && (
                   <div className="rounded-xl p-3 text-sm" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>

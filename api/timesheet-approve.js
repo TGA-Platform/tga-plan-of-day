@@ -88,8 +88,27 @@ export default async function handler(req, res) {
     );
     if (!shiftsRes.ok) throw new Error('shift lookup failed');
     const shifts = await shiftsRes.json();
-    const shift = shifts[0] || null;
-    const isLeave = !!shift?.leave_type;
+    let shift = shifts[0] || null;
+
+    // If reviewer changed the leave type, update the roster shift too.
+    if (shift && body.leaveType !== undefined && body.leaveType !== shift.leave_type) {
+      const patchRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/roster_shifts?id=eq.${shift.id}`,
+        {
+          method: 'PATCH',
+          headers: HEADERS,
+          body: JSON.stringify({ leave_type: body.leaveType }),
+        }
+      );
+      if (!patchRes.ok) {
+        console.error('[timesheet-approve] failed to update roster shift leave_type');
+      } else {
+        shift = { ...shift, leave_type: body.leaveType };
+      }
+    }
+
+    const leaveType = body.leaveType ?? shift?.leave_type ?? null;
+    const isLeave = !!leaveType;
 
     const eventsRes = await fetch(
       `${SUPABASE_URL}/rest/v1/kiosk_timeclock_events?centre_id=eq.${encodeURIComponent(centreId)}` +
@@ -166,7 +185,7 @@ export default async function handler(req, res) {
       approved_hours: approvedHours,
       status,
       flags,
-      leave_type: shift?.leave_type || null,
+      leave_type: leaveType,
       approver_name: approverName || null,
       approved_at: approverName ? new Date().toISOString() : null,
       updated_at: new Date().toISOString(),
