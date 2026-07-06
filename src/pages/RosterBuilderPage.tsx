@@ -256,6 +256,8 @@ export default function RosterBuilderPage() {
   const [pinLoading, setPinLoading] = useState(false);
   const [pinSearch, setPinSearch] = useState('');
 
+  const [roomForecasts, setRoomForecasts] = useState<Record<string, Record<string, { expected: number | null; booked: number | null; actual: number | null; weeksUsed: number }>>>({});
+
   const centre = useMemo(() => CENTRES.find(c => c.id === centreId) || CENTRES[0], [centreId]);
   const weekStart = weekStartStr(weekDate);
   const weekDays = useMemo(() => Array.from({ length: 5 }, (_, i) => addDays(parseISO(weekStart), i)), [weekStart]);
@@ -263,6 +265,7 @@ export default function RosterBuilderPage() {
   useEffect(() => {
     if (!user) { navigate('/login'); return; }
     loadData();
+    loadRoomForecasts();
   }, [centreId, weekStart]);
 
   async function loadData() {
@@ -286,6 +289,30 @@ export default function RosterBuilderPage() {
       setError('Error loading roster data. Check console.');
     }
     setLoading(false);
+  }
+
+  async function loadRoomForecasts() {
+    const dates = weekDays.map(d => format(d, 'yyyy-MM-dd'));
+    const campus = centre.ownaName || centre.name;
+    const results: Record<string, Record<string, { expected: number | null; booked: number | null; actual: number | null; weeksUsed: number }>> = {};
+    await Promise.all(dates.map(async date => {
+      try {
+        const res = await fetch(`/api/room-forecast?campus=${encodeURIComponent(campus)}&date=${date}`);
+        const data = await res.json();
+        if (res.ok && data.rooms) {
+          results[date] = {};
+          for (const [roomName, info] of Object.entries(data.rooms)) {
+            const room = centre.rooms.find(r => r.ownaRoomName === roomName);
+            if (room) {
+              results[date][room.id] = info as { expected: number | null; booked: number | null; actual: number | null; weeksUsed: number };
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[loadRoomForecasts] error for', date, e);
+      }
+    }));
+    setRoomForecasts(results);
   }
 
   async function handleSaveShift(shift: Partial<RosterShift>, dates?: string[]) {
@@ -803,7 +830,7 @@ export default function RosterBuilderPage() {
               </div>
             ))}
             {[
-              ...centre.rooms.map((r, i) => ({ id: r.id, name: r.name, idx: i })),
+              ...centre.rooms.map((r, i) => ({ id: r.id, name: r.name, idx: i, ratio: r.ratio })),
               { id: 'float', name: 'Float', idx: centre.rooms.length },
               { id: 'iss', name: 'ISS', idx: centre.rooms.length + 1 },
               { id: 'director', name: 'Off Floor Team', idx: centre.rooms.length + 2 },
@@ -848,6 +875,19 @@ export default function RosterBuilderPage() {
                           })()}
                         </div>
                       ))}
+                      {(() => {
+                        const forecast = roomForecasts[date]?.[area.id];
+                        if (!forecast || !('ratio' in area)) return null;
+                        const expected = forecast.expected ?? forecast.booked ?? 0;
+                        const required = expected > 0 && area.ratio ? Math.ceil(expected / area.ratio) : 0;
+                        const actual = dayShifts.length;
+                        const under = required > 0 && actual < required;
+                        return (
+                          <div className={`text-[10px] mt-1 px-1 py-0.5 rounded ${under ? 'bg-red-100 text-red-700 font-medium' : 'text-gray-500'}`}>
+                            {expected} exp • {required} need • {actual} have
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })}
