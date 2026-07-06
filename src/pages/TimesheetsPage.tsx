@@ -83,6 +83,7 @@ export default function TimesheetsPage() {
         start: row.approved_start_time,
         end: row.approved_end_time,
         lunch: String(row.approved_lunch_duration ?? row.roster_lunch_duration ?? 30),
+        hours: row.approved_hours ?? 0,
         flags: row.flags || [],
       };
     }
@@ -102,6 +103,7 @@ export default function TimesheetsPage() {
       start: computed.approvedStart,
       end: computed.approvedEnd,
       lunch: String(computed.approvedLunchDuration),
+      hours: computed.approvedHours,
       flags: computed.flags,
     };
   }
@@ -383,7 +385,7 @@ export default function TimesheetsPage() {
                         {row.approved_lunch_duration ? <div className="text-xs">Lunch {row.approved_lunch_duration} min</div> : null}
                       </td>
                       <td className="px-4 py-3 font-semibold" style={{ color: '#050505' }}>
-                        {row.approved_hours ? formatHours(row.approved_hours) : '—'}
+                        {formatHours(computeApprovedValues(row).hours)}
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={row.status} flags={row.flags || []} />
