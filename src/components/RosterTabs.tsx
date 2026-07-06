@@ -11,7 +11,7 @@ export default function RosterTabs({ centreId }: RosterTabsProps) {
   const tabs = [
     { key: 'roster', label: 'Roster', to: '/roster' },
     { key: 'timesheets', label: 'Timesheets', to: '/timesheets' },
-    { key: 'kiosk', label: 'Kiosk', to: `/kiosk?centre=${encodeURIComponent(centreId)}` },
+    { key: 'kiosk', label: 'Kiosk', to: `/kiosk-settings?centre=${encodeURIComponent(centreId)}` },
   ];
 
   return (

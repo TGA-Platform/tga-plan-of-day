@@ -17,6 +17,8 @@ import ComplianceConfigPage from './pages/ComplianceConfigPage';
 import RosterBuilderPage from './pages/RosterBuilderPage';
 import KioskPage from './pages/KioskPage';
 import KioskNewsPage from './pages/KioskNewsPage';
+import KioskSettingsPage from './pages/KioskSettingsPage';
+import KioskPinsPage from './pages/KioskPinsPage';
 import TimesheetsPage from './pages/TimesheetsPage';
 import ErrorBoundary from './components/ErrorBoundary';
 
@@ -138,6 +140,8 @@ export default function App() {
         <Route path="/roster" element={<RequireAuth><RosterBuilderPage /></RequireAuth>} />
         <Route path="/timesheets" element={<RequireAuth><TimesheetsPage /></RequireAuth>} />
         <Route path="/kiosk-news" element={<RequireAuth><KioskNewsPage /></RequireAuth>} />
+        <Route path="/kiosk-settings" element={<RequireAuth><KioskSettingsPage /></RequireAuth>} />
+        <Route path="/kiosk-pins" element={<RequireAuth><KioskPinsPage /></RequireAuth>} />
         <Route path="/kiosk" element={<KioskPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
