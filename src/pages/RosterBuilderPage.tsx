@@ -459,7 +459,7 @@ export default function RosterBuilderPage() {
               else leaveType = 'other';
             }
             else if (nonRatioIds.has(r.unitId)) {
-              if (uName.includes('director') || uName.includes('ed leader')) { roomName = 'Director'; roomId = 'director'; }
+              if (uName.includes('director') || uName.includes('ed leader')) { roomName = 'Off Floor Team'; roomId = 'director'; }
               else if (uName.includes('chef') || uName.includes('cook')) { roomName = 'Cook'; roomId = 'cook'; }
               else if (uName.includes('admin')) { roomName = 'Admin'; roomId = 'admin'; }
               else { roomName = r.unitName || 'Other'; roomId = 'other'; }
@@ -747,7 +747,10 @@ export default function RosterBuilderPage() {
             ))}
             {filteredStaff.map(staff => (
               <React.Fragment key={staff.id}>
-                <div className="text-sm font-medium py-2" style={{ color: '#050505' }}>{staff.name}</div>
+                <div className="py-2">
+                  <div className="text-sm font-medium truncate" style={{ color: '#050505' }}>{staff.name}</div>
+                  {staff.position && <div className="text-[10px] truncate opacity-75" style={{ color: '#596570' }}>{staff.position}</div>}
+                </div>
                 {weekDays.map(d => {
                   const date = format(d, 'yyyy-MM-dd');
                   const dayShifts = shifts.filter(s => s.date === date && s.staff_id === staff.id);
@@ -778,6 +781,10 @@ export default function RosterBuilderPage() {
                           >
                             <div className="font-medium">{s.start_time}–{s.end_time}</div>
                             <div className="truncate">{s.room_name || 'Unassigned'}</div>
+                            {(() => {
+                              const pos = staffList.find(st => st.id === s.staff_id)?.position;
+                              return pos ? <div className="truncate text-[10px] opacity-75">{pos}</div> : null;
+                            })()}
                           </div>
                         );
                       })}
@@ -799,7 +806,7 @@ export default function RosterBuilderPage() {
               ...centre.rooms.map((r, i) => ({ id: r.id, name: r.name, idx: i })),
               { id: 'float', name: 'Float', idx: centre.rooms.length },
               { id: 'iss', name: 'ISS', idx: centre.rooms.length + 1 },
-              { id: 'director', name: 'Director', idx: centre.rooms.length + 2 },
+              { id: 'director', name: 'Off Floor Team', idx: centre.rooms.length + 2 },
               { id: 'cook', name: 'Cook', idx: centre.rooms.length + 3 },
               { id: 'admin', name: 'Admin', idx: centre.rooms.length + 4 },
               { id: 'leave', name: 'Leave', idx: centre.rooms.length + 5 },
@@ -835,6 +842,10 @@ export default function RosterBuilderPage() {
                         >
                           <div className="font-medium">{s.start_time}–{s.end_time}</div>
                           <div className="truncate">{s.staff_name}</div>
+                          {(() => {
+                            const pos = staffList.find(st => st.id === s.staff_id)?.position;
+                            return pos ? <div className="truncate text-[10px] opacity-75">{pos}</div> : null;
+                          })()}
                         </div>
                       ))}
                     </div>
@@ -888,7 +899,10 @@ export default function RosterBuilderPage() {
               const staffShifts = dayShifts.filter(s => s.staff_id === staff.id);
               return (
                 <div key={staff.id} className="grid items-center border-b" style={{ gridTemplateColumns: '160px repeat(25, 1fr)', borderColor: '#E2F1DA' }}>
-                  <div className="text-sm font-medium py-2 pr-2 truncate" style={{ color: '#050505' }}>{staff.name}</div>
+                  <div className="py-2 pr-2">
+                    <div className="text-sm font-medium truncate" style={{ color: '#050505' }}>{staff.name}</div>
+                    {staff.position && <div className="text-[10px] truncate opacity-75" style={{ color: '#596570' }}>{staff.position}</div>}
+                  </div>
                   {times.map((t, idx) => {
                     const m = 6 * 60 + idx * 30;
                     const shiftHere = staffShifts.find(s => {
@@ -933,7 +947,7 @@ export default function RosterBuilderPage() {
                 ...centre.rooms.map((r, i) => ({ id: r.id, name: r.name, idx: i, ratio: r.ratio })),
                 { id: 'float', name: 'Float', idx: centre.rooms.length },
                 { id: 'iss', name: 'ISS', idx: centre.rooms.length + 1 },
-                { id: 'director', name: 'Director', idx: centre.rooms.length + 2 },
+                { id: 'director', name: 'Off Floor Team', idx: centre.rooms.length + 2 },
                 { id: 'cook', name: 'Cook', idx: centre.rooms.length + 3 },
                 { id: 'admin', name: 'Admin', idx: centre.rooms.length + 4 },
                 { id: 'leave', name: 'Leave', idx: centre.rooms.length + 5 },
@@ -1097,7 +1111,7 @@ export default function RosterBuilderPage() {
                 onChange={e => {
                   const rid = e.target.value;
                   const fixedNames: Record<string, string> = {
-                    float: 'Float', iss: 'ISS', director: 'Director', admin: 'Admin', cook: 'Cook', leave: 'Leave', other: 'Other',
+                    float: 'Float', iss: 'ISS', director: 'Off Floor Team', admin: 'Admin', cook: 'Cook', leave: 'Leave', other: 'Other',
                   };
                   const rname = centre.rooms.find(r => r.id === rid)?.name || fixedNames[rid] || (rid ? 'Other' : '');
                   setDraft({ ...draft, room_id: rid || undefined, room_name: rname || undefined });
@@ -1109,7 +1123,7 @@ export default function RosterBuilderPage() {
                 {centre.rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                 <option value="float">Float</option>
                 <option value="iss">ISS</option>
-                <option value="director">Director</option>
+                <option value="director">Off Floor Team</option>
                 <option value="admin">Admin</option>
                 <option value="cook">Cook</option>
                 <option value="leave">Leave</option>
@@ -1569,7 +1583,7 @@ export default function RosterBuilderPage() {
               <option value="all">All roles</option>
               <option value="educator">Educator</option>
               <option value="float">Float</option>
-              <option value="director">Director</option>
+              <option value="director">Off Floor Team</option>
               <option value="cook">Cook</option>
               <option value="admin">Admin</option>
             </select>
