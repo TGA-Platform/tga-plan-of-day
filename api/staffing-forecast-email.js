@@ -169,17 +169,20 @@ function calcCentreForecast(centre, date, forecasts, childrenExpected, rosters, 
     totalRequired = Object.values(fc.rooms).reduce((s, data) => s + (data.required ?? 0), 0);
   }
 
-  // Last resort: estimate from total expected children using an average ratio.
-  if (totalRequired === 0 && totalExpectedFromRooms > 0) {
-    totalRequired = centre.rooms.reduce((s, room) => {
-      const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
-      return s + Math.ceil((totalExpectedFromRooms / centre.rooms.length) / ratio);
-    }, 0);
-  }
   // Match the Ratio Dashboard "Expected" number, which uses children-expected (last week's same-weekday attendance).
   const totalExpected = Array.isArray(childrenExpected) && childrenExpected.length > 0
     ? childrenExpected.length
     : totalExpectedFromRooms;
+
+  // Last resort: estimate from total expected children using an average ratio.
+  // Use totalExpected so we still produce a required number when room-forecast attendance is missing
+  // but children-expected has data.
+  if (totalRequired === 0 && totalExpected > 0) {
+    totalRequired = centre.rooms.reduce((s, room) => {
+      const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
+      return s + Math.ceil((totalExpected / centre.rooms.length) / ratio);
+    }, 0);
+  }
   const totalFloorStaff = roomData.reduce((s, r) => s + r.staffCount, 0);
 
   const floatIds = new Set(centre.floatUnitIds || []);

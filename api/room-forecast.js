@@ -42,6 +42,27 @@ async function supaFetch(path) {
   return r.json();
 }
 
+// Supabase REST caps a single request at 1000 rows. Fetch all pages for bulk queries.
+async function supaFetchAll(path) {
+  const all = [];
+  let offset = 0;
+  const limit = 1000;
+  const headers = {
+    apikey:        SERVICE_KEY,
+    Authorization: `Bearer ${SERVICE_KEY}`,
+    'Content-Type': 'application/json',
+  };
+  while (true) {
+    const r = await fetch(`${SUPABASE_URL}${path}&limit=${limit}&offset=${offset}`, { headers });
+    if (!r.ok) throw new Error(`Supabase ${r.status}: ${await r.text()}`);
+    const rows = await r.json();
+    all.push(...rows);
+    if (rows.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
 function ratioForRoom(roomName) {
   const lower = (roomName ?? '').toLowerCase();
   if (lower.includes('0-1') || lower.includes('0-2') || lower.includes('1-2')) return 4;
@@ -221,11 +242,12 @@ export default async function handler(req, res) {
     // Bulk mode: return forecasts for all campuses in one call
     if (campus === 'all') {
       const [allLastWeekRows, allOccRows, allTodayRows] = await Promise.all([
-        // limit=10000: Supabase default is 1000 which cuts off centres alphabetically (Wollongong/Spring Farm/Wilton missing)
-        supaFetch(`/rest/v1/attendance_daily?date=eq.${lastWeekStr}&select=campus,room,child_name,age&limit=10000`),
+        // Paginate: Supabase REST caps single requests at 1000 rows, so large networks get cut off.
+        // Order by campus so pagination is stable across requests.
+        supaFetchAll(`/rest/v1/attendance_daily?date=eq.${lastWeekStr}&select=campus,room,child_name,age&order=campus`),
         supaFetch(`/rest/v1/daily_occupancy?date=eq.${date}&select=campus,booked,capacity,room_booked&limit=5000`),
         date === todayStr
-          ? supaFetch(`/rest/v1/attendance_daily?date=eq.${date}&select=campus,room,child_name,age&limit=10000`)
+          ? supaFetchAll(`/rest/v1/attendance_daily?date=eq.${date}&select=campus,room,child_name,age&order=campus`)
           : Promise.resolve([]),
       ]);
 
