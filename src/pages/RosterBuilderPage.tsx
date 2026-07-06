@@ -809,7 +809,7 @@ export default function RosterBuilderPage() {
                             <div className="font-medium">{s.start_time}–{s.end_time}</div>
                             <div className="truncate">{s.room_name || 'Unassigned'}</div>
                             {(() => {
-                              const pos = staffList.find(st => st.id === s.staff_id)?.position;
+                              const pos = staffList.find(st => st.id === s.staff_id || st.deputyEmployeeId === s.staff_id || st.name === s.staff_name)?.position;
                               return pos ? <div className="truncate text-[10px] opacity-75">{pos}</div> : null;
                             })()}
                           </div>
@@ -870,7 +870,7 @@ export default function RosterBuilderPage() {
                           <div className="font-medium">{s.start_time}–{s.end_time}</div>
                           <div className="truncate">{s.staff_name}</div>
                           {(() => {
-                            const pos = staffList.find(st => st.id === s.staff_id)?.position;
+                            const pos = staffList.find(st => st.id === s.staff_id || st.deputyEmployeeId === s.staff_id || st.name === s.staff_name)?.position;
                             return pos ? <div className="truncate text-[10px] opacity-75">{pos}</div> : null;
                           })()}
                         </div>
