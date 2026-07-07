@@ -812,23 +812,8 @@ export default function ReportingPage() {
             .then(r => r.ok ? r.json() : []).catch(() => []),
         ]);
 
-        // Merge external casuals into rosters so they're included in the educator report
-        const zCasualAsRosters = (zCasuals as any[]).map((z: any) => {
-          // Stable negative employeeId from zJobId so the same casual doesn't duplicate across re-renders
-          const empId = -(String(z.zJobId).split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 1000000000);
-          return {
-            Employee: empId,
-            OperationalUnit: centre.floatUnitIds?.[0] ?? 0,
-            StartTime: z.start,
-            EndTime: z.end,
-            isExternalCasual: true,
-            _DPMetaData: {
-              EmployeeInfo: { DisplayName: z.name },
-              OperationalUnitInfo: { OperationalUnitName: 'External Casual' },
-            },
-          };
-        });
-        const rostersWithExternal = [...(rosters as any[]), ...zCasualAsRosters];
+        // External casuals are appended to the educator record separately below
+        const rostersWithExternal = [...(rosters as any[])];
         if (needsEducator) groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
 
         // ── Occupancy ────────────────────────────────────────────────────
@@ -1220,8 +1205,7 @@ export default function ReportingPage() {
           // Support (AD, Directors, etc.): fall back to their Deputy unit name so they
           //   always appear in the report; ratio check moves override specific slots.
           const naturalRoomName = naturalRoom?.name ?? (
-            staffType === 'external' ? 'External Casual'
-            : staffType === 'float' ? ''
+            staffType === 'float' || staffType === 'external' ? ''
             : staffType === 'iss'   ? ''
             : deputyUnitName || 'Support'
           );
@@ -1487,6 +1471,21 @@ export default function ReportingPage() {
         filteredEntries.forEach(e => entries.push(e));
         lunchEntriesToAdd.forEach(e => entries.push(e));
 
+
+        // Append external casuals directly to the educator record
+        for (const z of (zCasuals as any[])) {
+          entries.push({
+            employeeId: z.Employee,
+            name: z._DPMetaData?.EmployeeInfo?.DisplayName ?? z.name ?? `Staff #${z.Employee}`,
+            room: 'External Casual',
+            inTime: z.StartTime,
+            outTime: z.EndTime,
+            blockType: 'shift',
+            staffType: 'external',
+            note: '',
+          });
+        }
+
         if (entries.length > 0) {
           // Sort by staff name, then by inTime within each person
           entries.sort((a, b) => {
@@ -1494,7 +1493,7 @@ export default function ReportingPage() {
             return nameDiff !== 0 ? nameDiff : a.inTime.localeCompare(b.inTime);
           });
           // Collect all unique rooms for the filter dropdown
-          const allRooms = [...new Set(entries.map(e => e.room).filter(r => r !== 'Lunch Break'))].sort();
+          const allRooms = [...new Set(entries.map(e => e.room).filter(r => r !== 'Lunch Break' && r !== 'External Casual'))].sort();
           rows.push({ date, campus, entries, allRooms });
         }
 
