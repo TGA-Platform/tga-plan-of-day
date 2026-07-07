@@ -142,7 +142,7 @@ export default function MorningBriefingPage() {
     setLoading(true);
     try {
       // Fetch today + last week attendance + last-snapshot time + all forecasts in parallel
-      const [todayAtt, lastWeekAtt, unitsRes, lastSnapshotRes, allForecasts] = await Promise.all([
+      const [todayAtt, lastWeekAtt, unitsRes, lastSnapshotRes, allForecasts, staffAllocations] = await Promise.all([
         withCache(`briefing-today:${date}`, () =>
           fetch(`/api/attendance?date=${date}`).then(r => r.json()), 3 * 60 * 1000),
         withCache(`briefing-lw:${lastWeek}`, () =>
@@ -157,7 +157,18 @@ export default function MorningBriefingPage() {
           fetch(`/api/room-forecast?campus=all&date=${date}`)
             .then(r => r.json())
             .catch(() => null), 5 * 60 * 1000),
+        withCache(`staff-allocations-all:${date}`, () =>
+          fetch(`/api/staff-allocations?centre=all&date=${date}`)
+            .then(r => r.json())
+            .catch(() => [] as Array<{ centre_id: string; moves: Record<string, string> }>), 5 * 60 * 1000),
       ]);
+
+      // Saved staff moves from the Ratio Dashboard (per-employee: room.id | 'float' | 'support' | 'iss')
+      const movesByCentre = new Map<string, Record<number, string>>();
+      for (const row of (staffAllocations || [])) {
+        if (!row.centre_id || !row.moves) continue;
+        movesByCentre.set(row.centre_id, { ...(movesByCentre.get(row.centre_id) || {}), ...row.moves });
+      }
 
       // Current Sydney time as HH:MM for predicted_sign_out comparison
       const nowSyd = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
@@ -246,7 +257,7 @@ export default function MorningBriefingPage() {
         const nonRatioSet = new Set(centre.nonRatioUnitIds ?? []);
 
         // Raw unit type from roster (ignoring manual moves) — used for card stats
-        // so they match the Ratio Dashboard staffing analysis.
+        // Raw unit type from roster (before manual moves)
         function rawUnitType(r: typeof centreRosters[number]): 'room' | 'float' | 'support' | 'leave' | 'other' {
           if (leaveSet.has(r.unitId)) return 'leave';
           if (floatSet.has(r.unitId)) return 'float';
@@ -255,6 +266,25 @@ export default function MorningBriefingPage() {
           return 'other';
         }
 
+        const moves = movesByCentre.get(centre.id) ?? {};
+
+        // Effective destination for a roster entry, applying Ratio Dashboard manual moves.
+        // Returns 'float' | 'support' | 'leave' | 'iss' | room.id
+        function effectiveDestination(r: typeof centreRosters[number]): string {
+          const move = moves[r.employeeId];
+          if (move) return move;
+          const raw = rawUnitType(r);
+          if (raw === 'room') {
+            const room = centre.rooms.find(rm => rm.deputyUnitId === r.unitId);
+            return room?.id ?? 'room';
+          }
+          return raw;
+        }
+
+        const isAdName = (name: string) =>
+          name.toLowerCase().includes('assistant director') ||
+          name.toLowerCase().includes('asst director') ||
+          name.toLowerCase().includes('ass. director');
 
         const presentKids  = presentByCampus[campus] ?? [];
         // Per-room required for all three modes
@@ -263,7 +293,7 @@ export default function MorningBriefingPage() {
             const owna = (room.ownaRoomName ?? room.name).toLowerCase();
             const rk = childSet.filter(c => c.room.toLowerCase().includes(owna));
             const { required: rq } = calcRequiredStaff(rk.map(c => ({ ageMonths: parseAgeMonths(c.age) } as any)));
-            const roomStaff = centreRosters.filter(r => r.unitId === room.deputyUnitId);
+            const roomStaff = centreRosters.filter(r => effectiveDestination(r) === room.id);
             return { total: total.total + rq, staffSum: total.staffSum + roomStaff.length };
           }, { total: 0, staffSum: 0 });
         }
@@ -277,8 +307,8 @@ export default function MorningBriefingPage() {
             const owna = (room.ownaRoomName ?? room.name).toLowerCase();
             const rk = childSet.filter(c => c.room.toLowerCase().includes(owna));
             const { required: roomRequired } = calcRequiredStaff(rk.map(c => ({ ageMonths: parseAgeMonths(c.age) } as any)));
-            // Count staff whose RAW location is this room (ignore moves so card matches staffing analysis)
-            const roomStaff = centreRosters.filter(r => r.unitId === room.deputyUnitId);
+            // Count staff assigned to this room after applying manual moves
+            const roomStaff = centreRosters.filter(r => effectiveDestination(r) === room.id);
             return { required: roomRequired, staffCount: roomStaff.length };
           });
         }
@@ -290,30 +320,30 @@ export default function MorningBriefingPage() {
         const expectedCount    = lwByCampus[campus] ?? kids.length;
         const requiredExpected = Math.round(expectedCount / Math.max(kids.length, 1) * required);
 
-        // Staff counts from centreRosters using RAW unit type (ignore moves so card matches staffing analysis)
+        // Staff counts from centreRosters using RAW unit type for roster/absence totals
         const staffIds = new Set(centreRosters
           .filter(r => rawUnitType(r) === 'room')
           .map(r => r.employeeId));
         const absentIds = new Set(centreRosters
           .filter(r => rawUnitType(r) === 'leave')
           .map(r => r.employeeId));
-        // Use raw entry counts (not unique sets) to exactly match staffing analysis Float Pool:
-        // floats.length and adStaff.length are array lengths, not deduped employee counts.
-        // Split-shift staff have multiple entries and each counts.
-        const floatEntries = centreRosters.filter(r => rawUnitType(r) === 'float');
-        const floatIds = new Set(floatEntries.map(r => r.employeeId)); // still need set for absence calc
+        // Float entries after applying manual moves (support/room staff dragged to float pool).
+        const floatEntries = centreRosters.filter(r => effectiveDestination(r) === 'float');
+        // Use raw float entries for absence tracking so rostered float absences are still captured.
+        const floatIds = new Set(centreRosters.filter(r => rawUnitType(r) === 'float').map(r => r.employeeId));
         // Effective float count must match the Ratio Dashboard Float Pool panel:
         // split-shift float entries don't count as cover, and only floats whose shift
-        // overlaps the 10:00–14:00 core window are useful.
-        const effectiveFloatEntries = floatEntries.filter(r => !r.isSplitShift && isEffectiveFloat(r.startTime, r.endTime));
+        // overlaps the 10:00–14:00 core window are useful. Manually moved staff always count.
+        const effectiveFloatEntries = floatEntries.filter(r => {
+          if (moves[r.employeeId]) return true;
+          if (r.isSplitShift) return false;
+          return isEffectiveFloat(r.startTime, r.endTime);
+        });
         const effectiveZCasualCount = zCasuals.filter((z: { start?: string; end?: string }) => isEffectiveFloat(z.start, z.end)).length;
         const floatCount = effectiveFloatEntries.length + effectiveZCasualCount;
-        // AD = only 'Assistant Director' unitName entries (matches staffing analysis adStaff filter)
+        // AD = support staff with Assistant Director unitName, not manually moved away from support.
         const adCount = centreRosters.filter(r =>
-          rawUnitType(r) === 'support' &&
-          (r.unitName?.toLowerCase().includes('assistant director') ||
-           r.unitName?.toLowerCase().includes('asst director') ||
-           r.unitName?.toLowerCase().includes('ass. director'))
+          effectiveDestination(r) === 'support' && isAdName(r.unitName ?? '')
         ).length;
         const totalStaff = new Set([...staffIds, ...floatIds]).size;
         const absent = absentIds.size;
