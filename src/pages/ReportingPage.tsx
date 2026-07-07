@@ -1220,7 +1220,8 @@ export default function ReportingPage() {
           // Support (AD, Directors, etc.): fall back to their Deputy unit name so they
           //   always appear in the report; ratio check moves override specific slots.
           const naturalRoomName = naturalRoom?.name ?? (
-            staffType === 'float' || staffType === 'external' ? ''
+            staffType === 'external' ? 'External Casual'
+            : staffType === 'float' ? ''
             : staffType === 'iss'   ? ''
             : deputyUnitName || 'Support'
           );
