@@ -812,8 +812,9 @@ export default function ReportingPage() {
             .then(r => r.ok ? r.json() : []).catch(() => []),
         ]);
 
-        // External casuals are appended to the educator record separately below
-        const rostersWithExternal = [...(rosters as any[])];
+        // Include external casuals in the roster loop so their room allocation
+        // follows the same ratio-check logic as every other staff member.
+        const rostersWithExternal = [...(rosters as any[]), ...(zCasuals as any[])];
         if (needsEducator) groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
 
         // ── Occupancy ────────────────────────────────────────────────────
@@ -1205,7 +1206,8 @@ export default function ReportingPage() {
           // Support (AD, Directors, etc.): fall back to their Deputy unit name so they
           //   always appear in the report; ratio check moves override specific slots.
           const naturalRoomName = naturalRoom?.name ?? (
-            staffType === 'float' || staffType === 'external' ? ''
+            staffType === 'float' ? ''
+            : staffType === 'external' ? 'Off Floor'
             : staffType === 'iss'   ? ''
             : deputyUnitName || 'Support'
           );
@@ -1471,20 +1473,6 @@ export default function ReportingPage() {
         filteredEntries.forEach(e => entries.push(e));
         lunchEntriesToAdd.forEach(e => entries.push(e));
 
-
-        // Append external casuals directly to the educator record
-        for (const z of (zCasuals as any[])) {
-          entries.push({
-            employeeId: z.Employee,
-            name: z._DPMetaData?.EmployeeInfo?.DisplayName ?? z.name ?? `Staff #${z.Employee}`,
-            room: 'External Casual',
-            inTime: z.StartTime,
-            outTime: z.EndTime,
-            blockType: 'shift',
-            staffType: 'external',
-            note: '',
-          });
-        }
 
         if (entries.length > 0) {
           // Sort by staff name, then by inTime within each person
