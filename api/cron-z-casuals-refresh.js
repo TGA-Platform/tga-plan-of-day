@@ -1,6 +1,7 @@
 /**
  * Cron job: refresh Z Staffing external casuals for all TGA centres.
  * Run every 5 minutes. Fetches live from Z API and caches in Supabase z_casuals.
+ * Caches the past 7 days plus the next 6 days so historical dates still load.
  */
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
@@ -226,7 +227,7 @@ export default async function handler(req, res) {
 
   const baseDate = req.query.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
   const dates = [];
-  for (let i = 0; i < 7; i++) {
+  for (let i = -7; i < 7; i++) {
     dates.push(addDays(baseDate, i));
   }
 
