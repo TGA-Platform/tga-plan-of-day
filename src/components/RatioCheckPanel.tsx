@@ -2183,7 +2183,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                         // First room of this FG — render merged cell
                         renderedFGIds.add(fg.id);
                         const fgRooms = fgRoomsForSlot;
-                        const fgColSpan = fgRooms.length * 3;
+                        // Defensive: only span consecutive rooms from this position.
+                        // If an FG somehow includes non-consecutive rooms, this prevents the
+                        // merged cell from bleeding into totals / Additional columns.
+                        const roomIndex = rooms.findIndex(r => r.id === room.id);
+                        let consecutiveFGRoomCount = 0;
+                        for (let i = roomIndex; i < rooms.length; i++) {
+                          if (fgRooms.some(r => r.id === rooms[i].id)) consecutiveFGRoomCount++;
+                          else break;
+                        }
+                        const fgColSpan = consecutiveFGRoomCount * 3;
                         const fgReq = getFGRequiredForConfig(slot, fg);
                         const fgChildren = fgRooms.reduce((sum, r) => sum + getChildCount(slot, r.id), 0);
                         const fgStaffMembers = fgRooms.flatMap(r =>

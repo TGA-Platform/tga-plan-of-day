@@ -1540,68 +1540,9 @@ export default function ReportingPage() {
           });
         }
 
-        // Overlay family groupings. Include suggested sessions as well as
-        // confirmed/modified ones, because directors create groupings in the
-        // Ratio Check panel and expect them to flow straight through to Reg 151.
-        const confirmedGroupings = (groupingSessionRows as any[]).filter(gs =>
-          ['confirmed', 'auto-confirmed', 'modified', 'suggested'].includes(gs.confirmation_status)
-        );
-        if (confirmedGroupings.length > 0) {
-          for (const gs of confirmedGroupings) {
-            const gStart = gs.session_start as string;
-            const gEnd   = gs.session_end   as string;
-            const gLabel = gs.group_label   as string;
-            const heldInId   = gs.held_in_room as string | undefined;
-            // heldInId is either a room ID (look up name) or an outdoor area name string (use directly)
-            const heldInRoom = centre.rooms.find(r => r.id === heldInId)?.name ?? heldInId ?? gLabel;
-            const staffIds: number[] = gs.staff_ids ?? [];
-            const staffNames: string[] = gs.staff_names ?? [];
-            const staffRoomIds: string[] = gs.staff_rooms ?? [];
-            const isAdditional = (empId: number) =>
-              ratioStaffMoves[`${empId}:${gStart}`] === '__additional__';
-
-            for (const entry of [...entries]) {
-              if (!staffIds.includes(entry.employeeId)) continue;
-              if (entry.outTime <= gStart || entry.inTime >= gEnd) continue;
-              if (entry.blockType === 'leave') continue;
-              const si = staffIds.indexOf(entry.employeeId);
-              const subRoomId = staffRoomIds[si];
-              const subRoom = centre.rooms.find(r => r.id === subRoomId)?.name ?? heldInRoom;
-              const roomLabel = isAdditional(entry.employeeId)
-                ? 'Additional Duties'
-                : gLabel + (subRoom && subRoom !== gLabel ? ` - ${subRoom}` : '');
-              const bType = isAdditional(entry.employeeId) ? 'shift' : 'grouping';
-              // Split entry around grouping window
-              const origIn = entry.inTime, origOut = entry.outTime;
-              entry.inTime = 'REMOVE';
-              if (origIn < gStart) {
-                entries.push({ ...entry, inTime: origIn, outTime: gStart, blockType: 'shift', room: entry.room });
-              }
-              const gEffIn  = origIn  < gStart ? gStart : origIn;
-              const gEffOut = origOut > gEnd   ? gEnd   : origOut;
-              entries.push({ ...entry, inTime: gEffIn, outTime: gEffOut, room: roomLabel, blockType: bType, note: `Held in ${heldInRoom}` });
-              if (origOut > gEnd) {
-                entries.push({ ...entry, inTime: gEnd, outTime: origOut, blockType: 'shift', room: entry.room });
-              }
-            }
-            // Remove entries marked for removal
-            for (let i = entries.length - 1; i >= 0; i--) {
-              if (entries[i].inTime === 'REMOVE') entries.splice(i, 1);
-            }
-            // Synthetic entries for grouping staff not in roster
-            const addedIds = new Set(entries.filter(e => staffIds.includes(e.employeeId) && e.blockType === 'grouping').map(e => e.employeeId));
-            for (let si = 0; si < staffIds.length; si++) {
-              const empId = staffIds[si];
-              if (addedIds.has(empId)) continue;
-              const empName = staffNames[si];
-              if (!empName) continue;
-              const subRoomId = staffRoomIds[si];
-              const subRoom = centre.rooms.find(r => r.id === subRoomId)?.name ?? heldInRoom;
-              const roomLabel = isAdditional(empId) ? 'Additional Duties' : gLabel + (subRoom && subRoom !== gLabel ? ` - ${subRoom}` : '');
-              entries.push({ employeeId: empId, name: empName, room: roomLabel, inTime: gStart, outTime: gEnd, blockType: isAdditional(empId) ? 'shift' : 'grouping', staffType: 'room', note: `Held in ${heldInRoom}` });
-            }
-          }
-        }
+        // Family groupings are now reflected entirely from Ratio Check data via
+        // the main slot-position loop above. The old grouping_sessions overlay
+        // has been removed so the educator report is strictly ratio-check-driven.
 
         // Build a map of empId → own-lunch float schedule block (planned own break times)
         const ownLunchByEmpId: Record<number, { startTime: string; endTime: string }> = {};
