@@ -1378,30 +1378,28 @@ export default function ReportingPage() {
           // Position at each slot (including FG override)
           const positions: Array<{ slot: string; room: string; blockType: EducatorEntry['blockType']; note?: string; exactIn?: string; exactOut?: string }> = [];
           for (const slot of shiftSlots) {
-            // Check if a confirmed FG covers this employee at this slot.
-            // Use the effective room (natural roster room or a drag-and-drop move
-            // into an FG room) so staff moved into a grouping still report as grouping.
+            const pos = posAt(empId, slot);
+            const room = pos.room || naturalRoomName;
+            const roomObj = room ? centre.rooms.find(r => r.name === room) : undefined;
+
+            // Check if the resolved room (natural, moved, or float-cover) is part
+            // of a family grouping at this slot. If so, report as grouping.
             let fgPos: { room: string; blockType: EducatorEntry['blockType']; note?: string } | null = null;
-            const move = ratioStaffMoves[`${empId}:${slot}`];
-            const effectiveRoom = move && move !== '__programming__' && move !== '__cleaning__' && move !== '__lunch__' && move !== '__additional__' && move !== '__removed__' && move !== 'float' && move !== 'iss'
-              ? centre.rooms.find(r => r.id === move)
-              : naturalRoom;
-            if (effectiveRoom) {
+            if (roomObj) {
               for (const fg of ratioFGConfigs) {
                 if (!fg.slots.includes(slot)) continue;
                 const fgRoomIds = fg.roomIds.length === 0 ? centre.rooms.map(r => r.id) : fg.roomIds;
-                if (fgRoomIds.includes(effectiveRoom.id)) {
+                if (fgRoomIds.includes(roomObj.id)) {
                   const heldIn = fg.heldInRoom ? (centre.rooms.find(r => r.id === fg.heldInRoom)?.name ?? fg.heldInRoom) : fg.label;
                   fgPos = { room: heldIn, blockType: 'grouping' as EducatorEntry['blockType'], note: `${fg.label} - held in ${heldIn}` };
                   break;
                 }
               }
             }
+
             if (fgPos) {
-              positions.push({ slot, ...fgPos });
+              positions.push({ slot, ...fgPos, exactIn: pos.exactIn, exactOut: pos.exactOut });
             } else {
-              const pos = posAt(empId, slot);
-              const room = pos.room || naturalRoomName;
               positions.push({ slot, room, blockType: pos.blockType, note: pos.note, exactIn: pos.exactIn, exactOut: pos.exactOut });
             }
           }
