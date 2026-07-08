@@ -874,7 +874,7 @@ export default function ReportingPage() {
     }
 
     // Only fetch the data each selected report actually needs.
-    const needAttendance      = needsOccupancy || needsRosterOpt || needsEducator;
+    const needAttendance      = needsOccupancy || needsRosterOpt || needsEducator || needsStaffingAnalysis;
     const needZCasuals        = needsCasual || needsEducator;
     const needAllocations     = needsEducator;
     const needFloatScheds     = needsEducator;
