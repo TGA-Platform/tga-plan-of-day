@@ -679,9 +679,20 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         const startStr = override?.start || formatRosterTime(r.startTime);
         const endStr   = override?.end   || formatRosterTime(r.endTime);
         if (!startStr || !endStr) return false;
-        const start = slotToMins(startStr);
-        const end   = slotToMins(endStr);
-        if (!(start <= slotMins && end > slotMins)) return false;
+        let inShift = false;
+        if (r.isSplitShift && Array.isArray(r.splitSegments) && r.splitSegments.length > 0) {
+          // Split shifts: staff is only present during the actual rostered segments
+          inShift = r.splitSegments.some(seg => {
+            const s = slotToMins(formatRosterTime(seg.startTime));
+            const e = slotToMins(formatRosterTime(seg.endTime));
+            return s !== null && e !== null && s <= slotMins && e > slotMins;
+          });
+        } else {
+          const start = slotToMins(startStr);
+          const end   = slotToMins(endStr);
+          inShift = start !== null && end !== null && start <= slotMins && end > slotMins;
+        }
+        if (!inShift) return false;
         // Deduplicate: split shift staff have 2 roster entries — only show once per slot
         if (seen.has(r.employeeId)) return false;
         seen.add(r.employeeId);
