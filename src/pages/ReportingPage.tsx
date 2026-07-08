@@ -74,25 +74,15 @@ interface WwccExpiryRow {
   exemptReason?: 'under_18' | 'kitchen'; // why they have no WWCC (exempt)
 }
 
-interface CasualEntry {
-  employeeId?: number;
-  zJobId?: string;
-  name: string;
-  start: string; // HH:MM
-  end: string;   // HH:MM
-  hours: number;
-  costCents?: number;
-  status?: string;
-  certLevel?: string;
-  type: 'internal' | 'external';
-}
-
 interface CasualDayRow {
   date: string;
   campus: string;
   centreId: string;
-  internal: CasualEntry[];
-  external: CasualEntry[];
+  internalCount: number;      // number of internal casual shifts
+  internalHours: number;      // total internal casual hours
+  externalCount: number;      // number of external (Z) casual shifts
+  externalHours: number;      // total external casual hours
+  externalCostCents: number;  // total external casual cost for the day
 }
 
 interface OccupancyRow {
@@ -718,34 +708,51 @@ export default function ReportingPage() {
       : '';
 
     // ── Build casual HTML ─────────────────────────────────────────────────────
+    // ── Build casual HTML ─────────────────────────────────────────────────────
     const casualHtml = viewingReport === 'casual' && casualRows.length > 0
-      ? casualRows.map(({ date, campus, internal, external }) => {
-          const intHours = internal.reduce((s, e) => s + e.hours, 0);
-          const extHours = external.reduce((s, e) => s + e.hours, 0);
-          const extCost  = external.reduce((s, e) => s + (e.costCents ?? 0), 0);
-          const intRows = internal.map((e, i) => `<tr style="background:${i % 2 === 0 ? 'white' : '#fafffe'}">
-            <td>${e.name}</td><td>${e.start}</td><td>${e.end}</td><td>${e.hours.toFixed(2)}</td>
-          </tr>`).join('');
-          const extRows = external.map((e, i) => `<tr style="background:${i % 2 === 0 ? 'white' : '#fafffe'}">
-            <td>${e.name}</td><td>${e.start}</td><td>${e.end}</td><td>${e.hours.toFixed(2)}</td><td>${e.status ?? '—'}</td><td>${e.certLevel ?? '—'}</td><td>$${((e.costCents ?? 0) / 100).toFixed(2)}</td>
-          </tr>`).join('');
-          return `
-            <div class="day-block">
-              <div class="day-header">
-                <span class="campus">${campus}</span>
-                <span class="date">${safeFormat(new Date(date), 'EEEE, d MMMM yyyy')}</span>
-                <span class="count">${internal.length} internal · ${external.length} external</span>
+      ? (() => {
+          const byDate: Record<string, CasualDayRow[]> = {};
+          for (const row of casualRows) (byDate[row.date] ??= []).push(row);
+          const dates = Object.keys(byDate).sort();
+          return dates.map(date => {
+            const dateRows = byDate[date].sort((a, b) => a.campus.localeCompare(b.campus));
+            const dateInternalHours = dateRows.reduce((s, r) => s + r.internalHours, 0);
+            const dateExternalHours = dateRows.reduce((s, r) => s + r.externalHours, 0);
+            const dateExternalCostCents = dateRows.reduce((s, r) => s + r.externalCostCents, 0);
+            return `
+              <div class="day-block">
+                <div class="day-header">
+                  <span class="campus">${safeFormat(new Date(date), 'EEEE, d MMMM yyyy')}</span>
+                  <span class="date">${dateRows.length} centre${dateRows.length !== 1 ? 's' : ''}</span>
+                  <span class="count">${dateInternalHours.toFixed(1)}h internal &middot; ${dateExternalHours.toFixed(1)}h external${dateExternalCostCents > 0 ? ' &middot; $' + (dateExternalCostCents / 100).toFixed(2) : ''}</span>
+                </div>
+                <table>
+                  <thead><tr><th>Centre</th><th>Internal Shifts</th><th>Internal Hours</th><th>External Shifts</th><th>External Hours</th><th>External Cost</th></tr></thead>
+                  <tbody>
+                    ${dateRows.map(day => `
+                      <tr>
+                        <td>${day.campus}</td>
+                        <td>${day.internalCount}</td>
+                        <td>${day.internalHours.toFixed(2)}</td>
+                        <td>${day.externalCount}</td>
+                        <td>${day.externalHours.toFixed(2)}</td>
+                        <td>$${(day.externalCostCents / 100).toFixed(2)}</td>
+                      </tr>
+                    `).join('')}
+                    <tr style="background:#fef3c7;font-weight:700">
+                      <td>Day total</td>
+                      <td>${dateRows.reduce((s, r) => s + r.internalCount, 0)}</td>
+                      <td>${dateInternalHours.toFixed(2)}</td>
+                      <td>${dateRows.reduce((s, r) => s + r.externalCount, 0)}</td>
+                      <td>${dateExternalHours.toFixed(2)}</td>
+                      <td>$${(dateExternalCostCents / 100).toFixed(2)}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
-              ${internal.length > 0 ? `<table>
-                <thead><tr><th>Name</th><th>Start</th><th>End</th><th>Hours</th></tr></thead>
-                <tbody>${intRows}<tr style="background:#fef3c7"><td colspan="3"><strong>Day total</strong></td><td><strong>${intHours.toFixed(2)}</strong></td></tr></tbody>
-              </table>` : ''}
-              ${external.length > 0 ? `<table>
-                <thead><tr><th>Name</th><th>Start</th><th>End</th><th>Hours</th><th>Status</th><th>Cert</th><th>Cost</th></tr></thead>
-                <tbody>${extRows}<tr style="background:#fff7ed"><td colspan="3"><strong>Day total</strong></td><td><strong>${extHours.toFixed(2)}</strong></td><td colspan="2"></td><td><strong>$${(extCost / 100).toFixed(2)}</strong></td></tr></tbody>
-              </table>` : ''}
-            </div>`;
-        }).join('')
+            `;
+          }).join('');
+        })()
       : '';
 
     win.document.write(`<!DOCTYPE html>
@@ -911,7 +918,8 @@ export default function ReportingPage() {
 
         // ── Casuals ──────────────────────────────────────────────────────
         if (needsCasual) {
-          const byEmp: Record<number, { name: string; startM: number; endM: number }> = {};
+          let internalHours = 0;
+          let internalCount = 0;
           for (const r of rosters as any[]) {
             if (!r.Employee || r.Employee === 0) continue;
             const name = r._DPMetaData?.EmployeeInfo?.DisplayName || `Staff ${r.Employee}`;
@@ -919,45 +927,29 @@ export default function ReportingPage() {
             const startM = hhmm(fmtTime(r.StartTime));
             const endM = hhmm(fmtTime(r.EndTime));
             if (startM === null || endM === null) continue;
-            const existing = byEmp[r.Employee];
-            if (!existing) {
-              byEmp[r.Employee] = { name, startM, endM };
-            } else {
-              existing.startM = Math.min(existing.startM, startM);
-              existing.endM = Math.max(existing.endM, endM);
-            }
-          }
-          const internalEntries: CasualEntry[] = [];
-          for (const [empId, e] of Object.entries(byEmp)) {
-            internalEntries.push({
-              employeeId: Number(empId),
-              name: e.name,
-              start: minsToHhmm(e.startM),
-              end: minsToHhmm(e.endM),
-              hours: (e.endM - e.startM) / 60,
-              type: 'internal',
-            });
+            let durM = endM - startM;
+            if (durM < 0) durM += 24 * 60; // overnight shift
+            internalHours += durM / 60;
+            internalCount += 1;
           }
 
-          const externalEntries: CasualEntry[] = (zCasuals as any[]).map((r: any) => {
+          let externalHours = 0;
+          let externalCostCents = 0;
+          let externalCount = 0;
+          for (const r of zCasuals as any[]) {
             const startM = hhmm(fmtTime(r.StartTime));
             const endM = hhmm(fmtTime(r.EndTime));
+            if (startM === null || endM === null) continue;
+            let durM = endM - startM;
+            if (durM < 0) durM += 24 * 60;
+            externalHours += durM / 60;
+            externalCount += 1;
             const meta = (r.externalCasualMeta ?? {}) as ExternalCasualMeta;
-            return {
-              zJobId: meta.zJobId,
-              name: r._DPMetaData?.EmployeeInfo?.DisplayName || 'Z Casual',
-              start: fmtTime(r.StartTime),
-              end: fmtTime(r.EndTime),
-              hours: startM !== null && endM !== null ? (endM - startM) / 60 : 0,
-              costCents: meta.costCents ?? 0,
-              status: meta.status,
-              certLevel: meta.certLevel,
-              type: 'external',
-            };
-          });
+            externalCostCents += meta.costCents ?? 0;
+          }
 
-          if (internalEntries.length > 0 || externalEntries.length > 0) {
-            casualAccum.push({ date, campus, centreId: centre.id, internal: internalEntries, external: externalEntries });
+          if (internalHours > 0 || externalHours > 0 || externalCostCents > 0) {
+            casualAccum.push({ date, campus, centreId: centre.id, internalCount, internalHours, externalCount, externalHours, externalCostCents });
           }
         }
 
@@ -3176,39 +3168,27 @@ export default function ReportingPage() {
 
             {/* ── CASUAL REPORT ── */}
             {viewingReport === 'casual' && (() => {
-              const byCampus: Record<string, CasualDayRow[]> = {};
-              for (const row of casualRows) {
-                (byCampus[row.campus] ??= []).push(row);
-              }
-              const campuses = Object.keys(byCampus).sort();
+              const byDate: Record<string, CasualDayRow[]> = {};
+              for (const row of casualRows) (byDate[row.date] ??= []).push(row);
+              const dates = Object.keys(byDate).sort();
 
-              const totalInternalStaff = casualRows.reduce((s, r) => s + r.internal.length, 0);
-              const totalExternalStaff = casualRows.reduce((s, r) => s + r.external.length, 0);
-              const totalInternalHours = casualRows.reduce((s, r) => s + r.internal.reduce((ss, e) => ss + e.hours, 0), 0);
-              const totalExternalHours = casualRows.reduce((s, r) => s + r.external.reduce((ss, e) => ss + e.hours, 0), 0);
-              const totalExternalCostCents = casualRows.reduce((s, r) => s + r.external.reduce((ss, e) => ss + (e.costCents ?? 0), 0), 0);
+              const totalInternalHours = casualRows.reduce((s, r) => s + r.internalHours, 0);
+              const totalExternalHours = casualRows.reduce((s, r) => s + r.externalHours, 0);
+              const totalExternalCostCents = casualRows.reduce((s, r) => s + r.externalCostCents, 0);
 
               return (
                 <div className="space-y-4">
                   <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
-                    <strong>Casual Report</strong> — Internal and external casuals used per day. External casual costs and hours are shown per person and totalled for the period.
+                    <strong>Casual Report</strong> - Internal and external casual hours used by centre, with external casual cost.
                   </div>
 
                   {casualRows.length > 0 && (
                     <div className="flex gap-3 flex-wrap">
                       <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
-                        <div className="text-2xl font-bold">{totalInternalStaff}</div>
-                        <div className="text-xs">Internal Casual Shifts</div>
-                      </div>
-                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fed7aa', color: '#c2410c' }}>
-                        <div className="text-2xl font-bold">{totalExternalStaff}</div>
-                        <div className="text-xs">External Casual Shifts</div>
-                      </div>
-                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
                         <div className="text-2xl font-bold">{totalInternalHours.toFixed(1)}</div>
                         <div className="text-xs">Internal Hours</div>
                       </div>
-                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fed7aa', color: '#c2410c' }}>
                         <div className="text-2xl font-bold">{totalExternalHours.toFixed(1)}</div>
                         <div className="text-xs">External Hours</div>
                       </div>
@@ -3221,90 +3201,55 @@ export default function ReportingPage() {
 
                   {casualRows.length === 0 ? (
                     <div className="text-sm italic" style={{ color: '#596570' }}>No casual data for the selected period.</div>
-                  ) : campuses.map(campus => {
-                    const campusRows = byCampus[campus];
-                    const campusInternalHours = campusRows.reduce((s, r) => s + r.internal.reduce((ss, e) => ss + e.hours, 0), 0);
-                    const campusExternalHours = campusRows.reduce((s, r) => s + r.external.reduce((ss, e) => ss + e.hours, 0), 0);
-                    const campusExternalCostCents = campusRows.reduce((s, r) => s + r.external.reduce((ss, e) => ss + (e.costCents ?? 0), 0), 0);
+                  ) : dates.map(date => {
+                    const dateRows = byDate[date].sort((a, b) => a.campus.localeCompare(b.campus));
+                    const dateInternalHours = dateRows.reduce((s, r) => s + r.internalHours, 0);
+                    const dateExternalHours = dateRows.reduce((s, r) => s + r.externalHours, 0);
+                    const dateExternalCostCents = dateRows.reduce((s, r) => s + r.externalCostCents, 0);
                     return (
-                      <div key={campus} className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                      <div key={date} className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
                         <div className="px-5 py-3 flex items-center justify-between" style={{ backgroundColor: '#2d5c18' }}>
                           <div>
-                            <div className="font-bold text-sm text-white">{campus}</div>
-                            <div className="text-xs" style={{ color: '#A0D083' }}>{campusRows.length} day{campusRows.length !== 1 ? 's' : ''}</div>
+                            <div className="font-bold text-sm text-white">{safeFormat(new Date(date), 'EEEE d MMMM yyyy')}</div>
+                            <div className="text-xs" style={{ color: '#A0D083' }}>{dateRows.length} centre{dateRows.length !== 1 ? 's' : ''}</div>
                           </div>
                           <div className="flex gap-2 text-xs text-white">
-                            <span>{campusInternalHours.toFixed(1)}h internal</span>
+                            <span>{dateInternalHours.toFixed(1)}h internal</span>
                             <span>·</span>
-                            <span>{campusExternalHours.toFixed(1)}h external</span>
-                            {campusExternalCostCents > 0 && <><span>·</span><span>${(campusExternalCostCents / 100).toFixed(2)}</span></>}
+                            <span>{dateExternalHours.toFixed(1)}h external</span>
+                            {dateExternalCostCents > 0 && <><span>·</span><span>${(dateExternalCostCents / 100).toFixed(2)}</span></>}
                           </div>
                         </div>
-                        <div className="space-y-4 p-4">
-                          {campusRows.map(day => (
-                            <div key={day.date} className="rounded-xl border" style={{ borderColor: '#E2F1DA' }}>
-                              <div className="px-4 py-2 text-sm font-semibold" style={{ backgroundColor: '#F5FAF3', color: '#2d5c18' }}>
-                                {safeFormat(new Date(day.date), 'EEEE d MMMM yyyy')}
-                              </div>
-                              {day.internal.length > 0 && (
-                                <div className="p-3">
-                                  <div className="text-xs font-semibold mb-2" style={{ color: '#92400e' }}>Internal Casuals</div>
-                                  <table className="w-full text-sm">
-                                    <thead>
-                                      <tr style={{ backgroundColor: '#F5FAF3' }}>
-                                        {['Name','Start','End','Hours'].map(h => <th key={h} className="py-1 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>)}
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {day.internal.map((e, i) => (
-                                        <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
-                                          <td className="py-1.5 px-3 font-medium" style={{ color: '#050505' }}>{e.name}</td>
-                                          <td className="py-1.5 px-3" style={{ color: '#2d5c18' }}>{e.start}</td>
-                                          <td className="py-1.5 px-3" style={{ color: '#596570' }}>{e.end}</td>
-                                          <td className="py-1.5 px-3" style={{ color: '#92400e' }}>{e.hours.toFixed(2)}</td>
-                                        </tr>
-                                      ))}
-                                      <tr className="border-t" style={{ backgroundColor: '#fef3c7' }}>
-                                        <td className="py-1.5 px-3 font-semibold" colSpan={3} style={{ color: '#92400e' }}>Day total</td>
-                                        <td className="py-1.5 px-3 font-semibold" style={{ color: '#92400e' }}>{day.internal.reduce((s, e) => s + e.hours, 0).toFixed(2)}</td>
-                                      </tr>
-                                    </tbody>
-                                  </table>
-                                </div>
-                              )}
-                              {day.external.length > 0 && (
-                                <div className="p-3">
-                                  <div className="text-xs font-semibold mb-2" style={{ color: '#c2410c' }}>External Casuals</div>
-                                  <table className="w-full text-sm">
-                                    <thead>
-                                      <tr style={{ backgroundColor: '#F5FAF3' }}>
-                                        {['Name','Start','End','Hours','Status','Cert','Cost'].map(h => <th key={h} className="py-1 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>)}
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {day.external.map((e, i) => (
-                                        <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
-                                          <td className="py-1.5 px-3 font-medium" style={{ color: '#050505' }}>{e.name}</td>
-                                          <td className="py-1.5 px-3" style={{ color: '#2d5c18' }}>{e.start}</td>
-                                          <td className="py-1.5 px-3" style={{ color: '#596570' }}>{e.end}</td>
-                                          <td className="py-1.5 px-3" style={{ color: '#c2410c' }}>{e.hours.toFixed(2)}</td>
-                                          <td className="py-1.5 px-3" style={{ color: '#596570' }}>{e.status ?? '-'}</td>
-                                          <td className="py-1.5 px-3" style={{ color: '#596570' }}>{e.certLevel ?? '-'}</td>
-                                          <td className="py-1.5 px-3 font-medium" style={{ color: '#c2410c' }}>${((e.costCents ?? 0) / 100).toFixed(2)}</td>
-                                        </tr>
-                                      ))}
-                                      <tr className="border-t" style={{ backgroundColor: '#fff7ed' }}>
-                                        <td className="py-1.5 px-3 font-semibold" colSpan={3} style={{ color: '#c2410c' }}>Day total</td>
-                                        <td className="py-1.5 px-3 font-semibold" style={{ color: '#c2410c' }}>{day.external.reduce((s, e) => s + e.hours, 0).toFixed(2)}</td>
-                                        <td className="py-1.5 px-3" colSpan={2}></td>
-                                        <td className="py-1.5 px-3 font-semibold" style={{ color: '#c2410c' }}>${(day.external.reduce((s, e) => s + (e.costCents ?? 0), 0) / 100).toFixed(2)}</td>
-                                      </tr>
-                                    </tbody>
-                                  </table>
-                                </div>
-                              )}
-                            </div>
-                          ))}
+                        <div className="p-4">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr style={{ backgroundColor: '#F5FAF3' }}>
+                                {['Centre','Internal Shifts','Internal Hours','External Shifts','External Hours','External Cost'].map(h => (
+                                  <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {dateRows.map((day, i) => (
+                                <tr key={day.campus} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
+                                  <td className="py-2 px-3 font-medium" style={{ color: '#050505' }}>{day.campus}</td>
+                                  <td className="py-2 px-3" style={{ color: '#92400e' }}>{day.internalCount}</td>
+                                  <td className="py-2 px-3" style={{ color: '#92400e' }}>{day.internalHours.toFixed(2)}</td>
+                                  <td className="py-2 px-3" style={{ color: '#c2410c' }}>{day.externalCount}</td>
+                                  <td className="py-2 px-3" style={{ color: '#c2410c' }}>{day.externalHours.toFixed(2)}</td>
+                                  <td className="py-2 px-3 font-medium" style={{ color: '#c2410c' }}>${(day.externalCostCents / 100).toFixed(2)}</td>
+                                </tr>
+                              ))}
+                              <tr className="border-t" style={{ backgroundColor: '#fef3c7' }}>
+                                <td className="py-2 px-3 font-semibold" style={{ color: '#2d5c18' }}>Day total</td>
+                                <td className="py-2 px-3 font-semibold" style={{ color: '#92400e' }}>{dateRows.reduce((s, r) => s + r.internalCount, 0)}</td>
+                                <td className="py-2 px-3 font-semibold" style={{ color: '#92400e' }}>{dateInternalHours.toFixed(2)}</td>
+                                <td className="py-2 px-3 font-semibold" style={{ color: '#c2410c' }}>{dateRows.reduce((s, r) => s + r.externalCount, 0)}</td>
+                                <td className="py-2 px-3 font-semibold" style={{ color: '#c2410c' }}>{dateExternalHours.toFixed(2)}</td>
+                                <td className="py-2 px-3 font-semibold" style={{ color: '#c2410c' }}>${(dateExternalCostCents / 100).toFixed(2)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
                         </div>
                       </div>
                     );
