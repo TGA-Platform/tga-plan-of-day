@@ -119,43 +119,63 @@ export default async function handler(req, res) {
     groupedByEmp.set(entry.Employee, group);
   }
 
+  const isNonRatio = (e) => {
+    const uName = (e._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
+    return uName.includes('study time') || uName.includes('staff meeting');
+  };
+
   const deduped = [];
   for (const [, entries] of groupedByEmp) {
     if (entries.length === 1) { deduped.push(entries[0]); continue; }
-    const sorted = [...entries].sort((a, b) => String(a.StartTime).localeCompare(String(b.StartTime)));
+
+    const ratioEntries = entries.filter(e => !isNonRatio(e));
+    const nonRatioEntries = entries.filter(e => isNonRatio(e));
+
+    // No ratio entries (e.g., Director/Admin with only meetings) — never split.
+    if (ratioEntries.length === 0) {
+      const sorted = [...entries].sort((a, b) => String(a.StartTime).localeCompare(String(b.StartTime)));
+      deduped.push({ ...sorted[0], StartTime: sorted[0].StartTime, EndTime: sorted[sorted.length - 1].EndTime });
+      continue;
+    }
+
+    // Split-shift detection must only look at ratio entries.
+    // A staff meeting after a room shift should NOT mark someone as split.
+    const sortedRatio = [...ratioEntries].sort((a, b) => String(a.StartTime).localeCompare(String(b.StartTime)));
     let isSplit = false;
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const gap = toMins(sorted[i + 1].StartTime) - toMins(sorted[i].EndTime);
+    for (let i = 0; i < sortedRatio.length - 1; i++) {
+      const gap = toMins(sortedRatio[i + 1].StartTime) - toMins(sortedRatio[i].EndTime);
       if (gap >= SPLIT_GAP_MINS) { isSplit = true; break; }
     }
+
     if (isSplit) {
       // Split shift: keep each segment as a separate entry so the ratio check
       // slot filter shows staff only when they are actually on shift.
       // Mark all segments with isSplitShift=true so the dashboard routes them
       // to Support and shows the Plan Day button.
-      // Exclude study time / non-ratio segments (they have no ratio value).
-      const ratioSegments = sorted.filter(e => {
-        const uName = (e._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
-        return !uName.includes('study time') && !uName.includes('staff meeting');
-      });
-      const allSegments = ratioSegments.map(s => ({ StartTime: s.StartTime, EndTime: s.EndTime }));
-      for (const seg of ratioSegments) {
+      const allSegments = sortedRatio.map(s => ({ StartTime: s.StartTime, EndTime: s.EndTime }));
+      for (const seg of sortedRatio) {
         deduped.push({ ...seg, isSplitShift: true, splitSegments: allSegments });
       }
     } else {
-      // Not split — merge into one (earliest start, latest end).
-      // Prefer a room/ratio unit as the primary entry over study-time/non-ratio
-      // units so the staff member appears in the correct room on the plan of day.
-      // e.g. Trainee Study Time 07:30-08:30 + 4-5 Achievers 08:30-16:30
-      //   → should show as 4-5 Achievers 07:30-16:30, not Study Time.
-      const isNonRatio = (e) => {
-        const uName = (e._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
-        return uName.includes('study time') || uName.includes('staff meeting');
-      };
-      const primary = sorted.find(e => !isNonRatio(e)) ?? sorted[0];
-      const first   = sorted[0];
-      const last    = sorted[sorted.length - 1];
-      deduped.push({ ...primary, StartTime: first.StartTime, EndTime: last.EndTime });
+      // Not split — merge ratio entries into one (earliest start, latest end).
+      // Also merge in any overlapping/adjacent non-ratio entries (e.g., study
+      // time just before a room shift) so the staff member appears in the
+      // correct room for the full span.
+      let mergedStart = sortedRatio[0].StartTime;
+      let mergedEnd   = sortedRatio[sortedRatio.length - 1].EndTime;
+      const mergedStartM = toMins(mergedStart);
+      const mergedEndM   = toMins(mergedEnd);
+
+      for (const nr of nonRatioEntries) {
+        const nrStartM = toMins(nr.StartTime);
+        const nrEndM   = toMins(nr.EndTime);
+        if (nrStartM <= mergedEndM && nrEndM >= mergedStartM) {
+          if (nrStartM < mergedStartM) mergedStart = nr.StartTime;
+          if (nrEndM > mergedEndM) mergedEnd = nr.EndTime;
+        }
+      }
+
+      deduped.push({ ...sortedRatio[0], StartTime: mergedStart, EndTime: mergedEnd });
     }
   }
 
