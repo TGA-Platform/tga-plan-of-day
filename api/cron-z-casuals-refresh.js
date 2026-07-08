@@ -105,6 +105,12 @@ function parseStatus(raw) {
   return raw.split('|')[0];
 }
 
+function hhmmToMins(t) {
+  const [h, m] = t.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+}
+
 async function fetchExistingCosts(zJobIds) {
   if (!zJobIds.length) return new Map();
   const costMap = new Map();
@@ -223,6 +229,7 @@ async function fetchCentre(centre, dates, auth) {
           certLevel,
           costCents,
           workspaceId: j.workspaceId,
+          _rawRate:    j.hourlyRateUsed,
         };
       })
       .filter(j => j.isFilled && j.name);
@@ -246,7 +253,21 @@ async function fetchCentre(centre, dates, auth) {
 
   // Diagnostic: log the first few computed rows for this centre.
   console.log(`[cron-z-casuals] ${centre}: first computed rows:`,
-    rows.slice(0, 3).map(r => ({ z_job_id: r.z_job_id, name: r.name, cost_cents: r.cost_cents })));
+    dayJobs.slice(0, 3).map(j => {
+      const startM = hhmmToMins(j.start);
+      const endM = hhmmToMins(j.end);
+      const durHrs = startM !== null && endM !== null ? (endM >= startM ? endM - startM : endM + 24 * 60 - startM) / 60 : 0;
+      return {
+        z_job_id: j.zJobId,
+        name: j.name,
+        date,
+        cost_cents: j.costCents,
+        start: j.start,
+        end: j.end,
+        duration_hrs: durHrs,
+        raw_rate: j._rawRate,
+      };
+    }));
 
   return rows;
 }
