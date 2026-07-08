@@ -1288,11 +1288,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return sessionData.roomVisitors?.[getVisitorKey(slot, roomId)] ?? [];
   }
 
-  /** Find which slot bucket a visitor was originally stored in. */
+  /** Find which slot bucket a visitor was originally stored in.
+   *  Key format is `${slot}:${roomId}`; slot itself contains a colon (HH:MM),
+   *  so we take everything before the final colon. */
   function findVisitorStorageSlot(roomId: string, visitorId: string): string | null {
     for (const [key, list] of Object.entries(sessionData.roomVisitors ?? {})) {
       if (!key.endsWith(`:${roomId}`)) continue;
-      if (list?.some(v => v.id === visitorId)) return key.split(':')[0];
+      if (list?.some(v => v.id === visitorId)) return key.slice(0, key.lastIndexOf(':'));
     }
     return null;
   }

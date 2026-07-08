@@ -1103,9 +1103,11 @@ export default function ReportingPage() {
           }
           // Collect visitor entries from all sessions for the Reg 151 report.
           // Visitors may be stored under any slot bucket, so de-duplicate by id.
+          // Key format is `${slot}:${roomId}`; slot itself contains a colon (HH:MM),
+          // so the roomId is everything after the final colon.
           const visitors = (row.data?.roomVisitors ?? {}) as Record<string, Array<{ id: string; name: string; wwccNumber?: string; enteredAt: string; exitedAt?: string }>>;
           for (const [key, list] of Object.entries(visitors)) {
-            const roomId = key.split(':').slice(1).join(':');
+            const roomId = key.slice(key.lastIndexOf(':') + 1);
             for (const v of (list ?? [])) {
               if (!ratioVisitors.find(rv => rv.id === v.id)) {
                 ratioVisitors.push({ ...v, roomId });
