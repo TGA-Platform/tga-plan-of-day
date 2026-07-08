@@ -866,6 +866,16 @@ export default function ReportingPage() {
       } catch { /* ignore */ }
     }
 
+    // Only fetch the data each selected report actually needs.
+    const needAttendance      = needsOccupancy || needsRosterOpt || needsEducator;
+    const needZCasuals        = needsCasual || needsEducator;
+    const needAllocations     = needsEducator;
+    const needFloatScheds     = needsEducator;
+    const needGroupingSessions = needsEducator;
+    const needRatioCheck      = needsEducator || needsStaffingAnalysis;
+    const needDeputyActuals   = needsEducator;
+
+
     if (needsDateLoop) for (const centre of selectedCentres) {
       const campus = centre.ownaName ?? centre.name;
       const allUnitIds = [
@@ -877,27 +887,26 @@ export default function ReportingPage() {
       ];
 
       for (const date of dates) {
-        // Fetch in parallel
+        // Fetch only the endpoints the selected reports need.
         const [att, rosters, zCasuals, allocations, floatScheds, groupingSessionRows, ratioCheckRows, deputyActuals] = await Promise.all([
-          fetchAttendance(campus, date),
+          needAttendance ? fetchAttendance(campus, date) : Promise.resolve([]),
           fetchRostersForDate(allUnitIds, date),
-          fetchZCasualsForDate(centre.name, date),
-          fetch(`/api/staff-allocations?centre=${encodeURIComponent(centre.id)}&date=${date}`)
-            .then(r => r.ok ? r.json() : []).catch(() => []),
-          fetch(`/api/float-schedules?centre=${encodeURIComponent(centre.id)}&date=${date}`)
-            .then(r => r.ok ? r.json() : []).catch(() => []),
-          fetch(`/api/grouping-sessions?centre=${encodeURIComponent(centre.id)}&date=${date}`)
-            .then(r => r.ok ? r.json() : []).catch(() => []),
-          fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centre.id)}&date=${date}`)
-            .then(r => r.ok ? r.json() : []).catch(() => []),
-          // Fetch actual Deputy timesheet times scoped to this centre's unit IDs
-          fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`)
-            .then(r => r.ok ? r.json() : []).catch(() => []),
+          needZCasuals ? fetchZCasualsForDate(centre.name, date) : Promise.resolve([]),
+          needAllocations ? fetch(`/api/staff-allocations?centre=${encodeURIComponent(centre.id)}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+          needFloatScheds ? fetch(`/api/float-schedules?centre=${encodeURIComponent(centre.id)}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+          needGroupingSessions ? fetch(`/api/grouping-sessions?centre=${encodeURIComponent(centre.id)}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+          needRatioCheck ? fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centre.id)}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+          needDeputyActuals ? fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
         ]);
 
         // Include external casuals in the roster loop so their room allocation
         // follows the same ratio-check logic as every other staff member.
-        const rostersWithExternal = [...(rosters as any[]), ...(zCasuals as any[])];
+        const rostersWithExternal = needsEducator ? [...(rosters as any[]), ...(zCasuals as any[])] : (rosters as any[]);
         if (needsEducator) groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
 
         // ── Casuals ──────────────────────────────────────────────────────
