@@ -1378,13 +1378,19 @@ export default function ReportingPage() {
           // Position at each slot (including FG override)
           const positions: Array<{ slot: string; room: string; blockType: EducatorEntry['blockType']; note?: string; exactIn?: string; exactOut?: string }> = [];
           for (const slot of shiftSlots) {
-            // Check if a confirmed FG covers this employee at this slot
+            // Check if a confirmed FG covers this employee at this slot.
+            // Use the effective room (natural roster room or a drag-and-drop move
+            // into an FG room) so staff moved into a grouping still report as grouping.
             let fgPos: { room: string; blockType: EducatorEntry['blockType']; note?: string } | null = null;
-            if (naturalRoom && !ratioStaffMoves[`${empId}:${slot}`]) {
+            const move = ratioStaffMoves[`${empId}:${slot}`];
+            const effectiveRoom = move && move !== '__programming__' && move !== '__cleaning__' && move !== '__lunch__' && move !== '__additional__' && move !== '__removed__' && move !== 'float' && move !== 'iss'
+              ? centre.rooms.find(r => r.id === move)
+              : naturalRoom;
+            if (effectiveRoom) {
               for (const fg of ratioFGConfigs) {
                 if (!fg.slots.includes(slot)) continue;
                 const fgRoomIds = fg.roomIds.length === 0 ? centre.rooms.map(r => r.id) : fg.roomIds;
-                if (fgRoomIds.includes(naturalRoom.id)) {
+                if (fgRoomIds.includes(effectiveRoom.id)) {
                   const heldIn = fg.heldInRoom ? (centre.rooms.find(r => r.id === fg.heldInRoom)?.name ?? fg.heldInRoom) : fg.label;
                   fgPos = { room: heldIn, blockType: 'grouping' as EducatorEntry['blockType'], note: `${fg.label} - held in ${heldIn}` };
                   break;
@@ -1536,9 +1542,11 @@ export default function ReportingPage() {
           });
         }
 
-        // Overlay confirmed family groupings (same logic as before)
+        // Overlay family groupings. Include suggested sessions as well as
+        // confirmed/modified ones, because directors create groupings in the
+        // Ratio Check panel and expect them to flow straight through to Reg 151.
         const confirmedGroupings = (groupingSessionRows as any[]).filter(gs =>
-          ['confirmed', 'auto-confirmed', 'modified'].includes(gs.confirmation_status)
+          ['confirmed', 'auto-confirmed', 'modified', 'suggested'].includes(gs.confirmation_status)
         );
         if (confirmedGroupings.length > 0) {
           for (const gs of confirmedGroupings) {
