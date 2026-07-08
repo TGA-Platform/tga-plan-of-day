@@ -37,6 +37,7 @@ interface RatioCheckSession {
   comments: Record<string, string>; // "HH:MM"
   familyGroupings: FamilyGroupingConfig[];
   staffMoves: Record<string, string>; // "${empId}:${slot}" ? roomId | "none" | "__float__"
+  staffNotes: Record<string, string>; // "${empId}:${slot}" -> free-text note (e.g. ISS room support)
   staffTimeOverrides: Record<string, {
     start: string;
     end: string;
@@ -96,6 +97,7 @@ const EMPTY_SESSION: RatioCheckSession = {
   comments: {},
   familyGroupings: [],
   staffMoves: {},
+  staffNotes: {},
   staffTimeOverrides: {} as Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy'; isOvertime?: boolean; comment?: string }>,
   roomVisitors: {},
 };
@@ -285,6 +287,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [timeEditorLunchEnd, setTimeEditorLunchEnd] = useState('');
   const [timeEditorOvertime, setTimeEditorOvertime] = useState(false);
   const [timeEditorComment, setTimeEditorComment] = useState('');
+  const [noteEditorModal, setNoteEditorModal] = useState<{ empId: number; name: string; slot: string } | null>(null);
+  const [noteEditorText, setNoteEditorText] = useState('');
   const [fgPanelOpen, setFgPanelOpen] = useState(false);
   const [editingFgId, setEditingFgId] = useState<string | null>(null);
   const [fgPopoverSlot, setFgPopoverSlot] = useState<string | null>(null);
@@ -484,6 +488,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             ...row.data,
             familyGroupings: row.data.familyGroupings ?? legacyFG,
             staffMoves: row.data.staffMoves ?? {},
+            staffNotes: row.data.staffNotes ?? {},
             staffTimeOverrides: row.data.staffTimeOverrides ?? {},
             roomVisitors: (row.data as any).roomVisitors ?? {},
           };
@@ -787,6 +792,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           const bStart = slotToMins(String(block.startTime ?? '00:00'));
           const bEnd   = slotToMins(String(block.endTime   ?? '00:00'));
           if (slotMins < bStart || slotMins >= bEnd) continue;
+          // Manual ratio-check moves override scheduled float covers for this slot
+          const manualMove = sessionData.staffMoves[`${floatEmpId}:${slot}`];
+          if (manualMove !== undefined && manualMove !== block.roomId) continue;
           // Float is covering a room (any block type that puts them in a room)
           if (!roomCover[block.roomId]) roomCover[block.roomId] = [];
           if (!roomCover[block.roomId].includes(floatEmpId)) roomCover[block.roomId].push(floatEmpId);
@@ -795,7 +803,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       map[slot] = roomCover;
     }
     return map;
-  }, [floatScheds]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [floatScheds, sessionData.staffMoves]);
 
   // -- Computed getters -------------------------------------------------------
 
@@ -892,13 +901,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   }
 
   /** Count staff physically on the floor - in a room - at this slot.
-   *  Excludes anyone in Additional Duties, unassigned floats, or off-floor.
+   *  Excludes anyone in Additional Duties, unassigned floats, off-floor, or ISS staff.
+   *  ISS staff may be placed in a room for support but do not count toward ratio.
    *  Includes active visitors (e.g. AD passing through).
    *  Manual override (staffAvailableOverride) still takes priority if set. */
   function getStaffOnFloor(slot: string): number {
     const empIds = new Set<number>();
     for (const room of rooms) {
-      getStaffForRoom(slot, room).forEach(s => empIds.add(s.employeeId));
+      getStaffForRoom(slot, room).forEach(s => {
+        if (!issUnitIdsSet.has(s.unitId)) empIds.add(s.employeeId);
+      });
     }
     // Add active visitors across all rooms at this slot
     let visitorCount = 0;
@@ -1251,26 +1263,64 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     setAfternoonData(prev =>{ const next = removeOverride(prev); save('afternoon',next); return next; });
   }
 
+  /** Add/edit a free-text note for a staff member in a specific slot.
+   *  Used for ISS room-support notes that flow through to the Reg 151 report. */
+  function updateStaffNote(empId: number, slot: string, note: string) {
+    setSessionData(prev => {
+      const key = `${empId}:${slot}`;
+      const notes = { ...prev.staffNotes };
+      if (note.trim()) notes[key] = note.trim();
+      else delete notes[key];
+      const next = { ...prev, staffNotes: notes };
+      scheduleAutoSave(next);
+      return next;
+    });
+  }
+
   // -- Visitor log helpers --------------------------------------------------
 
   function getVisitorKey(slot: string, roomId: string) { return `${slot}:${roomId}`; }
 
+  /** Return visitors stored under this exact slot:room bucket (used by the 7am summary). */
   function getVisitorsForSlotRoom(slot: string, roomId: string): RoomVisitor[] {
     return sessionData.roomVisitors?.[getVisitorKey(slot, roomId)] ?? [];
   }
 
-  /** Count visitors currently present at a slot in a room (entered = slotMins, not yet exited or exit > slotMins) */
-  function countActiveVisitors(slot: string, roomId: string): number {
+  /** Find which slot bucket a visitor was originally stored in. */
+  function findVisitorStorageSlot(roomId: string, visitorId: string): string | null {
+    for (const [key, list] of Object.entries(sessionData.roomVisitors ?? {})) {
+      if (!key.endsWith(`:${roomId}`)) continue;
+      if (list?.some(v => v.id === visitorId)) return key.split(':')[0];
+    }
+    return null;
+  }
+
+  /** Return visitors active in a room at a given slot, regardless of which bucket they were stored in.
+   *  This lets visitors "pull through" to every slot they were physically present. */
+  function getActiveVisitorsForSlotRoom(slot: string, roomId: string): RoomVisitor[] {
     const slotMins = slotToMins(slot);
-    return getVisitorsForSlotRoom(slot, roomId).filter(v => {
-      const entered = slotToMins(v.enteredAt);
-      if (entered > slotMins) return false;
-      if (v.exitedAt) {
-        const exited = slotToMins(v.exitedAt);
-        return exited > slotMins;
+    const active: RoomVisitor[] = [];
+    const seen = new Set<string>();
+    for (const [key, list] of Object.entries(sessionData.roomVisitors ?? {})) {
+      if (!key.endsWith(`:${roomId}`)) continue;
+      for (const v of list ?? []) {
+        if (seen.has(v.id)) continue;
+        const entered = slotToMins(v.enteredAt);
+        if (entered === null || entered > slotMins) continue;
+        if (v.exitedAt) {
+          const exited = slotToMins(v.exitedAt);
+          if (exited !== null && exited <= slotMins) continue;
+        }
+        seen.add(v.id);
+        active.push(v);
       }
-      return true; // still present
-    }).length;
+    }
+    return active;
+  }
+
+  /** Count visitors currently present at a slot in a room (entered <= slotMins, not yet exited or exit > slotMins) */
+  function countActiveVisitors(slot: string, roomId: string): number {
+    return getActiveVisitorsForSlotRoom(slot, roomId).length;
   }
 
   function addVisitor(slot: string, roomId: string, name: string, enteredAt: string, exitedAt?: string) {
@@ -2312,8 +2362,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                       const childCount = cell?.children ?? autoChildCounts[key] ?? 0;
                       const required = getStaffRequired(slot, room);
                       const roomStaff = getStaffForRoom(slot, room);
-                      // Per-room ratio check: red if room has fewer staff than required
-                      const roomUnderRatio = required > 0 && roomStaff.length < required;
+                      // ISS staff are visible in the room but do not count toward ratio.
+                      const ratioStaffCount = roomStaff.filter(s => !issUnitIdsSet.has(s.unitId)).length;
+                      // Per-room ratio check: red if room has fewer ratio staff than required
+                      const roomUnderRatio = required > 0 && ratioStaffCount < required;
                       const unassignedStaff = getUnassignedStaffAtSlot(slot);
                       const editCellKey = `${room.id}:${slot}`;
 
@@ -2397,6 +2449,18 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                         {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
                                         {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                         {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
+                                        {issUnitIdsSet.has(s.unitId) && (
+                                          <button
+                                            className="no-print"
+                                            onClick={e => { e.stopPropagation(); const key = `${s.employeeId}:${slot}`; setNoteEditorText(sessionData.staffNotes[key] ?? ''); setNoteEditorModal({ empId: s.employeeId, name: s.employeeName, slot }); }}
+                                            title={sessionData.staffNotes[`${s.employeeId}:${slot}`] ? `ISS note: ${sessionData.staffNotes[`${s.employeeId}:${slot}`]}` : 'Add ISS support note'}
+                                            style={{
+                                              border: 'none', background: 'none', cursor: 'pointer',
+                                              fontSize: '10px', color: sessionData.staffNotes[`${s.employeeId}:${slot}`] ? '#6d28d9' : '#9ca3af', padding: '0 1px', lineHeight: 1,
+                                              display: 'inline-flex', alignItems: 'center',
+                                            }}
+                                          >📝</button>
+                                        )}
                                         <button
                                           className="no-print"
                                           onClick={e => { e.stopPropagation(); const t = getStaffTime(s); setTimeEditorStart(t.start); setTimeEditorEnd(t.end); setTimeEditorLunchStart(t.lunchStart ?? ''); setTimeEditorLunchEnd(t.lunchEnd ?? ''); setTimeEditorOvertime(sessionData.staffTimeOverrides[s.employeeId]?.isOvertime ?? false); setTimeEditorComment(sessionData.staffTimeOverrides[s.employeeId]?.comment ?? ''); setTimeEditorModal({ empId: s.employeeId, name: s.employeeName, rosterStart: formatRosterTime(s.startTime) || '', rosterEnd: formatRosterTime(s.endTime) || '' }); }}
@@ -2437,14 +2501,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                   </div>
                                 );
                               })}
-                              {roomStaff.length === 0 && getVisitorsForSlotRoom(slot, room.id).length === 0 && (
+                              {roomStaff.length === 0 && getActiveVisitorsForSlotRoom(slot, room.id).length === 0 && (
                                 <span style={{ fontSize: '9px', color: '#93c5fd', fontStyle: 'italic' }}>
                                   {dragOver === `${room.id}:${slot}` ? 'Drop here' : '-'}
                                 </span>
                               )}
 
-                              {/* Visitor chips */}
-                              {getVisitorsForSlotRoom(slot, room.id).map(v => {
+                              {/* Visitor chips - show active visitors for this slot even if stored under a different sign-in slot */}
+                              {getActiveVisitorsForSlotRoom(slot, room.id).map(v => {
                                 const slotMins = slotToMins(slot);
                                 const entered = slotToMins(v.enteredAt);
                                 const exited = v.exitedAt ? slotToMins(v.exitedAt) : null;
@@ -2463,7 +2527,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                       <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{v.name}</span>
                                       <button
                                         className="no-print"
-                                        onClick={e => { e.stopPropagation(); removeVisitor(slot, room.id, v.id); }}
+                                        onClick={e => {
+                                          e.stopPropagation();
+                                          const storageSlot = findVisitorStorageSlot(room.id, v.id) ?? slot;
+                                          removeVisitor(storageSlot, room.id, v.id);
+                                        }}
                                         title="Remove visitor entry"
                                         style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '9px', color: '#dc2626', padding: '0 1px', lineHeight: 1, marginLeft: 'auto', fontWeight: 700 }}
                                       >✕</button>
@@ -2475,7 +2543,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                         : isActive && (
                                           <button
                                             className="no-print"
-                                            onClick={e => { e.stopPropagation(); openVisitorExitModal(slot, room.id, room.name, v.id, v.name); }}
+                                            onClick={e => {
+                                              e.stopPropagation();
+                                              const storageSlot = findVisitorStorageSlot(room.id, v.id) ?? slot;
+                                              openVisitorExitModal(storageSlot, room.id, room.name, v.id, v.name);
+                                            }}
                                             title="Record exit time"
                                             style={{
                                               fontSize: '8px', padding: '0px 4px', borderRadius: '3px',
@@ -2999,6 +3071,37 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                 onClick={() => { clearStaffTimeOverride(timeEditorModal.empId); setTimeEditorModal(null); }}
                 style={{ padding: '9px 14px', borderRadius: '8px', border: '1px solid #fca5a5', backgroundColor: '#fee2e2', color: '#dc2626', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
               >Reset</button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* -- ISS note editor modal -- */}
+      {noteEditorModal && (
+        <>
+          <div className="no-print" style={{ position: 'fixed', inset: 0, zIndex: 999, backgroundColor: 'rgba(0,0,0,0.35)' }} onClick={() => setNoteEditorModal(null)} />
+          <div className="no-print" style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 1000, backgroundColor: 'white', borderRadius: '12px', padding: '16px', width: '320px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 700, color: '#2d5c18', fontSize: '14px' }}>{noteEditorModal.name} — ISS note</span>
+              <button onClick={() => setNoteEditorModal(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#9ca3af', padding: '0 2px', lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ fontSize: '12px', color: '#6b7280' }}>Record which room/child this ISS staff member is supporting. This note appears on the Reg 151 report.</div>
+            <textarea
+              value={noteEditorText}
+              onChange={e => setNoteEditorText(e.target.value)}
+              placeholder="e.g. Supporting Toddlers room"
+              rows={3}
+              style={{ fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '8px', resize: 'vertical', fontFamily: 'inherit' }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => { updateStaffNote(noteEditorModal.empId, noteEditorModal.slot, noteEditorText); setNoteEditorModal(null); }}
+                style={{ flex: 1, padding: '9px', borderRadius: '8px', border: 'none', backgroundColor: '#2d5c18', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+              >Save note</button>
+              <button
+                onClick={() => setNoteEditorModal(null)}
+                style={{ padding: '9px 14px', borderRadius: '8px', border: '1px solid #d1d5db', backgroundColor: '#f9fafb', color: '#374151', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
+              >Cancel</button>
             </div>
           </div>
         </>

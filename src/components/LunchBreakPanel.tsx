@@ -253,7 +253,14 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
   }, {});
 
   return (
-    <div className="rounded-2xl border overflow-hidden shadow-sm" style={{ borderColor: '#fde68a' }}>
+    <div className="rounded-2xl border overflow-hidden shadow-sm lunch-break-panel" style={{ borderColor: '#fde68a' }}>
+      <style>{`
+        @media print {
+          .lunch-break-panel { box-shadow: none !important; border: 1px solid #d1d5db !important; }
+          .lunch-break-panel button, .lunch-break-panel .cursor-pointer { display: none !important; }
+          .lunch-break-panel .bg-white { display: block !important; }
+        }
+      `}</style>
       {/* Header */}
       <div
         className="px-4 py-3 flex items-center justify-between cursor-pointer select-none"
@@ -289,6 +296,14 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
             style={{ backgroundColor: saved ? '#16a34a' : '#d97706' }}
           >
             {saved ? '✓ Saved' : saving ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            onClick={() => window.print()}
+            className="text-xs px-2.5 py-1 rounded-lg border font-medium"
+            style={{ borderColor: '#fde68a', color: '#92400e', backgroundColor: 'white' }}
+            title="Print lunch break plan"
+          >
+            🖨 Print
           </button>
           <span className="text-xs" style={{ color: '#b45309' }}>{collapsed ? '▾' : '▴'}</span>
         </div>

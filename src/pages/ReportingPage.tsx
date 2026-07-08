@@ -1086,14 +1086,17 @@ export default function ReportingPage() {
           }
         }
 
-        // Build combined staffMoves + FG configs + time overrides from all ratio-check sessions
+        // Build combined staffMoves + FG configs + time overrides + notes from all ratio-check sessions
         const ratioStaffMoves: Record<string, string> = {};
+        const ratioStaffNotes: Record<string, string> = {};
         const ratioFGConfigs: Array<{ id: string; label: string; roomIds: string[]; slots: string[]; heldInRoom?: string }> = [];
         const ratioTimeOverrides: Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string }> = {};
 
         for (const row of (ratioCheckRows as any[])) {
           const moves = (row.data?.staffMoves ?? {}) as Record<string, string>;
           Object.assign(ratioStaffMoves, moves);
+          const notes = (row.data?.staffNotes ?? {}) as Record<string, string>;
+          Object.assign(ratioStaffNotes, notes);
           for (const fg of (row.data?.familyGroupings ?? [])) {
             if (!ratioFGConfigs.find(f => f.id === fg.id)) ratioFGConfigs.push(fg);
           }
@@ -1204,16 +1207,17 @@ export default function ReportingPage() {
         function posAt(empId: number, slot: string): { room: string; blockType: EducatorEntry['blockType']; note?: string; exactIn?: string; exactOut?: string } {
           const key = `${empId}:${slot}`;
           const move = ratioStaffMoves[key];
+          const staffNote = ratioStaffNotes[key];
           if (move !== undefined) {
-            if (move === '__programming__') return { room: 'Programming', blockType: 'shift', note: 'Programming' };
-            if (move === '__cleaning__')    return { room: 'Cleaning',    blockType: 'shift', note: 'Cleaning' };
-            if (move === '__lunch__')       return { room: 'Lunch Break', blockType: 'lunch_break' };
-            if (move === '__additional__')  return { room: 'Additional Duties', blockType: 'shift' };
-            if (move === '__removed__')     return { room: 'Off Roster', blockType: 'shift' };
+            if (move === '__programming__') return { room: 'Programming', blockType: 'shift', note: staffNote || 'Programming' };
+            if (move === '__cleaning__')    return { room: 'Cleaning',    blockType: 'shift', note: staffNote || 'Cleaning' };
+            if (move === '__lunch__')       return { room: 'Lunch Break', blockType: 'lunch_break', note: staffNote };
+            if (move === '__additional__')  return { room: 'Additional Duties', blockType: 'shift', note: staffNote };
+            if (move === '__removed__')     return { room: 'Off Roster', blockType: 'shift', note: staffNote };
             const r = centre.rooms.find(r => r.id === move);
-            if (r) return { room: r.name, blockType: 'shift' };
+            if (r) return { room: r.name, blockType: 'shift', note: staffNote };
             // move is a pool sentinel ('float', 'iss') — not a real room, treat as unassigned
-            if (move === 'float' || move === 'iss') return { room: '', blockType: 'shift' };
+            if (move === 'float' || move === 'iss') return { room: '', blockType: 'shift', note: staffNote };
           }
           // Float schedule off-floor
           const off = offFloor151[slot] ?? new Set<number>();

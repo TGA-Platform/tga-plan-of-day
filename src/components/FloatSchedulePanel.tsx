@@ -206,14 +206,15 @@ function buildInitialSchedule(
    * - Ratio satisfied         -> programming cover for next available staff member
    * Consecutive steps with the same assignment are merged into one block.
    */
-  function buildSegment(from: number, to: number): void {
+  function buildSegment(from: number, to: number, allowRatio = true): void {
     if (from >= to) return;
     const STEP = 15;
     let cur = from;
 
     while (cur < to) {
-      // Check for ratio shortage at this point
-      const shortRoom = suggestRoom(cur, Math.min(cur + STEP, to), children, statuses);
+      // Check for ratio shortage at this point (disabled inside the lunch window so
+      // lunch covers are not auto-converted to ratio covers)
+      const shortRoom = allowRatio ? suggestRoom(cur, Math.min(cur + STEP, to), children, statuses) : null;
 
       if (shortRoom) {
         // Extend ratio block while the same room is still short
@@ -285,9 +286,9 @@ function buildInitialSchedule(
   for (let i = 0; i < breakSlots.length; i++) {
     const { staff, breakStart } = breakSlots[i];
     const breakEnd = Math.min(breakStart + breakDuration, lunchWindowEnd);
-    // Dynamic gap before this break (inside the lunch window)
+    // Dynamic gap before this break (inside the lunch window) — no auto ratio covers
     if (cursor < breakStart - 1) {
-      buildSegment(cursor, breakStart);
+      buildSegment(cursor, breakStart, false);
     }
     blocks.push({
       id: uid(), type: 'break',
@@ -323,9 +324,9 @@ function buildInitialSchedule(
     cursor += breakDuration;
   }
 
-  // Dynamic gap remaining inside lunch window after last break
+  // Dynamic gap remaining inside lunch window after last break — no auto ratio covers
   if (hasLunchWindow && cursor < lunchWindowEnd - 1) {
-    buildSegment(cursor, lunchWindowEnd);
+    buildSegment(cursor, lunchWindowEnd, false);
     cursor = lunchWindowEnd;
   } else if (hasLunchWindow && cursor < lunchWindowEnd) {
     cursor = lunchWindowEnd;
