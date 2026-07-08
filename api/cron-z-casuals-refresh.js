@@ -323,22 +323,14 @@ async function fetchCentre(centre, dates, auth, historicalRateMap) {
 
   // Diagnostic: log the first few computed rows for this centre.
   console.log(`[cron-z-casuals] ${centre}: first computed rows:`,
-    dayJobs.slice(0, 3).map(j => {
-      const startM = hhmmToMins(j.start);
-      const endM = hhmmToMins(j.end);
-      const durHrs = startM !== null && endM !== null ? (endM >= startM ? endM - startM : endM + 24 * 60 - startM) / 60 : 0;
-      return {
-        z_job_id: j.zJobId,
-        name: j.name,
-        date,
-        cost_cents: j.costCents,
-        start: j.start,
-        end: j.end,
-        duration_hrs: durHrs,
-        raw_rate: j._rawRate,
-        rate_source: j._rateSource,
-      };
-    }));
+    rows.slice(0, 3).map(r => ({
+      z_job_id: r.z_job_id,
+      name: r.name,
+      date: r.date,
+      cost_cents: r.cost_cents,
+      start: r.start_time,
+      end: r.end_time,
+    })));
 
   return rows;
 }
