@@ -10,7 +10,7 @@
  * Reports: Educator Daily Record | Ratio Report | Trends
  */
 import { useState, useCallback, useRef } from 'react';
-import { format } from 'date-fns';
+import { format, parseISO, startOfWeek, isAfter, isBefore, add } from 'date-fns';
 function safeFormat(d: Date | string | null | undefined, fmt: string): string {
   try {
     if (!d) return '--';
@@ -3168,18 +3168,46 @@ export default function ReportingPage() {
 
             {/* ── CASUAL REPORT ── */}
             {viewingReport === 'casual' && (() => {
-              const byDate: Record<string, CasualDayRow[]> = {};
-              for (const row of casualRows) (byDate[row.date] ??= []).push(row);
-              const dates = Object.keys(byDate).sort();
-
               const totalInternalHours = casualRows.reduce((s, r) => s + r.internalHours, 0);
               const totalExternalHours = casualRows.reduce((s, r) => s + r.externalHours, 0);
               const totalExternalCostCents = casualRows.reduce((s, r) => s + r.externalCostCents, 0);
 
+              // Build a lookup of date -> centre -> row
+              const byDateCentre: Record<string, Record<string, CasualDayRow>> = {};
+              for (const row of casualRows) {
+                (byDateCentre[row.date] ??= {})[row.campus] = row;
+              }
+
+              // Build ISO week buckets (Mon-Sun) covering the selected date range
+              const weekBuckets: { weekStart: string; weekEnd: string; dates: string[] }[] = [];
+              const start = parseISO(fromDate);
+              const end = parseISO(toDate);
+              const firstDay = startOfWeek(start, { weekStartsOn: 1 });
+              let cursor = firstDay;
+              while (!isAfter(cursor, end)) {
+                const weekDates: string[] = [];
+                for (let d = 0; d < 7; d++) {
+                  const day = add(cursor, { days: d });
+                  if (!isBefore(day, start) && !isAfter(day, end)) {
+                    weekDates.push(format(day, 'yyyy-MM-dd'));
+                  }
+                }
+                if (weekDates.length > 0) {
+                  weekBuckets.push({
+                    weekStart: format(cursor, 'yyyy-MM-dd'),
+                    weekEnd: format(add(cursor, { days: 6 }), 'yyyy-MM-dd'),
+                    dates: weekDates,
+                  });
+                }
+                cursor = add(cursor, { days: 7 });
+              }
+
+              const dayLabels = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
               return (
                 <div className="space-y-4">
                   <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
-                    <strong>Casual Report</strong> - Internal and external casual hours used by centre, with external casual cost.
+                    <strong>Casual Report</strong> - Internal and external casual hours by centre and day, with total external casual cost.
                   </div>
 
                   {casualRows.length > 0 && (
@@ -3201,53 +3229,63 @@ export default function ReportingPage() {
 
                   {casualRows.length === 0 ? (
                     <div className="text-sm italic" style={{ color: '#596570' }}>No casual data for the selected period.</div>
-                  ) : dates.map(date => {
-                    const dateRows = byDate[date].sort((a, b) => a.campus.localeCompare(b.campus));
-                    const dateInternalHours = dateRows.reduce((s, r) => s + r.internalHours, 0);
-                    const dateExternalHours = dateRows.reduce((s, r) => s + r.externalHours, 0);
-                    const dateExternalCostCents = dateRows.reduce((s, r) => s + r.externalCostCents, 0);
+                  ) : weekBuckets.map(({ weekStart, weekEnd, dates }) => {
+                    const activeCentres = selectedCentres.length > 0
+                      ? selectedCentres.map(c => c.name).sort()
+                      : [...new Set(casualRows.filter(r => dates.includes(r.date)).map(r => r.campus))].sort();
+
+                    const weekRows = activeCentres.map(campus => {
+                      const centreTotalCostCents = dates.reduce((s, d) => s + (byDateCentre[d]?.[campus]?.externalCostCents ?? 0), 0);
+                      return { campus, centreTotalCostCents };
+                    });
+                    const weekExternalCostCents = weekRows.reduce((s, r) => s + r.centreTotalCostCents, 0);
+
                     return (
-                      <div key={date} className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                      <div key={weekStart} className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
                         <div className="px-5 py-3 flex items-center justify-between" style={{ backgroundColor: '#2d5c18' }}>
-                          <div>
-                            <div className="font-bold text-sm text-white">{safeFormat(new Date(date), 'EEEE d MMMM yyyy')}</div>
-                            <div className="text-xs" style={{ color: '#A0D083' }}>{dateRows.length} centre{dateRows.length !== 1 ? 's' : ''}</div>
-                          </div>
-                          <div className="flex gap-2 text-xs text-white">
-                            <span>{dateInternalHours.toFixed(1)}h internal</span>
-                            <span>·</span>
-                            <span>{dateExternalHours.toFixed(1)}h external</span>
-                            {dateExternalCostCents > 0 && <><span>·</span><span>${(dateExternalCostCents / 100).toFixed(2)}</span></>}
+                          <div className="font-bold text-sm text-white">Week of {safeFormat(parseISO(weekStart), 'd MMMM yyyy')} – {safeFormat(parseISO(weekEnd), 'd MMMM yyyy')}</div>
+                          <div className="text-xs text-white">
+                            <span>{activeCentres.length} centre{activeCentres.length !== 1 ? 's' : ''}</span>
+                            {weekExternalCostCents > 0 && <span className="ml-3">· ${(weekExternalCostCents / 100).toFixed(2)} external</span>}
                           </div>
                         </div>
-                        <div className="p-4">
-                          <table className="w-full text-sm">
+                        <div className="p-4 overflow-x-auto">
+                          <table className="w-full text-sm min-w-[800px]">
                             <thead>
                               <tr style={{ backgroundColor: '#F5FAF3' }}>
-                                {['Centre','Internal Shifts','Internal Hours','External Shifts','External Hours','External Cost'].map(h => (
-                                  <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
+                                <th className="py-2 px-3 text-xs font-semibold text-left sticky left-0 bg-[#F5FAF33]" style={{ color: '#5a9228' }}>Centre</th>
+                                {dayLabels.map(label => (
+                                  <th key={label} className="py-2 px-2 text-xs font-semibold text-center" style={{ color: '#5a9228', minWidth: 90 }}>{label}</th>
                                 ))}
+                                <th className="py-2 px-3 text-xs font-semibold text-right" style={{ color: '#5a9228' }}>External Cost</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {dateRows.map((day, i) => (
-                                <tr key={day.campus} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
-                                  <td className="py-2 px-3 font-medium" style={{ color: '#050505' }}>{day.campus}</td>
-                                  <td className="py-2 px-3" style={{ color: '#92400e' }}>{day.internalCount}</td>
-                                  <td className="py-2 px-3" style={{ color: '#92400e' }}>{day.internalHours.toFixed(2)}</td>
-                                  <td className="py-2 px-3" style={{ color: '#c2410c' }}>{day.externalCount}</td>
-                                  <td className="py-2 px-3" style={{ color: '#c2410c' }}>{day.externalHours.toFixed(2)}</td>
-                                  <td className="py-2 px-3 font-medium" style={{ color: '#c2410c' }}>${(day.externalCostCents / 100).toFixed(2)}</td>
-                                </tr>
-                              ))}
-                              <tr className="border-t" style={{ backgroundColor: '#fef3c7' }}>
-                                <td className="py-2 px-3 font-semibold" style={{ color: '#2d5c18' }}>Day total</td>
-                                <td className="py-2 px-3 font-semibold" style={{ color: '#92400e' }}>{dateRows.reduce((s, r) => s + r.internalCount, 0)}</td>
-                                <td className="py-2 px-3 font-semibold" style={{ color: '#92400e' }}>{dateInternalHours.toFixed(2)}</td>
-                                <td className="py-2 px-3 font-semibold" style={{ color: '#c2410c' }}>{dateRows.reduce((s, r) => s + r.externalCount, 0)}</td>
-                                <td className="py-2 px-3 font-semibold" style={{ color: '#c2410c' }}>{dateExternalHours.toFixed(2)}</td>
-                                <td className="py-2 px-3 font-semibold" style={{ color: '#c2410c' }}>${(dateExternalCostCents / 100).toFixed(2)}</td>
-                              </tr>
+                              {activeCentres.map((campus, i) => {
+                                const centreTotalCostCents = weekRows.find(r => r.campus === campus)?.centreTotalCostCents ?? 0;
+                                return (
+                                  <tr key={campus} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
+                                    <td className="py-2 px-3 font-medium sticky left-0" style={{ color: '#050505', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>{campus}</td>
+                                    {dayLabels.map((_, dayIndex) => {
+                                      const date = dates.find(d => (parseISO(d).getDay() + 6) % 7 === dayIndex);
+                                      const row = date ? byDateCentre[date]?.[campus] : undefined;
+                                      return (
+                                        <td key={dayIndex} className="py-2 px-2 text-center align-top" style={{ color: '#050505' }}>
+                                          {row ? (
+                                            <div className="flex flex-col gap-0.5 text-xs">
+                                              <span style={{ color: '#92400e' }}>{row.internalHours.toFixed(1)}h int</span>
+                                              <span style={{ color: '#c2410c' }}>{row.externalHours.toFixed(1)}h ext</span>
+                                            </div>
+                                          ) : (
+                                            <span className="text-xs" style={{ color: '#94a3b8' }}>—</span>
+                                          )}
+                                        </td>
+                                      );
+                                    })}
+                                    <td className="py-2 px-3 text-right font-medium" style={{ color: '#c2410c' }}>${(centreTotalCostCents / 100).toFixed(2)}</td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
