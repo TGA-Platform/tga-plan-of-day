@@ -924,9 +924,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     for (const slot of allSlots) {
       const available = staffAtSlotMap[slot] ?? [];
       const offFloor  = offFloorBySlot[slot] ?? new Set<number>();
+      const floatCovers = floatCoveringRoomBySlot[slot] ?? {};
+      const allFloatCoverIds = new Set(Object.values(floatCovers).flat());
       const claimed   = new Set<number>();
       for (const s of available) {
         if (offFloor.has(s.employeeId)) continue;
+        // Staff assigned to cover a room via Plan Day float schedule should appear
+        // in the covered room, not their natural/moved room.
+        if (allFloatCoverIds.has(s.employeeId)) continue;
         const mv = sessionData.staffMoves[`${s.employeeId}:${slot}`];
         if (mv === '__programming__' || mv === '__lunch__' || mv === '__cleaning__' || mv === '__additional__') continue;
         const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
@@ -939,7 +944,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [staffAtSlotMap, offFloorBySlot, sessionData.staffMoves, rooms]);
+  }, [staffAtSlotMap, offFloorBySlot, floatCoveringRoomBySlot, sessionData.staffMoves, rooms]);
 
   /** Staff for a specific room at a slot - dedup ensures no-one appears in multiple places */
   function getStaffForRoom(slot: string, room: Room): RosteredStaff[] {
