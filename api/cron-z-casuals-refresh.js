@@ -105,6 +105,26 @@ function parseStatus(raw) {
   return raw.split('|')[0];
 }
 
+async function fetchExistingCosts(zJobIds) {
+  if (!zJobIds.length) return new Map();
+  const costMap = new Map();
+  // Supabase REST `in` filter supports comma-separated values; chunk to stay under URL limits.
+  const CHUNK = 100;
+  for (let i = 0; i < zJobIds.length; i += CHUNK) {
+    const chunk = zJobIds.slice(i, i + CHUNK);
+    const url = `${SUPABASE_URL}/rest/v1/z_casuals?z_job_id=in.(${chunk.map(encodeURIComponent).join(',')})&select=z_job_id,cost_cents`;
+    const resp = await fetch(url, {
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+    });
+    if (!resp.ok) continue;
+    const rows = await resp.json().catch(() => []);
+    for (const r of rows) {
+      if ((r.cost_cents ?? 0) > 0) costMap.set(r.z_job_id, r.cost_cents);
+    }
+  }
+  return costMap;
+}
+
 async function upsertToSupabase(rows) {
   if (!rows.length) return;
   // Use z_job_id as the conflict target so existing rows are updated.
@@ -171,6 +191,15 @@ async function fetchCentre(centre, dates, auth) {
   const gqlData = await queryZGraphQL(auth, JOB_QUERY, { workspaceId, withEducatorProfile: true });
   const allJobs = gqlData?.getAllJobInformationForWorkspace?.jobs ?? [];
 
+  // Diagnostic: log auth source and a sample of raw hourlyRateUsed values.
+  const sampleJobs = allJobs.filter(j => !j.isDraft && j.isFilled).slice(0, 3);
+  console.log(`[cron-z-casuals] ${centre}: auth=${auth.source}, sample hourlyRateUsed values:`,
+    sampleJobs.map(j => ({ id: j.id, hourlyRateUsed: j.hourlyRateUsed, type: typeof j.hourlyRateUsed })));
+
+  // Preserve any existing non-zero costs so a flaky API response does not wipe good data.
+  const candidateJobs = allJobs.filter(j => !j.isDraft && j.isFilled && j.educatorProfile);
+  const existingCostMap = await fetchExistingCosts(candidateJobs.map(j => j.id));
+
   const rows = [];
   for (const date of dates) {
     const dayJobs = jobsForDate(allJobs, date)
@@ -179,6 +208,11 @@ async function fetchCentre(centre, dates, auth) {
         const profile  = j.educatorProfile;
         const name     = profile ? `${profile.givenName} ${profile.surname}`.trim() : null;
         const certLevel = j.educatorCertificationLevel || profile?.certificationLevel || j.certificationLevel || 'NONE';
+        const durationHrs = (parseInt(j.endDate) - parseInt(j.startDate)) / 3600000;
+        const fetchedCostCents = Math.round((j.hourlyRateUsed ?? 0) * durationHrs);
+        // If Z API returns 0/undefined rate but we already have a non-zero cost, keep it.
+        const existingCostCents = existingCostMap.get(j.id);
+        const costCents = fetchedCostCents > 0 ? fetchedCostCents : (existingCostCents ?? 0);
         return {
           zJobId:      j.id,
           name:        name || null,
@@ -187,7 +221,7 @@ async function fetchCentre(centre, dates, auth) {
           status:      parseStatus(j.status),
           isFilled:    j.isFilled,
           certLevel,
-          costCents:   Math.round((j.hourlyRateUsed ?? 0) * ((parseInt(j.endDate) - parseInt(j.startDate)) / 3600000)),
+          costCents,
           workspaceId: j.workspaceId,
         };
       })
@@ -233,6 +267,7 @@ export default async function handler(req, res) {
 
   try {
     const auth = await getAuthToken();
+    console.log(`[cron-z-casuals] Starting refresh using ${auth.source}`);
     const centres = Object.keys(TGA_WORKSPACE_MAP);
     const rows = [];
 
