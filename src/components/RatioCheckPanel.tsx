@@ -27,6 +27,7 @@ interface FamilyGroupingConfig {
 interface RoomVisitor {
   id: string;           // unique per entry
   name: string;         // display name (free text or from dropdown)
+  wwccNumber?: string;  // Working With Children Check number for visitor compliance
   enteredAt: string;    // HH:MM
   exitedAt?: string;    // HH:MM - set when they leave
 }
@@ -304,6 +305,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // Visitor log modal state
   const [visitorModal, setVisitorModal] = useState<{ slot: string; roomId: string; roomName: string } | null>(null);
   const [visitorName, setVisitorName] = useState('');
+  const [visitorWWCC, setVisitorWWCC] = useState('');
   const [visitorTime, setVisitorTime] = useState('');
   const [visitorExitTime, setVisitorExitTime] = useState('');
   const [visitorExitModalState, setVisitorExitModalState] = useState<{ slot: string; roomId: string; roomName: string; visitorId: string; visitorName: string; exitTime: string } | null>(null);
@@ -1323,11 +1325,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return getActiveVisitorsForSlotRoom(slot, roomId).length;
   }
 
-  function addVisitor(slot: string, roomId: string, name: string, enteredAt: string, exitedAt?: string) {
+  function addVisitor(slot: string, roomId: string, name: string, enteredAt: string, exitedAt?: string, wwccNumber?: string) {
     const key = getVisitorKey(slot, roomId);
     const newVisitor: RoomVisitor = {
       id: Math.random().toString(36).slice(2, 9),
       name: name.trim(),
+      wwccNumber: wwccNumber?.trim() || undefined,
       enteredAt,
       exitedAt,
     };
@@ -1382,6 +1385,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const nowTime = `${hh}:${mm}`;
     setVisitorModal({ slot, roomId, roomName });
     setVisitorName('');
+    setVisitorWWCC('');
     setVisitorTime(nowTime); // prefill with actual current time
     setVisitorExitTime('');
   }
@@ -1398,7 +1402,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   /** Confirm adding a visitor from the modal */
   function confirmAddVisitor() {
     if (!visitorModal || !visitorName.trim()) return;
-    addVisitor(visitorModal.slot, visitorModal.roomId, visitorName, visitorTime || visitorModal.slot, visitorExitTime || undefined);
+    addVisitor(visitorModal.slot, visitorModal.roomId, visitorName, visitorTime || visitorModal.slot, visitorExitTime || undefined, visitorWWCC || undefined);
     setVisitorModal(null);
   }
 
@@ -2525,6 +2529,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '3px', width: '100%' }}>
                                       <span style={{ fontSize: '9px' }}>✎</span>
                                       <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{v.name}</span>
+                                      {v.wwccNumber && (
+                                        <span
+                                          title={`WWCC: ${v.wwccNumber}`}
+                                          style={{ fontSize: '8px', padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', fontWeight: 600, flexShrink: 0 }}
+                                        >WWCC</span>
+                                      )}
                                       <button
                                         className="no-print"
                                         onClick={e => {
@@ -2963,6 +2973,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                       onKeyDown={e => { if (e.key === 'Enter') confirmAddVisitor(); }}
                     />
                   </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '13px', color: '#374151', minWidth: '56px' }}>WWCC</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. WWC123456789"
+                    value={visitorWWCC}
+                    onChange={e => setVisitorWWCC(e.target.value)}
+                    style={{ fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1, outline: 'none' }}
+                  />
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <span style={{ fontSize: '13px', color: '#374151', minWidth: '56px' }}>Enter</span>

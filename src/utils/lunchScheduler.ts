@@ -47,7 +47,7 @@ export interface LunchWindow {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Parse Deputy's unix-timestamp or HH:MM startTime to HH:MM */
-function parseShiftTime(t: string | number): string {
+export function parseShiftTime(t: string | number): string {
   if (typeof t === 'number') {
     const d = new Date(t * 1000);
     const h = d.toLocaleString('en-AU', { hour: '2-digit', hour12: false, timeZone: 'Australia/Sydney' });

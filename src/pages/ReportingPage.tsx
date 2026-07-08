@@ -1091,6 +1091,7 @@ export default function ReportingPage() {
         const ratioStaffNotes: Record<string, string> = {};
         const ratioFGConfigs: Array<{ id: string; label: string; roomIds: string[]; slots: string[]; heldInRoom?: string }> = [];
         const ratioTimeOverrides: Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string }> = {};
+        const ratioVisitors: Array<{ id: string; name: string; wwccNumber?: string; roomId: string; enteredAt: string; exitedAt?: string }> = [];
 
         for (const row of (ratioCheckRows as any[])) {
           const moves = (row.data?.staffMoves ?? {}) as Record<string, string>;
@@ -1099,6 +1100,17 @@ export default function ReportingPage() {
           Object.assign(ratioStaffNotes, notes);
           for (const fg of (row.data?.familyGroupings ?? [])) {
             if (!ratioFGConfigs.find(f => f.id === fg.id)) ratioFGConfigs.push(fg);
+          }
+          // Collect visitor entries from all sessions for the Reg 151 report.
+          // Visitors may be stored under any slot bucket, so de-duplicate by id.
+          const visitors = (row.data?.roomVisitors ?? {}) as Record<string, Array<{ id: string; name: string; wwccNumber?: string; enteredAt: string; exitedAt?: string }>>;
+          for (const [key, list] of Object.entries(visitors)) {
+            const roomId = key.split(':').slice(1).join(':');
+            for (const v of (list ?? [])) {
+              if (!ratioVisitors.find(rv => rv.id === v.id)) {
+                ratioVisitors.push({ ...v, roomId });
+              }
+            }
           }
           // Merge Supabase overrides — these come from the Ratio Check browser 5-min Deputy poll
           // and are the most complete/accurate source (contain all staff clocked in that day)
@@ -1499,6 +1511,28 @@ export default function ReportingPage() {
         }
         entries.length = 0;
         entries.push(...dedupedEntries);
+
+        // Add visitor entries from Ratio Check visitor log (with WWCC details)
+        for (const v of ratioVisitors) {
+          const roomName = centre.rooms.find(r => r.id === v.roomId)?.name ?? v.roomId;
+          // Use a stable negative employeeId derived from the visitor id to avoid collisions
+          // with real staff and with other visitors on the same day.
+          let visitorEmpId = 0;
+          for (let i = 0; i < v.id.length; i++) visitorEmpId = (visitorEmpId * 31 + v.id.charCodeAt(i)) | 0;
+          visitorEmpId = visitorEmpId < 0 ? visitorEmpId : -visitorEmpId;
+          const noteParts = ['Visitor'];
+          if (v.wwccNumber) noteParts.push(`WWCC: ${v.wwccNumber}`);
+          entries.push({
+            employeeId: visitorEmpId,
+            name: v.name,
+            room: roomName,
+            inTime: v.enteredAt,
+            outTime: v.exitedAt || '18:00',
+            blockType: 'support',
+            staffType: 'support',
+            note: noteParts.join(' - '),
+          });
+        }
 
         // Overlay confirmed family groupings (same logic as before)
         const confirmedGroupings = (groupingSessionRows as any[]).filter(gs =>

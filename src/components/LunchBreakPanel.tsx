@@ -6,7 +6,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { RoomRatioStatus, FloatStaff, RosteredStaff } from '../types';
 import type { LunchBreakEntry, LunchWindow } from '../utils/lunchScheduler';
-import { generateLunchSchedule, DEFAULT_LUNCH_WINDOW } from '../utils/lunchScheduler';
+import { generateLunchSchedule, DEFAULT_LUNCH_WINDOW, parseShiftTime } from '../utils/lunchScheduler';
 import { loadCentreRules, getBreakWindow } from '../utils/centreRules';
 import { minsToHHMM, hhmmToMins } from '../utils/timeUtils';
 
@@ -150,8 +150,9 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
   const [loading, setLoading]     = useState(true);
   const [saving, setSaving]       = useState(false);
   const [saved, setSaved]         = useState(false);
-  const [editing, setEditing]     = useState<number | null>(null); // employeeId being edited
-  const [collapsed, setCollapsed] = useState(false);
+  const [editing, setEditing]         = useState<number | null>(null); // employeeId whose break time is being edited
+  const [editingCoverFor, setEditingCoverFor] = useState<number | null>(null); // employeeId whose coverer is being edited
+  const [collapsed, setCollapsed]     = useState(false);
 
   // Load centre rules first, THEN load saved schedule or auto-generate
   // (must be a single effect to avoid race: rules must be resolved before generation)
@@ -245,6 +246,20 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
     ));
     setSaved(false);
   };
+
+  /** Return support staff (AD/Ed Leader) whose shift overlaps the given break window.
+   *  Used to let directors swap auto-assigned lunch coverers. */
+  function eligibleSupportCovers(entry: LunchBreakEntry): RosteredStaff[] {
+    const breakStart = hhmmToMins(entry.lunchStart);
+    const breakEnd   = hhmmToMins(entry.lunchEnd);
+    return (supportStaff ?? []).filter(s => {
+      const shiftStart = hhmmToMins(parseShiftTime(s.startTime));
+      const shiftEnd   = hhmmToMins(parseShiftTime(s.endTime));
+      // Shift must fully cover the break window, with a small buffer so the coverer
+      // is still on shift when the break ends.
+      return shiftStart <= breakStart && shiftEnd >= breakEnd + 5;
+    });
+  }
 
   const uncoveredCount = schedule.filter(e => e.needsCover && !e.coveredBy).length;
   const roomGroups = schedule.reduce<Record<string, LunchBreakEntry[]>>((acc, e) => {
@@ -393,7 +408,17 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
                         </div>
 
                         {/* RIGHT - cover person entering the room */}
-                        <div className="px-4 py-3 flex flex-col gap-1" style={{ backgroundColor: entry.coveredBy ? coverColor.bg + '88' : '#fef2f2' }}>
+                        <div
+                          className="px-4 py-3 flex flex-col gap-1"
+                          style={{ backgroundColor: entry.coveredBy ? coverColor.bg + '88' : '#fef2f2' }}
+                          onClick={() => {
+                            // Only support-type covers (or uncovered entries) can be swapped via this UI.
+                            // Float/ISS/surplus covers are authoritative from other systems.
+                            if (!entry.coveredBy || entry.coveredBy.type === 'support') {
+                              setEditingCoverFor(editingCoverFor === entry.employeeId ? null : entry.employeeId);
+                            }
+                          }}
+                        >
                           {entry.coveredBy ? (
                             <>
                               <div className="flex items-center gap-2">
@@ -402,6 +427,9 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
                                   {coverColor.label}
                                 </span>
                                 <span className="text-sm font-semibold" style={{ color: '#111827' }}>{entry.coveredBy.name}</span>
+                                {!entry.coveredBy || entry.coveredBy.type === 'support' ? (
+                                  <span className="text-xs no-print" style={{ color: '#9ca3af', marginLeft: 'auto' }}>✎ Swap</span>
+                                ) : null}
                               </div>
                               <div className="text-xs" style={{ color: '#6b7280' }}>
                                 Enters <strong>{room}</strong>
@@ -418,7 +446,40 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
                             <div className="flex flex-col gap-1">
                               <span className="text-xs font-semibold" style={{ color: '#dc2626' }}>⚠ No cover available</span>
                               <span className="text-xs" style={{ color: '#9ca3af' }}>Ratio may drop during this break.</span>
-                              <span className="text-xs" style={{ color: '#9ca3af' }}>Assign a float to cover.</span>
+                              <span className="text-xs no-print" style={{ color: '#92400e' }}>Click to assign AD / Ed Leader cover</span>
+                            </div>
+                          )}
+
+                          {/* Cover swap dropdown for support-type covers and uncovered breaks */}
+                          {editingCoverFor === entry.employeeId && (
+                            <div className="mt-2 no-print" onClick={e => e.stopPropagation()}>
+                              <select
+                                className="text-xs border rounded-lg px-2 py-1 w-full"
+                                style={{ borderColor: '#fed7aa', color: '#9a3412', backgroundColor: 'white' }}
+                                value={entry.coveredBy?.employeeId ?? ''}
+                                onChange={e => {
+                                  const id = e.target.value ? Number(e.target.value) : null;
+                                  if (!id) {
+                                    updateEntry(entry.employeeId, { coveredBy: null, needsCover: true });
+                                  } else {
+                                    const staff = eligibleSupportCovers(entry).find(s => s.employeeId === id);
+                                    if (staff) {
+                                      updateEntry(entry.employeeId, {
+                                        coveredBy: { employeeId: staff.employeeId, name: staff.employeeName, type: 'support' },
+                                        needsCover: false,
+                                      });
+                                    }
+                                  }
+                                  setEditingCoverFor(null);
+                                }}
+                              >
+                                <option value="">— No AD/EL cover —</option>
+                                {eligibleSupportCovers(entry).map(s => (
+                                  <option key={s.employeeId} value={s.employeeId}>
+                                    {s.employeeName} ({s.unitName})
+                                  </option>
+                                ))}
+                              </select>
                             </div>
                           )}
                         </div>
