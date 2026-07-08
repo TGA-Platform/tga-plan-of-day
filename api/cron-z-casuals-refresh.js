@@ -111,6 +111,56 @@ function hhmmToMins(t) {
   return h * 60 + m;
 }
 
+// Default fallback rates (cents/hr) by certification level when no Z rate and no history exists.
+const DEFAULT_RATES_CENTS = {
+  DIPLOMA: 5700,
+  CERT3: 5200,
+  CERTIFICATE_III: 5200,
+  CERT4: 5700,
+  CERTIFICATE_IV: 5700,
+  ECT: 6600,
+  NONE: 5000,
+};
+
+async function fetchHistoricalRates() {
+  // Build a map of name+cert -> average hourly rate (cents/hr) from past records with actual cost.
+  // We compute this client-side from recent z_casuals rows so we don't need a custom DB function.
+  try {
+    const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const url = `${SUPABASE_URL}/rest/v1/z_casuals?cost_cents=gt.0&start_time=not.is.null&end_time=not.is.null&fetched_at=gte.${encodeURIComponent(since)}&select=name,cert_level,cost_cents,start_time,end_time`;
+    const resp = await fetch(url, {
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+    });
+    if (!resp.ok) throw new Error(`Supabase read failed ${resp.status}`);
+    const rows = await resp.json().catch(() => []);
+    const groups = new Map();
+    for (const r of rows) {
+      if (!r.name || !r.cert_level || !r.cost_cents || !r.start_time || !r.end_time) continue;
+      const startM = hhmmToMins(r.start_time);
+      const endM = hhmmToMins(r.end_time);
+      if (startM === null || endM === null) continue;
+      let durM = endM - startM;
+      if (durM <= 0) durM += 24 * 60;
+      if (durM <= 0) continue;
+      const hourly = r.cost_cents / (durM / 60);
+      const key = `${r.name}|${r.cert_level}`.toLowerCase();
+      const g = groups.get(key) ?? { sum: 0, count: 0 };
+      g.sum += hourly;
+      g.count += 1;
+      groups.set(key, g);
+    }
+    const map = new Map();
+    for (const [key, g] of groups) {
+      if (g.count > 0) map.set(key, Math.round(g.sum / g.count));
+    }
+    console.log(`[cron-z-casuals] Built historical rate map with ${map.size} educators from ${rows.length} records`);
+    return map;
+  } catch (err) {
+    console.error('[cron-z-casuals] fetchHistoricalRates failed:', err.message);
+    return new Map();
+  }
+}
+
 async function fetchExistingCosts(zJobIds) {
   if (!zJobIds.length) return new Map();
   const costMap = new Map();
@@ -190,7 +240,7 @@ function jobsForDate(allJobs, date) {
   });
 }
 
-async function fetchCentre(centre, dates, auth) {
+async function fetchCentre(centre, dates, auth, historicalRateMap) {
   const workspaceId = TGA_WORKSPACE_MAP[centre];
   if (!workspaceId) return [];
 
@@ -215,10 +265,29 @@ async function fetchCentre(centre, dates, auth) {
         const name     = profile ? `${profile.givenName} ${profile.surname}`.trim() : null;
         const certLevel = j.educatorCertificationLevel || profile?.certificationLevel || j.certificationLevel || 'NONE';
         const durationHrs = (parseInt(j.endDate) - parseInt(j.startDate)) / 3600000;
-        const fetchedCostCents = Math.round((j.hourlyRateUsed ?? 0) * durationHrs);
-        // If Z API returns 0/undefined rate but we already have a non-zero cost, keep it.
+        const fetchedRate = Number(j.hourlyRateUsed) || 0;
+        const fetchedCostCents = Math.round(fetchedRate * durationHrs);
         const existingCostCents = existingCostMap.get(j.id);
-        const costCents = fetchedCostCents > 0 ? fetchedCostCents : (existingCostCents ?? 0);
+
+        // Fallback chain: Z API rate -> historical average for this educator+cert -> cert-level default.
+        let effectiveRate = fetchedRate;
+        let rateSource = 'z-api';
+        if (effectiveRate <= 0) {
+          const histKey = `${name}|${certLevel}`.toLowerCase();
+          const histRate = historicalRateMap.get(histKey);
+          if (histRate && histRate > 0) {
+            effectiveRate = histRate;
+            rateSource = 'historical';
+          } else {
+            const defaultRate = DEFAULT_RATES_CENTS[certLevel.toUpperCase()] ?? DEFAULT_RATES_CENTS.NONE;
+            if (defaultRate > 0) {
+              effectiveRate = defaultRate;
+              rateSource = 'default';
+            }
+          }
+        }
+        const costCents = fetchedCostCents > 0 ? fetchedCostCents : Math.round(effectiveRate * durationHrs);
+
         return {
           zJobId:      j.id,
           name:        name || null,
@@ -230,6 +299,7 @@ async function fetchCentre(centre, dates, auth) {
           costCents,
           workspaceId: j.workspaceId,
           _rawRate:    j.hourlyRateUsed,
+          _rateSource: rateSource,
         };
       })
       .filter(j => j.isFilled && j.name);
@@ -266,6 +336,7 @@ async function fetchCentre(centre, dates, auth) {
         end: j.end,
         duration_hrs: durHrs,
         raw_rate: j._rawRate,
+        rate_source: j._rateSource,
       };
     }));
 
@@ -293,6 +364,7 @@ export default async function handler(req, res) {
   try {
     const auth = await getAuthToken();
     console.log(`[cron-z-casuals] Starting refresh using ${auth.source}`);
+    const historicalRateMap = await fetchHistoricalRates();
     const centres = Object.keys(TGA_WORKSPACE_MAP);
     const rows = [];
 
@@ -303,7 +375,7 @@ export default async function handler(req, res) {
       const results = await Promise.all(
         batch.map(async centre => {
           try {
-            return await fetchCentre(centre, dates, auth);
+            return await fetchCentre(centre, dates, auth, historicalRateMap);
           } catch (err) {
             console.error(`[cron-z-casuals] ${centre} failed:`, err.message);
             return [];
