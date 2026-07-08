@@ -244,6 +244,10 @@ async function fetchCentre(centre, dates, auth) {
     }
   }
 
+  // Diagnostic: log the first few computed rows for this centre.
+  console.log(`[cron-z-casuals] ${centre}: first computed rows:`,
+    rows.slice(0, 3).map(r => ({ z_job_id: r.z_job_id, name: r.name, cost_cents: r.cost_cents })));
+
   return rows;
 }
 
