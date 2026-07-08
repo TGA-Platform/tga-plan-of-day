@@ -24,6 +24,7 @@ import Layout from '../components/Layout';
 import { CENTRES } from '../config';
 import { getUser, getAllowedCentres } from '../auth';
 import { calcRequiredStaff, parseAgeMonths } from '../utils/ratioEngine';
+import type { ExternalCasualMeta } from '../types';
 // ─── Clusters ─────────────────────────────────────────────────────────────────
 const CLUSTERS: Record<string, string[]> = {
   'South West':   ['mount-annan','spring-farm','denham-court','ed-park-1','ed-park-2','wilton'],
@@ -71,6 +72,27 @@ interface WwccExpiryRow {
   under_18:      boolean;
   daysRemaining: number | null;
   exemptReason?: 'under_18' | 'kitchen'; // why they have no WWCC (exempt)
+}
+
+interface CasualEntry {
+  employeeId?: number;
+  zJobId?: string;
+  name: string;
+  start: string; // HH:MM
+  end: string;   // HH:MM
+  hours: number;
+  costCents?: number;
+  status?: string;
+  certLevel?: string;
+  type: 'internal' | 'external';
+}
+
+interface CasualDayRow {
+  date: string;
+  campus: string;
+  centreId: string;
+  internal: CasualEntry[];
+  external: CasualEntry[];
 }
 
 interface OccupancyRow {
@@ -460,6 +482,13 @@ async function fetchZCasualsForDate(centreName: string, date: string) {
     StartTime: r.start,
     EndTime: r.end,
     isExternalCasual: true,
+    externalCasualMeta: {
+      zJobId: r.zJobId,
+      certLevel: r.certLevel,
+      costCents: r.costCents,
+      status: r.status,
+      workspaceId: r.workspaceId,
+    } as ExternalCasualMeta,
   }));
 }
 
@@ -503,6 +532,7 @@ export default function ReportingPage() {
   const [rosterSuggestions, setRosterSuggestions] = useState<RosterSuggestionResult[] | null>(null);
   const [rosterSuggestionsLoading, setRosterSuggestionsLoading] = useState(false);
   const [staffingAnalysisRows, setStaffingAnalysisRows] = useState<StaffingAnalysisRow[]>([]);
+  const [casualRows, setCasualRows] = useState<CasualDayRow[]>([]);
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean; is_internal_casual?: boolean };
   // WWCC lookup function - tries multiple strategies to handle name mismatches
   const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
@@ -516,6 +546,7 @@ export default function ReportingPage() {
     { id: 'roster-opt',  icon: '🗓️', label: 'Roster Optimisation',       desc: 'Compare child attendance curves against the roster to find over/understaffed windows and get recommendations.' },
     { id: 'wwcc-expiry',        icon: '🛡️', label: 'WWCC Expiries',             desc: 'Working With Children Check expiry dates for all active staff. Sorted by soonest expiring.' },
     { id: 'staffing-analysis', icon: '📊', label: 'Staffing Analysis',          desc: 'Float pool surplus/deficit per centre per day — mirrors the staffing analysis Float Pool panel. Shows buffer required (1:6 floor staff), floats available, AD coverage for small centres (<100 children).' },
+    { id: 'casual', icon: '👷', label: 'Casual Report', desc: 'Internal and external casuals used per day, including external casual cost and total hours for the period.' },
   ];
 
   const handleGenerateRosterSuggestions = async () => {
@@ -643,6 +674,7 @@ export default function ReportingPage() {
       : viewingReport === 'occupancy'   ? 'Attendance Trends Report'
       : viewingReport === 'roster-opt'  ? 'Roster Optimisation Report'
       : viewingReport === 'wwcc-expiry' ? 'WWCC Expiry Monitor'
+      : viewingReport === 'casual'      ? 'Casual Report'
       : 'Report';
 
     // ── Build occupancy HTML ──────────────────────────────────────────────────
@@ -683,6 +715,37 @@ export default function ReportingPage() {
             </tr>`;
           }).join('')}</tbody>
         </table>`
+      : '';
+
+    // ── Build casual HTML ─────────────────────────────────────────────────────
+    const casualHtml = viewingReport === 'casual' && casualRows.length > 0
+      ? casualRows.map(({ date, campus, internal, external }) => {
+          const intHours = internal.reduce((s, e) => s + e.hours, 0);
+          const extHours = external.reduce((s, e) => s + e.hours, 0);
+          const extCost  = external.reduce((s, e) => s + (e.costCents ?? 0), 0);
+          const intRows = internal.map((e, i) => `<tr style="background:${i % 2 === 0 ? 'white' : '#fafffe'}">
+            <td>${e.name}</td><td>${e.start}</td><td>${e.end}</td><td>${e.hours.toFixed(2)}</td>
+          </tr>`).join('');
+          const extRows = external.map((e, i) => `<tr style="background:${i % 2 === 0 ? 'white' : '#fafffe'}">
+            <td>${e.name}</td><td>${e.start}</td><td>${e.end}</td><td>${e.hours.toFixed(2)}</td><td>${e.status ?? '—'}</td><td>${e.certLevel ?? '—'}</td><td>$${((e.costCents ?? 0) / 100).toFixed(2)}</td>
+          </tr>`).join('');
+          return `
+            <div class="day-block">
+              <div class="day-header">
+                <span class="campus">${campus}</span>
+                <span class="date">${safeFormat(new Date(date), 'EEEE, d MMMM yyyy')}</span>
+                <span class="count">${internal.length} internal · ${external.length} external</span>
+              </div>
+              ${internal.length > 0 ? `<table>
+                <thead><tr><th>Name</th><th>Start</th><th>End</th><th>Hours</th></tr></thead>
+                <tbody>${intRows}<tr style="background:#fef3c7"><td colspan="3"><strong>Day total</strong></td><td><strong>${intHours.toFixed(2)}</strong></td></tr></tbody>
+              </table>` : ''}
+              ${external.length > 0 ? `<table>
+                <thead><tr><th>Name</th><th>Start</th><th>End</th><th>Hours</th><th>Status</th><th>Cert</th><th>Cost</th></tr></thead>
+                <tbody>${extRows}<tr style="background:#fff7ed"><td colspan="3"><strong>Day total</strong></td><td><strong>${extHours.toFixed(2)}</strong></td><td colspan="2"></td><td><strong>$${(extCost / 100).toFixed(2)}</strong></td></tr></tbody>
+              </table>` : ''}
+            </div>`;
+        }).join('')
       : '';
 
     win.document.write(`<!DOCTYPE html>
@@ -735,7 +798,7 @@ export default function ReportingPage() {
     </div>
   </div>
   ${viewingReport === 'educator' ? '<div class="reg-notice"><strong>Regulation 151 Record</strong> - Documents which educators were working directly with children, which room/group they were allocated to, and the times of allocation including scheduled meal breaks. WWCC numbers are held in the staff compliance register.</div>' : ''}
-  ${educatorHtml}${ratioHtml}${occupancyHtml}${wwccHtml}
+  ${educatorHtml}${ratioHtml}${occupancyHtml}${wwccHtml}${casualHtml}
   <div class="footer">The Grove Academy Plan of Day System - Confidential - For regulatory compliance purposes only</div>
 </body></html>`);
     win.document.close();
@@ -760,7 +823,8 @@ export default function ReportingPage() {
     const needsRosterOpt       = selectedReports.has('roster-opt');
     const needsWwccExpiry      = selectedReports.has('wwcc-expiry');
     const needsStaffingAnalysis = selectedReports.has('staffing-analysis');
-    const needsDateLoop        = needsEducator || needsOccupancy || needsRosterOpt || needsStaffingAnalysis;
+    const needsCasual          = selectedReports.has('casual');
+    const needsDateLoop        = needsEducator || needsOccupancy || needsRosterOpt || needsStaffingAnalysis || needsCasual;
 
     const rows: typeof educatorRows = [];
     const snaps: RatioSnap[] = [];
@@ -768,6 +832,7 @@ export default function ReportingPage() {
     const occRows: OccupancyRow[] = [];
     const staffingRowsAccum: StaffingAnalysisRow[] = [];
     const rosterAccum: Record<string, Record<string, { sumChildren: number; sumStaff: number; sumOffFloor: number; sumOffFloorExclDirector: number; sumISS: number; sumRequired: number; days: number }>> = {};
+    const casualAccum: CasualDayRow[] = [];
     const ROSTER_SLOTS_30: string[] = [];
     for (let rmi = 7 * 60; rmi < 18 * 60; rmi += 30) {
       ROSTER_SLOTS_30.push(`${String(Math.floor(rmi/60)).padStart(2,'0')}:${String(rmi%60).padStart(2,'0')}`);
@@ -781,6 +846,24 @@ export default function ReportingPage() {
       const dow = new Date(Date.UTC(y, m - 1, dy)).getUTCDay();
       if (dow !== 0 && dow !== 6) dates.push(cur); // weekdays only
       cur = new Date(Date.UTC(y, m - 1, dy + 1)).toISOString().slice(0, 10);
+    }
+
+    // Normalise names the same way the WWCC lookup does.
+    function normName(n: string) {
+      return n.toLowerCase().replace(/\s+/g, ' ').trim();
+    }
+
+    // Build a set of internal-casual names once for the report.
+    const internalCasualNames = new Set<string>();
+    if (needsCasual) {
+      try {
+        const wwccAll: any[] = await fetch('/api/staff-wwcc').then(r => r.ok ? r.json() : []).catch(() => []);
+        for (const rec of wwccAll) {
+          if (rec.is_internal_casual === true) {
+            internalCasualNames.add(normName(rec.full_name_norm ?? rec.full_name));
+          }
+        }
+      } catch { /* ignore */ }
     }
 
     if (needsDateLoop) for (const centre of selectedCentres) {
@@ -816,6 +899,58 @@ export default function ReportingPage() {
         // follows the same ratio-check logic as every other staff member.
         const rostersWithExternal = [...(rosters as any[]), ...(zCasuals as any[])];
         if (needsEducator) groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
+
+        // ── Casuals ──────────────────────────────────────────────────────
+        if (needsCasual) {
+          const byEmp: Record<number, { name: string; startM: number; endM: number }> = {};
+          for (const r of rosters as any[]) {
+            if (!r.Employee || r.Employee === 0) continue;
+            const name = r._DPMetaData?.EmployeeInfo?.DisplayName || `Staff ${r.Employee}`;
+            if (!internalCasualNames.has(normName(name))) continue;
+            const startM = hhmm(fmtTime(r.StartTime));
+            const endM = hhmm(fmtTime(r.EndTime));
+            if (startM === null || endM === null) continue;
+            const existing = byEmp[r.Employee];
+            if (!existing) {
+              byEmp[r.Employee] = { name, startM, endM };
+            } else {
+              existing.startM = Math.min(existing.startM, startM);
+              existing.endM = Math.max(existing.endM, endM);
+            }
+          }
+          const internalEntries: CasualEntry[] = [];
+          for (const [empId, e] of Object.entries(byEmp)) {
+            internalEntries.push({
+              employeeId: Number(empId),
+              name: e.name,
+              start: minsToHhmm(e.startM),
+              end: minsToHhmm(e.endM),
+              hours: (e.endM - e.startM) / 60,
+              type: 'internal',
+            });
+          }
+
+          const externalEntries: CasualEntry[] = (zCasuals as any[]).map((r: any) => {
+            const startM = hhmm(fmtTime(r.StartTime));
+            const endM = hhmm(fmtTime(r.EndTime));
+            const meta = (r.externalCasualMeta ?? {}) as ExternalCasualMeta;
+            return {
+              zJobId: meta.zJobId,
+              name: r._DPMetaData?.EmployeeInfo?.DisplayName || 'Z Casual',
+              start: fmtTime(r.StartTime),
+              end: fmtTime(r.EndTime),
+              hours: startM !== null && endM !== null ? (endM - startM) / 60 : 0,
+              costCents: meta.costCents ?? 0,
+              status: meta.status,
+              certLevel: meta.certLevel,
+              type: 'external',
+            };
+          });
+
+          if (internalEntries.length > 0 || externalEntries.length > 0) {
+            casualAccum.push({ date, campus, centreId: centre.id, internal: internalEntries, external: externalEntries });
+          }
+        }
 
         // ── Occupancy ────────────────────────────────────────────────────
         if (needsOccupancy) {
@@ -1572,6 +1707,7 @@ export default function ReportingPage() {
     setGroupingTrends(groupingTrendRows);
     setOccupancyRows(occRows);
     setStaffingAnalysisRows(staffingRowsAccum);
+    setCasualRows(casualAccum);
 
     // ── Process roster-opt results ─────────────────────────────────────────────────
     {
@@ -3021,6 +3157,145 @@ export default function ReportingPage() {
                               })}
                             </tbody>
                           </table>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
+            {/* ── CASUAL REPORT ── */}
+            {viewingReport === 'casual' && (() => {
+              const byCampus: Record<string, CasualDayRow[]> = {};
+              for (const row of casualRows) {
+                (byCampus[row.campus] ??= []).push(row);
+              }
+              const campuses = Object.keys(byCampus).sort();
+
+              const totalInternalStaff = casualRows.reduce((s, r) => s + r.internal.length, 0);
+              const totalExternalStaff = casualRows.reduce((s, r) => s + r.external.length, 0);
+              const totalInternalHours = casualRows.reduce((s, r) => s + r.internal.reduce((ss, e) => ss + e.hours, 0), 0);
+              const totalExternalHours = casualRows.reduce((s, r) => s + r.external.reduce((ss, e) => ss + e.hours, 0), 0);
+              const totalExternalCostCents = casualRows.reduce((s, r) => s + r.external.reduce((ss, e) => ss + (e.costCents ?? 0), 0), 0);
+
+              return (
+                <div className="space-y-4">
+                  <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
+                    <strong>Casual Report</strong> — Internal and external casuals used per day. External casual costs and hours are shown per person and totalled for the period.
+                  </div>
+
+                  {casualRows.length > 0 && (
+                    <div className="flex gap-3 flex-wrap">
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
+                        <div className="text-2xl font-bold">{totalInternalStaff}</div>
+                        <div className="text-xs">Internal Casual Shifts</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fed7aa', color: '#c2410c' }}>
+                        <div className="text-2xl font-bold">{totalExternalStaff}</div>
+                        <div className="text-xs">External Casual Shifts</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
+                        <div className="text-2xl font-bold">{totalInternalHours.toFixed(1)}</div>
+                        <div className="text-xs">Internal Hours</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>
+                        <div className="text-2xl font-bold">{totalExternalHours.toFixed(1)}</div>
+                        <div className="text-xs">External Hours</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#f0fdf4', color: '#166534' }}>
+                        <div className="text-2xl font-bold">${(totalExternalCostCents / 100).toFixed(2)}</div>
+                        <div className="text-xs">External Cost</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {casualRows.length === 0 ? (
+                    <div className="text-sm italic" style={{ color: '#596570' }}>No casual data for the selected period.</div>
+                  ) : campuses.map(campus => {
+                    const campusRows = byCampus[campus];
+                    const campusInternalHours = campusRows.reduce((s, r) => s + r.internal.reduce((ss, e) => ss + e.hours, 0), 0);
+                    const campusExternalHours = campusRows.reduce((s, r) => s + r.external.reduce((ss, e) => ss + e.hours, 0), 0);
+                    const campusExternalCostCents = campusRows.reduce((s, r) => s + r.external.reduce((ss, e) => ss + (e.costCents ?? 0), 0), 0);
+                    return (
+                      <div key={campus} className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                        <div className="px-5 py-3 flex items-center justify-between" style={{ backgroundColor: '#2d5c18' }}>
+                          <div>
+                            <div className="font-bold text-sm text-white">{campus}</div>
+                            <div className="text-xs" style={{ color: '#A0D083' }}>{campusRows.length} day{campusRows.length !== 1 ? 's' : ''}</div>
+                          </div>
+                          <div className="flex gap-2 text-xs text-white">
+                            <span>{campusInternalHours.toFixed(1)}h internal</span>
+                            <span>·</span>
+                            <span>{campusExternalHours.toFixed(1)}h external</span>
+                            {campusExternalCostCents > 0 && <><span>·</span><span>${(campusExternalCostCents / 100).toFixed(2)}</span></>}
+                          </div>
+                        </div>
+                        <div className="space-y-4 p-4">
+                          {campusRows.map(day => (
+                            <div key={day.date} className="rounded-xl border" style={{ borderColor: '#E2F1DA' }}>
+                              <div className="px-4 py-2 text-sm font-semibold" style={{ backgroundColor: '#F5FAF3', color: '#2d5c18' }}>
+                                {safeFormat(new Date(day.date), 'EEEE d MMMM yyyy')}
+                              </div>
+                              {day.internal.length > 0 && (
+                                <div className="p-3">
+                                  <div className="text-xs font-semibold mb-2" style={{ color: '#92400e' }}>Internal Casuals</div>
+                                  <table className="w-full text-sm">
+                                    <thead>
+                                      <tr style={{ backgroundColor: '#F5FAF3' }}>
+                                        {['Name','Start','End','Hours'].map(h => <th key={h} className="py-1 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>)}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {day.internal.map((e, i) => (
+                                        <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
+                                          <td className="py-1.5 px-3 font-medium" style={{ color: '#050505' }}>{e.name}</td>
+                                          <td className="py-1.5 px-3" style={{ color: '#2d5c18' }}>{e.start}</td>
+                                          <td className="py-1.5 px-3" style={{ color: '#596570' }}>{e.end}</td>
+                                          <td className="py-1.5 px-3" style={{ color: '#92400e' }}>{e.hours.toFixed(2)}</td>
+                                        </tr>
+                                      ))}
+                                      <tr className="border-t" style={{ backgroundColor: '#fef3c7' }}>
+                                        <td className="py-1.5 px-3 font-semibold" colSpan={3} style={{ color: '#92400e' }}>Day total</td>
+                                        <td className="py-1.5 px-3 font-semibold" style={{ color: '#92400e' }}>{day.internal.reduce((s, e) => s + e.hours, 0).toFixed(2)}</td>
+                                      </tr>
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                              {day.external.length > 0 && (
+                                <div className="p-3">
+                                  <div className="text-xs font-semibold mb-2" style={{ color: '#c2410c' }}>External Casuals</div>
+                                  <table className="w-full text-sm">
+                                    <thead>
+                                      <tr style={{ backgroundColor: '#F5FAF3' }}>
+                                        {['Name','Start','End','Hours','Status','Cert','Cost'].map(h => <th key={h} className="py-1 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>)}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {day.external.map((e, i) => (
+                                        <tr key={i} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
+                                          <td className="py-1.5 px-3 font-medium" style={{ color: '#050505' }}>{e.name}</td>
+                                          <td className="py-1.5 px-3" style={{ color: '#2d5c18' }}>{e.start}</td>
+                                          <td className="py-1.5 px-3" style={{ color: '#596570' }}>{e.end}</td>
+                                          <td className="py-1.5 px-3" style={{ color: '#c2410c' }}>{e.hours.toFixed(2)}</td>
+                                          <td className="py-1.5 px-3" style={{ color: '#596570' }}>{e.status ?? '-'}</td>
+                                          <td className="py-1.5 px-3" style={{ color: '#596570' }}>{e.certLevel ?? '-'}</td>
+                                          <td className="py-1.5 px-3 font-medium" style={{ color: '#c2410c' }}>${((e.costCents ?? 0) / 100).toFixed(2)}</td>
+                                        </tr>
+                                      ))}
+                                      <tr className="border-t" style={{ backgroundColor: '#fff7ed' }}>
+                                        <td className="py-1.5 px-3 font-semibold" colSpan={3} style={{ color: '#c2410c' }}>Day total</td>
+                                        <td className="py-1.5 px-3 font-semibold" style={{ color: '#c2410c' }}>{day.external.reduce((s, e) => s + e.hours, 0).toFixed(2)}</td>
+                                        <td className="py-1.5 px-3" colSpan={2}></td>
+                                        <td className="py-1.5 px-3 font-semibold" style={{ color: '#c2410c' }}>${(day.external.reduce((s, e) => s + (e.costCents ?? 0), 0) / 100).toFixed(2)}</td>
+                                      </tr>
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       </div>
                     );
