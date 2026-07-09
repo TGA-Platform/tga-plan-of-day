@@ -1042,7 +1042,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       !inActivity.has(s.employeeId) &&
       !globalClaimed.has(s.employeeId)
     );
-    return [...rosterInRoom, ...floatStaffInRoom];
+    const combined = [...rosterInRoom, ...floatStaffInRoom];
+    const seen = new Set<number>();
+    return combined.filter(s => {
+      if (seen.has(s.employeeId)) return false;
+      seen.add(s.employeeId);
+      return true;
+    });
   }
 
   /** Staff on shift at a slot not currently assigned to any room or FG (excludes Additional Duties) */
