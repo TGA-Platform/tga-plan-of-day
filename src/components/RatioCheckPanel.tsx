@@ -233,6 +233,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const initialLoadDone = useRef(false);
   // Callback ref: initial load sets this to trigger an immediate Deputy poll once load is done.
   const wakeDeputyPoll  = useRef<(() => void) | null>(null);
+  // Ref to latest rosters so the Deputy poll can check split-shift status without resetting the interval.
+  const rostersRef = useRef(rosters);
+  useEffect(() => { rostersRef.current = rosters; }, [rosters]);
   const [floatScheds,         setFloatScheds]         = useState<any[]>([]);
 
   const [dayAllocations,      setDayAllocations]      = useState<Record<number,string>>({});
@@ -353,6 +356,26 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           // so everything returned here has genuine actual times.
           if (!ts.actualStart) continue; // no actual times available - skip
           const key = String(ts.employeeId);
+
+          // Split-shift staff have two roster segments. A single start/end override from
+          // one actual timesheet would replace both segments and show the wrong shift time
+          // in slots outside that segment. For split shifts, keep the roster segments and
+          // remove any existing Deputy override so the correct segment is shown per slot.
+          const rosterEntry = rostersRef.current.find(r => r.employeeId === ts.employeeId);
+          if (rosterEntry?.isSplitShift) {
+            const removeDeputyOverride = (prev: RatioCheckSession): RatioCheckSession => {
+              const existing = prev.staffTimeOverrides[key];
+              if (existing?.source !== 'deputy') return prev;
+              const overrides = { ...prev.staffTimeOverrides };
+              delete overrides[key];
+              const next = { ...prev, staffTimeOverrides: overrides };
+              return next;
+            };
+            setMorningData(prev => { const next = removeDeputyOverride(prev); if (next !== prev) { save('morning', next); } return next; });
+            setMiddayData(prev => { const next = removeDeputyOverride(prev); if (next !== prev) { save('midday', next); } return next; });
+            setAfternoonData(prev => { const next = removeDeputyOverride(prev); if (next !== prev) { save('afternoon', next); } return next; });
+            continue;
+          }
 
           setMorningData(prev => {
             const existing = prev.staffTimeOverrides[key];
