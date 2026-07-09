@@ -2634,7 +2634,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                               {roomStaff.map(s => {
                                 const hasOverride = sessionData.staffMoves[`${s.employeeId}:${slot}`] !== undefined;
                                 const hasTimeOverride = !!sessionData.staffTimeOverrides[String(s.employeeId)];
-                                const staffTime = getStaffTime(s);
+                                const staffTime = getStaffTimeForSlot(s, slot);
                                 return (
                                   <div
                                     key={s.employeeId}
