@@ -3131,51 +3131,60 @@ export default function ReportingPage() {
                   )}
 
                   {/* Centre summary table (only useful when more than one centre is selected) */}
-                  {campuses.length > 1 && (
-                    <div className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
-                      <div className="px-5 py-3" style={{ backgroundColor: '#2d5c18' }}>
-                        <div className="font-bold text-sm text-white">Centre Summary</div>
-                      </div>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr style={{ backgroundColor: '#F5FAF3' }}>
-                              {['Centre','Avg Surplus / Deficit','Days','Total Casual Hours','Flag'].map(h => (
-                                <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {campuses.sort().map((campus, i) => {
-                              const campusRows = byCampus[campus];
-                              const campusAvg = campusRows.reduce((s, r) => s + r.floatSurplus, 0) / campusRows.length;
-                              const totalCasualHours = campusRows.reduce((s, r) => s + r.internalCasualHours + r.externalCasualHours, 0);
-                              const flagged = campusAvg > 0 && totalCasualHours > 0;
-                              return (
+                  {campuses.length > 1 && (() => {
+                    const dates = [...new Set(staffingAnalysisRows.map(r => r.date))].sort();
+                    const byDate: Record<string, Record<string, StaffingAnalysisRow>> = {};
+                    for (const row of staffingAnalysisRows) {
+                      (byDate[row.date] ??= {})[row.campus] = row;
+                    }
+                    return (
+                      <div className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                        <div className="px-5 py-3" style={{ backgroundColor: '#2d5c18' }}>
+                          <div className="font-bold text-sm text-white">Centre Summary</div>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm min-w-[600px]">
+                            <thead>
+                              <tr style={{ backgroundColor: '#F5FAF3' }}>
+                                <th className="py-2 px-3 text-xs font-semibold text-left sticky left-0" style={{ color: '#5a9228', backgroundColor: '#F5FAF3' }}>Centre</th>
+                                {dates.map(date => (
+                                  <th key={date} className="py-2 px-3 text-xs font-semibold text-center" style={{ color: '#5a9228', minWidth: 100 }}>{safeFormat(date, 'EEE d MMM')}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {campuses.sort().map((campus, i) => (
                                 <tr key={campus} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
-                                  <td className="py-2 px-3 font-medium text-xs" style={{ color: '#050505' }}>{campus}</td>
-                                  <td className="py-2 px-3 text-xs font-bold" style={{ color: campusAvg < 0 ? '#dc2626' : campusAvg > 0 ? '#166534' : '#596570' }}>
-                                    {campusAvg >= 0 ? '+' : ''}{campusAvg.toFixed(1)}
-                                  </td>
-                                  <td className="py-2 px-3 text-xs" style={{ color: '#596570' }}>{campusRows.length}</td>
-                                  <td className="py-2 px-3 text-xs" style={{ color: totalCasualHours > 0 ? '#92400e' : '#9ca3af' }}>
-                                    {totalCasualHours.toFixed(1)}h
-                                  </td>
-                                  <td className="py-2 px-3 text-xs">
-                                    {flagged ? (
-                                      <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️ Surplus + Casuals</span>
-                                    ) : (
-                                      <span style={{ color: '#166534' }}>✓</span>
-                                    )}
-                                  </td>
+                                  <td className="py-2 px-3 font-medium text-xs sticky left-0" style={{ color: '#050505', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>{campus}</td>
+                                  {dates.map(date => {
+                                    const row = byDate[date]?.[campus];
+                                    if (!row) {
+                                      return <td key={date} className="py-2 px-3 text-xs text-center" style={{ color: '#94a3b8' }}>—</td>;
+                                    }
+                                    const casualHours = row.internalCasualHours + row.externalCasualHours;
+                                    const flagged = row.floatSurplus > 0 && casualHours > 0;
+                                    return (
+                                      <td key={date} className="py-2 px-3 text-xs text-center align-top">
+                                        <div className="flex flex-col gap-0.5">
+                                          <span style={{ color: row.floatSurplus < 0 ? '#dc2626' : row.floatSurplus > 0 ? '#166534' : '#596570', fontWeight: 700 }}>
+                                            {row.floatSurplus >= 0 ? '+' : ''}{row.floatSurplus.toFixed(1)}
+                                          </span>
+                                          <span style={{ color: casualHours > 0 ? '#92400e' : '#9ca3af' }}>
+                                            {casualHours.toFixed(1)}h
+                                          </span>
+                                          {flagged && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️</span>}
+                                        </div>
+                                      </td>
+                                    );
+                                  })}
                                 </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {campuses.length === 0 ? (
                     <div className="text-sm italic" style={{ color: '#596570' }}>No staffing data for selected period.</div>
