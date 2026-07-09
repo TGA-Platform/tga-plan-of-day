@@ -766,24 +766,27 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       const progStaff: RosteredStaff[] = [], lunchStaff: RosteredStaff[] = [], cleanStaff: RosteredStaff[] = [];
       for (const fsRow of floatScheds) {
         for (const block of (fsRow.schedule ?? [])) {
+          const ct = String(block.coverType ?? '').toLowerCase();
           const covId = block.coveringEmployeeId as number | undefined;
-          if (!covId) continue;
+          // Cleaning / own-lunch blocks are performed by the floater themselves,
+          // so the off-floor person is the floater when no covering employee is set.
+          const offFloorEmpId = covId ?? ((ct === 'cleaning' || ct === 'own-lunch') ? (fsRow.employee_id as number | undefined) : undefined);
+          if (!offFloorEmpId) continue;
           const bStart = slotToMins(String(block.startTime ?? '00:00'));
           const bEnd   = slotToMins(String(block.endTime   ?? '00:00'));
           if (slotMins < bStart || slotMins >= bEnd) continue;
           // If manually moved to a different activity or back to a room - suppress float-schedule entry
-          const manualMove = sessionData.staffMoves[`${covId}:${slot}`];
+          const manualMove = sessionData.staffMoves[`${offFloorEmpId}:${slot}`];
           if (manualMove !== undefined) continue; // manual placement always wins
-          const staffObj = (staffAtSlotMap[slot] ?? []).find(s => s.employeeId === covId);
+          const staffObj = (staffAtSlotMap[slot] ?? []).find(s => s.employeeId === offFloorEmpId);
           if (!staffObj) continue;
-          const ct = String(block.coverType ?? '').toLowerCase();
           // Deduplicate: only add once per employee per activity column
-          if (ct === 'programming' && !progIds.has(covId)) {
-            progIds.add(covId); progStaff.push(staffObj);
-          } else if (ct === 'cleaning' && !cleanIds.has(covId)) {
-            cleanIds.add(covId); cleanStaff.push(staffObj);
-          } else if (block.type === 'break' && ct !== 'ratio' && !lunchIds.has(covId)) {
-            lunchIds.add(covId); lunchStaff.push(staffObj);
+          if (ct === 'programming' && !progIds.has(offFloorEmpId)) {
+            progIds.add(offFloorEmpId); progStaff.push(staffObj);
+          } else if (ct === 'cleaning' && !cleanIds.has(offFloorEmpId)) {
+            cleanIds.add(offFloorEmpId); cleanStaff.push(staffObj);
+          } else if (block.type === 'break' && ct !== 'ratio' && !lunchIds.has(offFloorEmpId)) {
+            lunchIds.add(offFloorEmpId); lunchStaff.push(staffObj);
           }
         }
       }
@@ -803,17 +806,19 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       const offFloor = new Set<number>();
       for (const fsRow of floatScheds) {
         for (const block of (fsRow.schedule ?? [])) {
+          const ct = String(block.coverType ?? '').toLowerCase();
           const covId = block.coveringEmployeeId as number | undefined;
-          if (!covId) continue;
+          // Cleaning / own-lunch blocks are performed by the floater themselves
+          const offFloorEmpId = covId ?? ((ct === 'cleaning' || ct === 'own-lunch') ? (fsRow.employee_id as number | undefined) : undefined);
+          if (!offFloorEmpId) continue;
           const bStart = slotToMins(String(block.startTime ?? '00:00'));
           const bEnd   = slotToMins(String(block.endTime   ?? '00:00'));
           if (slotMins < bStart || slotMins >= bEnd) continue;
           // Check if manually overridden - if staffMoves points them to a room, they're on floor
-          const manualMove = sessionData.staffMoves[`${covId}:${slot}`];
+          const manualMove = sessionData.staffMoves[`${offFloorEmpId}:${slot}`];
           if (manualMove !== undefined && !activityMoves.has(manualMove)) continue; // back on floor
-          const ct = String(block.coverType ?? '').toLowerCase();
-          if (ct === 'programming' || ct === 'cleaning') offFloor.add(covId);
-          if (block.type === 'break' && ct !== 'ratio') offFloor.add(covId);
+          if (ct === 'programming' || ct === 'cleaning') offFloor.add(offFloorEmpId);
+          if (block.type === 'break' && ct !== 'ratio') offFloor.add(offFloorEmpId);
         }
       }
       map[slot] = offFloor;
