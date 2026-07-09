@@ -232,7 +232,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // Callback ref: initial load sets this to trigger an immediate Deputy poll once load is done.
   const wakeDeputyPoll  = useRef<(() => void) | null>(null);
   const [floatScheds,         setFloatScheds]         = useState<any[]>([]);
-  const [lunchScheds,         setLunchScheds]         = useState<Array<{ employeeId: number; lunchStart: string; lunchEnd: string }>>([]);
+
   const [dayAllocations,      setDayAllocations]      = useState<Record<number,string>>({});
 
   // -- Lunch break overdue alerts --------------------------------------------
@@ -456,10 +456,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     if (autoSaveTimer.current) { clearTimeout(autoSaveTimer.current); autoSaveTimer.current = null; }
     pendingSave.current = null;
     hasUserEdited.current = false;
-    // Reset float/lunch schedules immediately so stale data from a previous centre
+    // Reset float schedules immediately so stale data from a previous centre
     // doesn't bleed through while the new centre's data loads.
     setFloatScheds([]);
-    setLunchScheds([]);
     async function load() {
       try {
         const r = await fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centreId)}&date=${date}`);
@@ -509,16 +508,6 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       try {
         const fr = await fetch(`/api/float-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
         if (!cancelled && fr.ok) setFloatScheds(await fr.json());
-        // Load lunch schedule (from LunchBreakPanel) to show planned lunch times on chips
-        try {
-          const lr = await fetch(`/api/lunch-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
-          if (!cancelled && lr.ok) {
-            const lrows = await lr.json();
-            // API returns [{ schedule: [...] }] - extract the schedule array
-            const sched = Array.isArray(lrows) && lrows.length > 0 ? (lrows[0].schedule ?? []) : [];
-            setLunchScheds(sched.filter((e: any) => e.employeeId && e.lunchStart));
-          }
-        } catch { /* offline */ }
       } catch { /* offline */ }
       // Fetch live attendance for the actual date - always real-time for Ratio Check
       try {
@@ -672,6 +661,54 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   }, [liveChildren, hasLiveData, children, historicalChildren, rooms, slots]);
 
   // -- Computed: staff present at each slot -----------------------------------
+
+  /** Build effective rostered segments for a staff member, respecting manual
+   *  time overrides. For split shifts, the override extends the overlapping
+   *  roster segment(s) rather than replacing the whole shift, so e.g. extending
+   *  Alysha's first float segment to 11:30 keeps her afternoon segment intact. */
+  function getEffectiveSegments(r: RosteredStaff, override?: { start?: string; end?: string }): Array<{ start: string; end: string }> {
+    const rosterStart = formatRosterTime(r.startTime);
+    const rosterEnd   = formatRosterTime(r.endTime);
+    const baseSegments = (r.isSplitShift && Array.isArray(r.splitSegments) && r.splitSegments.length > 0)
+      ? r.splitSegments.map(seg => ({ start: formatRosterTime(seg.startTime), end: formatRosterTime(seg.endTime) }))
+      : [{ start: rosterStart, end: rosterEnd }];
+
+    if (!override?.start && !override?.end) return baseSegments;
+
+    const ovStart = override.start ?? rosterStart;
+    const ovEnd   = override.end   ?? rosterEnd;
+    const ovStartM = slotToMins(ovStart);
+    const ovEndM   = slotToMins(ovEnd);
+    if (ovStartM === null || ovEndM === null) return baseSegments;
+
+    // Apply override to each overlapping segment
+    const modified = baseSegments.map(seg => {
+      const sM = slotToMins(seg.start);
+      const eM = slotToMins(seg.end);
+      if (eM === null || sM === null) return seg;
+      if (ovEndM < sM || ovStartM > eM) return seg; // no overlap
+      return {
+        start: ovStartM < sM ? ovStart : seg.start,
+        end:   ovEndM   > eM ? ovEnd   : seg.end,
+      };
+    });
+
+    // Sort and merge any segments that now touch/overlap
+    modified.sort((a, b) => (slotToMins(a.start) ?? 0) - (slotToMins(b.start) ?? 0));
+    const merged: Array<{ start: string; end: string }> = [];
+    for (const seg of modified) {
+      const last = merged[merged.length - 1];
+      if (last && (slotToMins(seg.start) ?? 0) <= (slotToMins(last.end) ?? 0)) {
+        if ((slotToMins(seg.end) ?? 0) > (slotToMins(last.end) ?? 0)) {
+          last.end = seg.end;
+        }
+      } else {
+        merged.push(seg);
+      }
+    }
+    return merged;
+  }
+
   const staffAtSlotMap = useMemo(() => {
     const map: Record<string, RosteredStaff[]> = {};
     // Use allSlots (not just current session) so offFloorStaffBySlot can find
@@ -683,22 +720,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       map[slot] = rosters.filter(r => {
         // Use time override if set, otherwise fall back to raw roster times
         const override = sharedTimeOverrides[String(r.employeeId)];
-        const startStr = override?.start || formatRosterTime(r.startTime);
-        const endStr   = override?.end   || formatRosterTime(r.endTime);
-        if (!startStr || !endStr) return false;
-        let inShift = false;
-        if (r.isSplitShift && Array.isArray(r.splitSegments) && r.splitSegments.length > 0) {
-          // Split shifts: staff is only present during the actual rostered segments
-          inShift = r.splitSegments.some(seg => {
-            const s = slotToMins(formatRosterTime(seg.startTime));
-            const e = slotToMins(formatRosterTime(seg.endTime));
-            return s !== null && e !== null && s <= slotMins && e > slotMins;
-          });
-        } else {
-          const start = slotToMins(startStr);
-          const end   = slotToMins(endStr);
-          inShift = start !== null && end !== null && start <= slotMins && end > slotMins;
-        }
+        const segments = getEffectiveSegments(r, override);
+        const inShift = segments.some(seg => {
+          const s = slotToMins(seg.start);
+          const e = slotToMins(seg.end);
+          return s !== null && e !== null && s <= slotMins && e > slotMins;
+        });
         if (!inShift) return false;
         // Deduplicate: split shift staff have 2 roster entries — only show once per slot
         if (seen.has(r.employeeId)) return false;
@@ -1211,28 +1238,21 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   /** Get effective times for a staff member: shared override if set, else natural roster times */
   function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
-    // Planned lunch from LunchBreakPanel (room staff) - fallback when Deputy hasn't recorded actual yet
-    const lunchEntry = lunchScheds.find(e => e.employeeId === s.employeeId);
-    // Planned lunch from FloatSchedulePanel (float staff own-lunch block)
-    const fsRow = floatScheds.find(f => f.employee_id === s.employeeId);
-    const ownLunch = fsRow?.schedule?.find((b: any) => b.coverType === 'own-lunch');
-    // Planned lunch: prefer LunchBreakPanel, fall back to FloatSchedule own-lunch
-    const plannedLunchStart = lunchEntry?.lunchStart ?? ownLunch?.startTime ?? undefined;
-    const plannedLunchEnd   = lunchEntry?.lunchEnd   ?? ownLunch?.endTime   ?? undefined;
     if (override) {
-      // Deputy actual lunch takes priority; fall back to planned if Deputy hasn't recorded it yet
+      // Only show lunch times on the chip when they come from an actual Deputy
+      // meal break or a manual override. Planned lunch times (from LunchBreakPanel
+      // / FloatSchedulePanel) remain visible in the activity columns and panels,
+      // but should not appear as "actual" lunch on the chip before they happen.
       return {
         ...override,
-        lunchStart: override.lunchStart ?? plannedLunchStart,
-        lunchEnd:   override.lunchEnd   ?? plannedLunchEnd,
+        lunchStart: override.lunchStart,
+        lunchEnd:   override.lunchEnd,
       };
     }
-    // No Deputy override - use roster times + planned lunch
+    // No override - use roster times, no planned lunch on the chip
     return {
       start: formatRosterTime(s.startTime),
       end: formatRosterTime(s.endTime),
-      lunchStart: plannedLunchStart,
-      lunchEnd:   plannedLunchEnd,
     };
   }
 
