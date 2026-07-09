@@ -3195,7 +3195,7 @@ export default function ReportingPage() {
                 (byDateCentre[row.date] ??= {})[row.campus] = row;
               }
 
-              // Build ISO week buckets (Mon-Sun) covering the selected date range
+              // Build ISO week buckets (Mon-Fri) covering the selected date range
               const weekBuckets: { weekStart: string; weekEnd: string; dates: string[] }[] = [];
               const start = parseISO(fromDate);
               const end = parseISO(toDate);
@@ -3205,14 +3205,15 @@ export default function ReportingPage() {
                 const weekDates: string[] = [];
                 for (let d = 0; d < 7; d++) {
                   const day = add(cursor, { days: d });
-                  if (!isBefore(day, start) && !isAfter(day, end)) {
+                  const dow = day.getDay();
+                  if (dow !== 0 && dow !== 6 && !isBefore(day, start) && !isAfter(day, end)) {
                     weekDates.push(format(day, 'yyyy-MM-dd'));
                   }
                 }
                 if (weekDates.length > 0) {
                   weekBuckets.push({
                     weekStart: format(cursor, 'yyyy-MM-dd'),
-                    weekEnd: format(add(cursor, { days: 6 }), 'yyyy-MM-dd'),
+                    weekEnd: format(add(cursor, { days: 4 }), 'yyyy-MM-dd'),
                     dates: weekDates,
                   });
                 }
