@@ -98,10 +98,9 @@ function AgeBreakdownRow({ label, count, ratio }: { label: string; count: number
 function StaffChip({ staff }: { staff: RosteredStaff }) {
   const start = formatTime(staff.startTime);
   const end   = formatTime(staff.endTime);
-  // Split shift: show each segment separately e.g. "7:00–10:00 / 14:00–18:00"
-  const timeStr = staff.isSplitShift && staff.splitSegments?.length
-    ? staff.splitSegments.map(seg => `${formatTime(seg.startTime)}–${formatTime(seg.endTime)}`).join(' / ')
-    : start && end ? `${start}–${end}` : start || end || '';
+  // For split shifts each roster entry represents one segment, so show that
+  // segment's time. The "SPLIT" badge indicates the full shift is split.
+  const timeStr = start && end ? `${start}–${end}` : start || end || '';
   const meta = staff.externalCasualMeta;
   // Format cost e.g. 38250 → $382.50
   const costStr = meta?.costCents ? `$${(meta.costCents / 100).toFixed(2)}` : null;
