@@ -22,7 +22,8 @@ interface FamilyGroupingConfig {
   slots: string[];      // HH:MM slots this applies to
   color: string;        // hex colour
   heldInRoom?: string;  // which room the grouping is physically held in
-  staffIds?: number[];  // staff explicitly added to this grouping via drag/drop
+  staffIdsBySlot?: Record<string, number[]>; // staff explicitly added to this grouping, keyed by slot
+  staffIds?: number[];  // legacy: migrated to staffIdsBySlot on load
 }
 
 interface RoomVisitor {
@@ -483,7 +484,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             roomIds: (row.data as { familyGroupingRooms?: string[] }).familyGroupingRooms ?? [],
             slots: (row.data as { familyGroupingSlots?: string[] }).familyGroupingSlots ?? [],
             color: '#7c3aed',
-            staffIds: [],
+            staffIdsBySlot: {},
           }] : [];
 
           const d: RatioCheckSession = {
@@ -495,6 +496,19 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             staffTimeOverrides: row.data.staffTimeOverrides ?? {},
             roomVisitors: (row.data as any).roomVisitors ?? {},
           };
+          // Migrate legacy FG staffIds (whole-grouping) to per-slot staffIdsBySlot
+          if (d.familyGroupings) {
+            d.familyGroupings = d.familyGroupings.map(fg => {
+              if ((fg.staffIds?.length ?? 0) > 0 && !fg.staffIdsBySlot) {
+                const staffIdsBySlot: Record<string, number[]> = {};
+                for (const slot of fg.slots) {
+                  staffIdsBySlot[slot] = [...fg.staffIds!];
+                }
+                return { ...fg, staffIdsBySlot, staffIds: undefined };
+              }
+              return fg;
+            });
+          }
           if (row.session === 'morning')   setMorningData(d);
           if (row.session === 'midday')    setMiddayData(d);
           if (row.session === 'afternoon') setAfternoonData(d);
@@ -1031,7 +1045,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return [...rosterInRoom, ...floatStaffInRoom];
   }
 
-  /** Staff on shift at a slot not currently assigned to any room (excludes Additional Duties) */
+  /** Staff on shift at a slot not currently assigned to any room or FG (excludes Additional Duties) */
   function getUnassignedStaffAtSlot(slot: string): RosteredStaff[] {
     const available = staffAtSlotMap[slot] ?? [];
     const roomUnitIds = new Set(rooms.map(r => r.deputyUnitId));
@@ -1040,7 +1054,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       const moveKey = `${r.employeeId}:${slot}`;
       const move = sessionData.staffMoves[moveKey];
       if (move !== undefined) {
-        return !roomIds.has(move) && move !== '__additional__';
+        return !roomIds.has(move) && move !== '__additional__' && move !== '__removed__';
       }
       return !roomUnitIds.has(r.unitId);
     });
@@ -1061,7 +1075,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       if (floatsCoveringRoom.has(r.employeeId)) return false;
       const moveKey = `${r.employeeId}:${slot}`;
       const move = sessionData.staffMoves[moveKey];
-      if (move !== undefined) return !roomIds.has(move) && !activityMoves.has(move);
+      if (move !== undefined) return !roomIds.has(move) && !activityMoves.has(move) && move !== '__removed__';
       // Native float unit staff: hide from Additional Duties only when they have
       // an active schedule block (covering a room, on lunch, programming etc).
       // If they're on shift but have NO active block (e.g. plan day didn't cover
@@ -1149,7 +1163,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       roomIds: [],
       slots: [],
       color: FG_COLOURS[idx],
-      staffIds: [],
+      staffIdsBySlot: {},
     };
     syncFGToAllSessions(fgs => [...fgs.filter(f => f.id !== newFG.id), newFG]);
     setEditingFgId(newFG.id);
@@ -1185,7 +1199,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       roomIds: [],
       slots: [slot],
       color: FG_COLOURS[idx],
-      staffIds: [],
+      staffIdsBySlot: {},
     };
     syncFGToAllSessions(fgs => [...fgs.filter(f => f.id !== newFG.id), newFG]);
     setFgPopoverSlot(null);
@@ -1193,22 +1207,27 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     setEditingFgId(newFG.id);
   }
 
-  /** Add a staff member to a family grouping (drag-and-drop) */
-  function addStaffToFG(fgId: string, employeeId: number) {
+  /** Add a staff member to a family grouping for a specific slot */
+  function addStaffToFG(fgId: string, employeeId: number, slot: string) {
     syncFGToAllSessions(fgs => fgs.map(fg => {
       if (fg.id !== fgId) return fg;
-      const ids = new Set(fg.staffIds ?? []);
+      const bySlot = { ...(fg.staffIdsBySlot ?? {}) };
+      const ids = new Set(bySlot[slot] ?? []);
       ids.add(employeeId);
-      return { ...fg, staffIds: [...ids] };
+      bySlot[slot] = [...ids];
+      return { ...fg, staffIdsBySlot: bySlot };
     }));
   }
 
-  /** Remove a staff member from every family grouping (used when dragging out to a room/activity) */
-  function removeStaffFromAllFGs(employeeId: number) {
-    syncFGToAllSessions(fgs => fgs.map(fg => ({
-      ...fg,
-      staffIds: (fg.staffIds ?? []).filter(id => id !== employeeId),
-    })));
+  /** Remove a staff member from all family groupings at a specific slot */
+  function removeStaffFromAllFGsAtSlot(employeeId: number, slot: string) {
+    syncFGToAllSessions(fgs => fgs.map(fg => {
+      if (!fg.staffIdsBySlot?.[slot]?.includes(employeeId)) return fg;
+      const bySlot = { ...(fg.staffIdsBySlot ?? {}) };
+      bySlot[slot] = (bySlot[slot] ?? []).filter(id => id !== employeeId);
+      if (bySlot[slot].length === 0) delete bySlot[slot];
+      return { ...fg, staffIdsBySlot: bySlot };
+    }));
   }
 
   /** Find a rostered staff object by employeeId */
@@ -1234,6 +1253,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       scheduleAutoSave(next);
       return next;
     });
+    // Moving to a room/activity means the staff is no longer explicitly assigned to any FG at this slot
+    removeStaffFromAllFGsAtSlot(empId, slot);
   }
 
   function resetStaffMove(empId: number, slot: string) {
@@ -2255,7 +2276,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                         const fgStaffMembers: FGStaffMember[] = fgRooms.flatMap(r =>
                           getStaffForRoom(slot, r).map(s => ({ ...s, inRoomId: r.id, inRoomName: r.name }))
                         );
-                        const explicitFgStaff: FGStaffMember[] = (fg.staffIds ?? [])
+                        const explicitFgStaff: FGStaffMember[] = (fg.staffIdsBySlot?.[slot] ?? [])
                           .map(id => findRosteredStaff(id))
                           .filter((s): s is RosteredStaff => !!s && !fgStaffMembers.some(m => m.employeeId === s.employeeId))
                           .map(s => ({ ...s, inRoomId: fg.heldInRoom || fgRooms[0]?.id || '', inRoomName: 'Grouping', isExplicitFG: true }));
@@ -2272,9 +2293,22 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                               e.preventDefault();
                               if (dragState.current) {
                                 const { empId } = dragState.current;
-                                // Add to this grouping and remove from any other grouping.
-                                addStaffToFG(fg.id, empId);
-                                syncFGToAllSessions(fgs => fgs.map(f => f.id === fg.id ? f : { ...f, staffIds: (f.staffIds ?? []).filter(id => id !== empId) }));
+                                // Add to this grouping for this slot and remove from any other grouping at this slot.
+                                addStaffToFG(fg.id, empId, slot);
+                                syncFGToAllSessions(fgs => fgs.map(f => {
+                                  if (f.id === fg.id) return f;
+                                  if (!f.staffIdsBySlot?.[slot]?.includes(empId)) return f;
+                                  const bySlot = { ...(f.staffIdsBySlot ?? {}) };
+                                  bySlot[slot] = (bySlot[slot] ?? []).filter(id => id !== empId);
+                                  if (bySlot[slot].length === 0) delete bySlot[slot];
+                                  return { ...f, staffIdsBySlot: bySlot };
+                                }));
+                                // Remove them from any room assignment at this slot so they only appear in the FG cell
+                                setSessionData(prev => {
+                                  const next = { ...prev, staffMoves: { ...prev.staffMoves, [`${empId}:${slot}`]: '__removed__' } };
+                                  scheduleAutoSave(next);
+                                  return next;
+                                });
                                 dragState.current = null;
                               }
                             }}
@@ -2500,7 +2534,6 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                               if (dragState.current) {
                                 const { empId, slot: dragSlot } = dragState.current;
                                 moveStaff(empId, dragSlot, room.id);
-                                removeStaffFromAllFGs(empId);
                                 dragState.current = null;
                               }
                             }}

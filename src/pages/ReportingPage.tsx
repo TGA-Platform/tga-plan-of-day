@@ -1089,7 +1089,7 @@ export default function ReportingPage() {
         // Build combined staffMoves + FG configs + time overrides + notes from all ratio-check sessions
         const ratioStaffMoves: Record<string, string> = {};
         const ratioStaffNotes: Record<string, string> = {};
-        const ratioFGConfigs: Array<{ id: string; label: string; roomIds: string[]; slots: string[]; heldInRoom?: string; staffIds?: number[] }> = [];
+        const ratioFGConfigs: Array<{ id: string; label: string; roomIds: string[]; slots: string[]; heldInRoom?: string; staffIdsBySlot?: Record<string, number[]>; staffIds?: number[] }> = [];
         const ratioTimeOverrides: Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string }> = {};
         const ratioVisitors: Array<{ id: string; name: string; wwccNumber?: string; roomId: string; enteredAt: string; exitedAt?: string }> = [];
 
@@ -1400,7 +1400,9 @@ export default function ReportingPage() {
             if (!fgPos) {
               for (const fg of ratioFGConfigs) {
                 if (!fg.slots.includes(slot)) continue;
-                if ((fg.staffIds ?? []).includes(empId)) {
+                const slotIds = fg.staffIdsBySlot?.[slot] ?? [];
+                const legacyIds = fg.staffIds ?? [];
+                if (slotIds.includes(empId) || legacyIds.includes(empId)) {
                   const heldIn = fg.heldInRoom ? (centre.rooms.find(r => r.id === fg.heldInRoom)?.name ?? fg.heldInRoom) : fg.label;
                   fgPos = { room: heldIn, blockType: 'grouping' as EducatorEntry['blockType'], note: `${fg.label} - held in ${heldIn}` };
                   break;
