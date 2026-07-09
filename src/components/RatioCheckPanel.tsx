@@ -1336,24 +1336,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
     if (override) {
-      // Only show lunch times on the chip when they have actually started.
-      // Stale saved overrides (or old data) may contain future lunch starts;
-      // those should not appear on the chip before the break happens.
-      let lunchStart = override.lunchStart;
-      let lunchEnd   = override.lunchEnd;
-      if (lunchStart) {
-        const nowSydney = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
-        const nowMins = nowSydney.getHours() * 60 + nowSydney.getMinutes();
-        if ((slotToMins(lunchStart) ?? 0) > nowMins) {
-          lunchStart = undefined;
-          lunchEnd   = undefined;
-        }
-      }
-      return {
-        ...override,
-        lunchStart,
-        lunchEnd,
-      };
+      return override;
     }
     // No override - use roster times, no planned lunch on the chip
     return {
