@@ -1324,6 +1324,35 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     };
   }
 
+  /** Get the roster segment that covers the given slot. For split shifts this returns
+   *  the matching segment so the chip shows the correct shift times. */
+  function getSegmentForSlot(s: RosteredStaff, slot: string): { start: string; end: string } | null {
+    const slotMins = slotToMins(slot);
+    if (slotMins === null) return null;
+    const segments = getEffectiveSegments(s, sharedTimeOverrides[String(s.employeeId)]);
+    for (const seg of segments) {
+      const sM = slotToMins(seg.start);
+      const eM = slotToMins(seg.end);
+      if (sM !== null && eM !== null && sM <= slotMins && eM > slotMins) {
+        return seg;
+      }
+    }
+    return null;
+  }
+
+  /** Effective times for chip display at a specific slot. Respects overrides and split shifts. */
+  function getStaffTimeForSlot(s: RosteredStaff, slot: string): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
+    const override = sharedTimeOverrides[String(s.employeeId)];
+    if (override) {
+      return getStaffTime(s);
+    }
+    const seg = getSegmentForSlot(s, slot);
+    if (seg) {
+      return { start: seg.start, end: seg.end };
+    }
+    return getStaffTime(s);
+  }
+
   /** Write time override to ALL three sessions so it persists across morning/midday/afternoon.
    *  source='manual' prevents Deputy polling from overwriting it. */
   function updateStaffTimeOverride(empId: number, start: string, end: string, lunchStart?: string, lunchEnd?: string, isOvertime?: boolean, comment?: string) {
@@ -2830,7 +2859,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px', minHeight: '20px' }}>
                       {getAdditionalDutiesStaff(slot).map(s => {
                         const hasTimeOverride = !!sessionData.staffTimeOverrides[String(s.employeeId)];
-                        const staffTime = getStaffTime(s);
+                        const staffTime = getStaffTimeForSlot(s, slot);
                         return (
                           <div key={s.employeeId} style={{ position: 'relative', display: 'inline-block' }}>
                             <div
