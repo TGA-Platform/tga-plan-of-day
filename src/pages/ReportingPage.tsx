@@ -3219,7 +3219,7 @@ export default function ReportingPage() {
                 cursor = add(cursor, { days: 7 });
               }
 
-              const dayLabels = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+              const dayLabels = ['Mon','Tue','Wed','Thu','Fri'];
 
               return (
                 <div className="space-y-4">
@@ -3253,7 +3253,8 @@ export default function ReportingPage() {
 
                     const weekRows = activeCentres.map(campus => {
                       const centreTotalCostCents = dates.reduce((s, d) => s + (byDateCentre[d]?.[campus]?.externalCostCents ?? 0), 0);
-                      return { campus, centreTotalCostCents };
+                      const centreTotalInternalHours = dates.reduce((s, d) => s + (byDateCentre[d]?.[campus]?.internalHours ?? 0), 0);
+                      return { campus, centreTotalCostCents, centreTotalInternalHours };
                     });
                     const weekExternalCostCents = weekRows.reduce((s, r) => s + r.centreTotalCostCents, 0);
 
@@ -3274,12 +3275,14 @@ export default function ReportingPage() {
                                 {dayLabels.map(label => (
                                   <th key={label} className="py-2 px-2 text-xs font-semibold text-center" style={{ color: '#5a9228', minWidth: 90 }}>{label}</th>
                                 ))}
+                                <th className="py-2 px-3 text-xs font-semibold text-right" style={{ color: '#5a9228' }}>Internal Hours</th>
                                 <th className="py-2 px-3 text-xs font-semibold text-right" style={{ color: '#5a9228' }}>External Cost</th>
                               </tr>
                             </thead>
                             <tbody>
                               {activeCentres.map((campus, i) => {
                                 const centreTotalCostCents = weekRows.find(r => r.campus === campus)?.centreTotalCostCents ?? 0;
+                                const centreTotalInternalHours = weekRows.find(r => r.campus === campus)?.centreTotalInternalHours ?? 0;
                                 return (
                                   <tr key={campus} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
                                     <td className="py-2 px-3 font-medium sticky left-0" style={{ color: '#050505', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>{campus}</td>
@@ -3299,6 +3302,7 @@ export default function ReportingPage() {
                                         </td>
                                       );
                                     })}
+                                    <td className="py-2 px-3 text-right font-medium" style={{ color: '#92400e' }}>{centreTotalInternalHours.toFixed(1)}h</td>
                                     <td className="py-2 px-3 text-right font-medium" style={{ color: '#c2410c' }}>${(centreTotalCostCents / 100).toFixed(2)}</td>
                                   </tr>
                                 );
