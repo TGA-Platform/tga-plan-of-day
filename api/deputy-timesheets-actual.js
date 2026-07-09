@@ -114,7 +114,7 @@ export default async function handler(req, res) {
       // Parse meal break slots
       const breaks = [];
       const slots = Array.isArray(ts.Slots) ? ts.Slots : [];
-      const shiftStartUnix = ts.StartTime || 0; // unix seconds
+      // shiftStartUnix already declared above for shiftHasStarted
       for (const slot of slots) {
         if (slot.strType !== 'B') continue; // B = Break
         const breakType = slot.mixedActivity?.strBreakType === 'M' ? 'meal' : 'other';
