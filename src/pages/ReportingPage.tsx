@@ -1090,7 +1090,7 @@ export default function ReportingPage() {
         const ratioStaffMoves: Record<string, string> = {};
         const ratioStaffNotes: Record<string, string> = {};
         const ratioFGConfigs: Array<{ id: string; label: string; roomIds: string[]; slots: string[]; heldInRoom?: string; staffIdsBySlot?: Record<string, number[]>; staffIds?: number[] }> = [];
-        const ratioTimeOverrides: Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string }> = {};
+        const ratioTimeOverrides: Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: string }> = {};
         const ratioVisitors: Array<{ id: string; name: string; wwccNumber?: string; roomId: string; enteredAt: string; exitedAt?: string }> = [];
 
         for (const row of (ratioCheckRows as any[])) {
@@ -1326,9 +1326,26 @@ export default function ReportingPage() {
           // Study Time units are secondary blocks (not the person's main shift) — skip override
           const isStudyTime = rawUnit.includes('study time');
           const actualOverride = (!isLeaveUnit && !isStudyTime) ? ratioTimeOverrides[String(empId)] : undefined;
-          const shiftIn  = actualOverride?.start || fmtTime(r.StartTime);
-          // If Deputy hasn't clocked them out yet, fall back to rostered end time
-          const shiftOut = (actualOverride?.end || '') || fmtTime(r.EndTime);
+
+          // For split shifts, the override may contain multiple segments. Pick the one
+          // matching this roster entry's start time so morning/afternoon entries keep
+          // their correct actual start/end in the report.
+          const rosterStart = fmtTime(r.StartTime);
+          const rosterEnd   = fmtTime(r.EndTime);
+          let shiftIn  = rosterStart;
+          let shiftOut = rosterEnd;
+          if (actualOverride) {
+            const matchingSegment = actualOverride.segments?.find(seg =>
+              seg.start <= rosterStart && seg.end >= rosterStart
+            );
+            if (matchingSegment) {
+              shiftIn = matchingSegment.start;
+              shiftOut = matchingSegment.end;
+            } else {
+              shiftIn = actualOverride.start || shiftIn;
+              shiftOut = actualOverride.end || shiftOut;
+            }
+          }
           if (shiftIn === '-' || shiftOut === '-') continue;
 
           const staffType: EducatorEntry['staffType'] =
