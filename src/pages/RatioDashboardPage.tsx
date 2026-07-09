@@ -851,6 +851,28 @@ export default function RatioDashboardPage() {
     return () => { cancelled = true; };
   }, [movesKey, selectedCentreId, date]);
 
+  // Load existing float schedules so the main "Plan day" buttons correctly
+  // show "Day planned" for floats that already have a saved schedule.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSavedFloats() {
+      try {
+        const r = await fetch(`/api/float-schedules?centre=${encodeURIComponent(selectedCentreId)}&date=${date}`);
+        if (!r.ok || cancelled) return;
+        const rows = await r.json();
+        const ids = new Set<number>();
+        for (const row of (rows ?? [])) {
+          if (row.schedule?.length > 0 && row.employee_id) {
+            ids.add(Number(row.employee_id));
+          }
+        }
+        if (!cancelled) setSavedFloatIds(ids);
+      } catch { /* offline — buttons will update after next save */ }
+    }
+    loadSavedFloats();
+    return () => { cancelled = true; };
+  }, [selectedCentreId, date]);
+
   async function saveMoves() {
     const moves = staffMoves;
     // 1. Save to localStorage immediately

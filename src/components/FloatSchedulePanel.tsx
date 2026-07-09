@@ -502,8 +502,9 @@ function BlockRow({
               onChange({
                 ...block,
                 notes: newNotes,
-                // Auto-select cover type from notes if not already manually set
-                ...(inferred && !block.coverType ? { coverType: inferred } : {}),
+                // Auto-select cover type from notes so they stay in sync.
+                // e.g. "Lunch break cover" notes must default to lunch cover type.
+                ...(inferred ? { coverType: inferred } : {}),
               });
             }}
             placeholder="e.g. additional details"
