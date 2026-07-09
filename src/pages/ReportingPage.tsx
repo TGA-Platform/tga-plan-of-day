@@ -161,6 +161,10 @@ interface StaffingAnalysisRow {
   totalFloatersNeeded: number;       // buffer + net shortage
   floatSurplus:        number;       // floatCount + adAvailable - totalFloatersNeeded
   status:              'green' | 'amber' | 'red' | 'unknown';
+  internalCasualHours: number;        // internal casual hours for the day
+  externalCasualHours: number;        // external (Z) casual hours for the day
+  internalCasualCount: number;        // internal casual shifts for the day
+  externalCasualCount: number;        // external casual shifts for the day
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -862,7 +866,7 @@ export default function ReportingPage() {
 
     // Build a set of internal-casual names once for the report.
     const internalCasualNames = new Set<string>();
-    if (needsCasual) {
+    if (needsCasual || needsStaffingAnalysis) {
       try {
         const wwccAll: any[] = await fetch('/api/staff-wwcc').then(r => r.ok ? r.json() : []).catch(() => []);
         for (const rec of wwccAll) {
@@ -875,7 +879,7 @@ export default function ReportingPage() {
 
     // Only fetch the data each selected report actually needs.
     const needAttendance      = needsOccupancy || needsRosterOpt || needsEducator || needsStaffingAnalysis;
-    const needZCasuals        = needsCasual || needsEducator;
+    const needZCasuals        = needsCasual || needsEducator || needsStaffingAnalysis;
     const needAllocations     = needsEducator;
     const needFloatScheds     = needsEducator;
     const needGroupingSessions = needsEducator;
@@ -1703,6 +1707,34 @@ export default function ReportingPage() {
             : saFloatSurplus < 0 ? 'red'
             : saFloatSurplus === 0 ? 'amber'
             : 'green';
+
+          // Casual hours used on this day (for the staffing-analysis casuals column)
+          let saInternalCasualHours = 0;
+          let saInternalCasualCount = 0;
+          for (const r of rosters as any[]) {
+            if (!r.Employee || r.Employee === 0) continue;
+            const name = r._DPMetaData?.EmployeeInfo?.DisplayName || `Staff ${r.Employee}`;
+            if (!internalCasualNames.has(normName(name))) continue;
+            const startM = hhmm(fmtTime(r.StartTime));
+            const endM = hhmm(fmtTime(r.EndTime));
+            if (startM === null || endM === null) continue;
+            let durM = endM - startM;
+            if (durM < 0) durM += 24 * 60;
+            saInternalCasualHours += durM / 60;
+            saInternalCasualCount += 1;
+          }
+          let saExternalCasualHours = 0;
+          let saExternalCasualCount = 0;
+          for (const r of zCasuals as any[]) {
+            const startM = hhmm(fmtTime(r.StartTime));
+            const endM = hhmm(fmtTime(r.EndTime));
+            if (startM === null || endM === null) continue;
+            let durM = endM - startM;
+            if (durM < 0) durM += 24 * 60;
+            saExternalCasualHours += durM / 60;
+            saExternalCasualCount += 1;
+          }
+
           staffingRowsAccum.push({
             date, campus,
             children:            saChildren,
@@ -1715,6 +1747,10 @@ export default function ReportingPage() {
             totalFloatersNeeded: saTotalFloatersNeeded,
             floatSurplus:        saFloatSurplus,
             status:              saStatus,
+            internalCasualHours: saInternalCasualHours,
+            externalCasualHours: saExternalCasualHours,
+            internalCasualCount: saInternalCasualCount,
+            externalCasualCount: saExternalCasualCount,
           });
         }
       }
@@ -3094,6 +3130,53 @@ export default function ReportingPage() {
                     </div>
                   )}
 
+                  {/* Centre summary table (only useful when more than one centre is selected) */}
+                  {campuses.length > 1 && (
+                    <div className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                      <div className="px-5 py-3" style={{ backgroundColor: '#2d5c18' }}>
+                        <div className="font-bold text-sm text-white">Centre Summary</div>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr style={{ backgroundColor: '#F5FAF3' }}>
+                              {['Centre','Avg Surplus / Deficit','Days','Total Casual Hours','Flag'].map(h => (
+                                <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {campuses.sort().map((campus, i) => {
+                              const campusRows = byCampus[campus];
+                              const campusAvg = campusRows.reduce((s, r) => s + r.floatSurplus, 0) / campusRows.length;
+                              const totalCasualHours = campusRows.reduce((s, r) => s + r.internalCasualHours + r.externalCasualHours, 0);
+                              const flagged = campusAvg > 0 && totalCasualHours > 0;
+                              return (
+                                <tr key={campus} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
+                                  <td className="py-2 px-3 font-medium text-xs" style={{ color: '#050505' }}>{campus}</td>
+                                  <td className="py-2 px-3 text-xs font-bold" style={{ color: campusAvg < 0 ? '#dc2626' : campusAvg > 0 ? '#166534' : '#596570' }}>
+                                    {campusAvg >= 0 ? '+' : ''}{campusAvg.toFixed(1)}
+                                  </td>
+                                  <td className="py-2 px-3 text-xs" style={{ color: '#596570' }}>{campusRows.length}</td>
+                                  <td className="py-2 px-3 text-xs" style={{ color: totalCasualHours > 0 ? '#92400e' : '#9ca3af' }}>
+                                    {totalCasualHours.toFixed(1)}h
+                                  </td>
+                                  <td className="py-2 px-3 text-xs">
+                                    {flagged ? (
+                                      <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️ Surplus + Casuals</span>
+                                    ) : (
+                                      <span style={{ color: '#166534' }}>✓</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
                   {campuses.length === 0 ? (
                     <div className="text-sm italic" style={{ color: '#596570' }}>No staffing data for selected period.</div>
                   ) : campuses.map(campus => {
@@ -3122,7 +3205,7 @@ export default function ReportingPage() {
                           <table className="w-full text-sm">
                             <thead>
                               <tr style={{ backgroundColor: '#F5FAF3' }}>
-                                {['Date','Children','Floor Staff','Required','Room ±','Float Buffer','Floats','AD','Available','Surplus','Status'].map(h => (
+                                {['Date','Children','Floor Staff','Required','Room ±','Float Buffer','Floats','AD','Available','Surplus','Casuals','Status'].map(h => (
                                   <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                                 ))}
                               </tr>
@@ -3163,6 +3246,19 @@ export default function ReportingPage() {
                                     </td>
                                     <td className="py-2 px-3 text-xs font-bold" style={{ color: surplusColor }}>
                                       {r.floatSurplus >= 0 ? `+${r.floatSurplus.toFixed(1)}` : r.floatSurplus.toFixed(1)}
+                                    </td>
+                                    <td className="py-2 px-3 text-xs align-top">
+                                      {r.internalCasualHours === 0 && r.externalCasualHours === 0 ? (
+                                        <span style={{ color: '#94a3b8' }}>—</span>
+                                      ) : (
+                                        <div className="flex flex-col gap-0.5">
+                                          {r.internalCasualHours > 0 && <span style={{ color: '#92400e' }}>{r.internalCasualHours.toFixed(1)}h int</span>}
+                                          {r.externalCasualHours > 0 && <span style={{ color: '#c2410c' }}>{r.externalCasualHours.toFixed(1)}h ext</span>}
+                                          {r.floatSurplus > 0 && (r.internalCasualHours > 0 || r.externalCasualHours > 0) && (
+                                            <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️ surplus + casuals</span>
+                                          )}
+                                        </div>
+                                      )}
                                     </td>
                                     <td className="py-2 px-3">
                                       <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
