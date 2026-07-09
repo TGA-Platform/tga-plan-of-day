@@ -158,39 +158,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // Merge multiple timesheets for the same employee (e.g. split shifts or
-    // duplicate records) — use earliest start, latest end, combine breaks.
-    const merged = new Map();
-    for (const r of results) {
-      const existing = merged.get(r.employeeId);
-      if (!existing) {
-        merged.set(r.employeeId, { ...r });
-        continue;
-      }
-      // Merge: keep earliest actualStart, latest actualEnd
-      if (r.actualStart && (!existing.actualStart || r.actualStart < existing.actualStart)) {
-        existing.actualStart = r.actualStart;
-        existing.rosteredStart = r.rosteredStart;
-      }
-      if (r.actualEnd && (!existing.actualEnd || r.actualEnd > existing.actualEnd)) {
-        existing.actualEnd = r.actualEnd;
-        existing.rosteredEnd = r.rosteredEnd;
-      }
-      // isInProgress: true if any segment is still in progress
-      if (r.isInProgress) existing.isInProgress = true;
-      // isRealTime: true if any segment was real-time clock
-      if (r.isRealTime) existing.isRealTime = true;
-      // Combine breaks (deduplicate by breakStart time)
-      for (const brk of r.breaks) {
-        if (!existing.breaks.some(b => b.breakStart === brk.breakStart)) {
-          existing.breaks.push(brk);
-        }
-      }
-    }
+    // Don't merge multiple timesheets for the same employee. Split shifts produce
+    // two separate timesheets (morning + afternoon); merging them into a single
+    // start/end would hide the afternoon shift. The frontend groups/de-duplicates
+    // as needed.
 
     // Cache-control: allow 4-min browser cache (we poll every 5 min)
     res.setHeader('Cache-Control', 'public, max-age=240, stale-while-revalidate=60');
-    return res.status(200).json([...merged.values()]);
+    return res.status(200).json(results);
 
   } catch (e) {
     return res.status(500).json({ error: e.message });

@@ -44,6 +44,7 @@ interface RatioCheckSession {
   staffTimeOverrides: Record<string, {
     start: string;
     end: string;
+    segments?: Array<{ start: string; end: string }>; // split-shift actual segments
     lunchStart?: string;  // HH:MM actual/planned lunch start
     lunchEnd?: string;    // HH:MM actual/planned lunch end
     source?: 'manual' | 'deputy'; // how was this set?
@@ -101,7 +102,7 @@ const EMPTY_SESSION: RatioCheckSession = {
   familyGroupings: [],
   staffMoves: {},
   staffNotes: {},
-  staffTimeOverrides: {} as Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy'; isOvertime?: boolean; comment?: string }>,
+  staffTimeOverrides: {} as Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy'; isOvertime?: boolean; comment?: string }>,
   roomVisitors: {},
 };
 
@@ -349,52 +350,51 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           breaks: Array<{ breakStart: string | null; breakEnd: string | null; type: string; status: string }>;
         }> = await r.json();
 
-        // Merge actuals into time overrides - manual overrides take precedence
+        // Group actuals by employee. A staff member may have two real timesheets
+        // (split shift) — we need both segments, not just the first/last merged.
+        const byEmployee = new Map<number, typeof actuals>();
         for (const ts of actuals) {
-          // Accept both real-time clock-ins (kiosk/app) AND manager-approved timesheets
-          // The backend already filters to entries with actual StartTimeLocalized set,
-          // so everything returned here has genuine actual times.
-          if (!ts.actualStart) continue; // no actual times available - skip
-          const key = String(ts.employeeId);
+          if (!ts.actualStart) continue;
+          const list = byEmployee.get(ts.employeeId) ?? [];
+          list.push(ts);
+          byEmployee.set(ts.employeeId, list);
+        }
 
-          // Split-shift staff have two roster segments. A single start/end override from
-          // one actual timesheet would replace both segments and show the wrong shift time
-          // in slots outside that segment. For split shifts, keep the roster segments and
-          // remove any existing Deputy override so the correct segment is shown per slot.
-          const rosterEntry = rostersRef.current.find(r => r.employeeId === ts.employeeId);
-          if (rosterEntry?.isSplitShift) {
-            const removeDeputyOverride = (prev: RatioCheckSession): RatioCheckSession => {
-              const existing = prev.staffTimeOverrides[key];
-              if (existing?.source !== 'deputy') return prev;
-              const overrides = { ...prev.staffTimeOverrides };
-              delete overrides[key];
-              const next = { ...prev, staffTimeOverrides: overrides };
-              return next;
-            };
-            setMorningData(prev => { const next = removeDeputyOverride(prev); if (next !== prev) { save('morning', next); } return next; });
-            setMiddayData(prev => { const next = removeDeputyOverride(prev); if (next !== prev) { save('midday', next); } return next; });
-            setAfternoonData(prev => { const next = removeDeputyOverride(prev); if (next !== prev) { save('afternoon', next); } return next; });
-            continue;
-          }
+        for (const [employeeId, tss] of byEmployee) {
+          const key = String(employeeId);
+          const rosterEntry = rostersRef.current.find(r => r.employeeId === employeeId);
+          const rosterSegments = rosterEntry
+            ? getEffectiveSegments(rosterEntry)
+            : [{ start: tss[0]?.actualStart ?? '', end: tss[0]?.actualEnd ?? tss[0]?.actualStart ?? '' }];
+
+          // Merge actual timesheets with roster segments. For split shifts this keeps
+          // the rostered afternoon segment visible even if only the morning actual has
+          // been clocked in.
+          const actualSegments = mergeActualSegmentsWithRoster(tss, rosterSegments);
+
+          const allBreaks = tss.flatMap(ts => ts.breaks);
+          const mealBreak = allBreaks.find(b => b.type === 'meal');
+          const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
+            ? mealBreak.breakStart ?? undefined : undefined;
+          const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
+
+          const isInProgress = tss.some(ts => ts.isInProgress);
+          const firstStart = actualSegments[0]?.start ?? '';
+          const lastEnd = isInProgress ? '' : (actualSegments[actualSegments.length - 1]?.end ?? '');
+
+          const buildNewOverride = (existing: RatioCheckSession['staffTimeOverrides'][string]) => ({
+            start: firstStart || existing?.start || '',
+            end: lastEnd || existing?.end || '',
+            segments: actualSegments.length > 1 ? actualSegments : undefined,
+            lunchStart: lunchStart ?? existing?.lunchStart,
+            lunchEnd: lunchEnd ?? existing?.lunchEnd,
+            source: 'deputy' as const,
+          });
 
           setMorningData(prev => {
             const existing = prev.staffTimeOverrides[key];
-            // Don't overwrite manual overrides
             if (existing?.source === 'manual') return prev;
-
-            const mealBreak = ts.breaks.find(b => b.type === 'meal');
-            const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
-              ? mealBreak.breakStart ?? undefined : undefined;
-            const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
-
-            const newOverride = {
-              start: ts.actualStart ?? existing?.start ?? '',
-              end:   (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (existing?.end ?? ''),
-              lunchStart: lunchStart ?? existing?.lunchStart,
-              lunchEnd:   lunchEnd   ?? existing?.lunchEnd,
-              source: 'deputy' as const,
-            };
-            // Only update if something changed
+            const newOverride = buildNewOverride(existing);
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
             save('morning', next);
@@ -403,17 +403,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           setMiddayData(prev => {
             const existing = prev.staffTimeOverrides[key];
             if (existing?.source === 'manual') return prev;
-            const mealBreak = ts.breaks.find(b => b.type === 'meal');
-            const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
-              ? mealBreak.breakStart ?? undefined : undefined;
-            const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
-            const newOverride = {
-              start: ts.actualStart ?? existing?.start ?? '',
-              end:   (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (existing?.end ?? ''),
-              lunchStart: lunchStart ?? existing?.lunchStart,
-              lunchEnd:   lunchEnd   ?? existing?.lunchEnd,
-              source: 'deputy' as const,
-            };
+            const newOverride = buildNewOverride(existing);
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
             save('midday', next);
@@ -422,17 +412,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           setAfternoonData(prev => {
             const existing = prev.staffTimeOverrides[key];
             if (existing?.source === 'manual') return prev;
-            const mealBreak = ts.breaks.find(b => b.type === 'meal');
-            const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
-              ? mealBreak.breakStart ?? undefined : undefined;
-            const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
-            const newOverride = {
-              start: ts.actualStart ?? existing?.start ?? '',
-              end:   (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (existing?.end ?? ''),
-              lunchStart: lunchStart ?? existing?.lunchStart,
-              lunchEnd:   lunchEnd   ?? existing?.lunchEnd,
-              source: 'deputy' as const,
-            };
+            const newOverride = buildNewOverride(existing);
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
             save('afternoon', next);
@@ -705,12 +685,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
    *  time overrides. For split shifts, the override extends the overlapping
    *  roster segment(s) rather than replacing the whole shift, so e.g. extending
    *  Alysha's first float segment to 11:30 keeps her afternoon segment intact. */
-  function getEffectiveSegments(r: RosteredStaff, override?: { start?: string; end?: string }): Array<{ start: string; end: string }> {
+  function getEffectiveSegments(r: RosteredStaff, override?: { start?: string; end?: string; segments?: Array<{ start: string; end: string }> }): Array<{ start: string; end: string }> {
     const rosterStart = formatRosterTime(r.startTime);
     const rosterEnd   = formatRosterTime(r.endTime);
     const baseSegments = (r.isSplitShift && Array.isArray(r.splitSegments) && r.splitSegments.length > 0)
       ? r.splitSegments.map(seg => ({ start: formatRosterTime(seg.startTime), end: formatRosterTime(seg.endTime) }))
       : [{ start: rosterStart, end: rosterEnd }];
+
+    if (override?.segments && override.segments.length > 0) {
+      return override.segments;
+    }
 
     if (!override?.start && !override?.end) return baseSegments;
 
@@ -746,6 +730,37 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       }
     }
     return merged;
+  }
+
+  /** Merge actual timesheet segments with rostered segments so that a split-shift
+   *  staff member keeps their rostered afternoon segment even if only the morning
+   *  actual timesheet has been clocked in so far. */
+  function mergeActualSegmentsWithRoster(
+    actuals: Array<{ actualStart: string | null; actualEnd: string | null; isInProgress: boolean }>,
+    rosterSegments: Array<{ start: string; end: string }>
+  ): Array<{ start: string; end: string }> {
+    const actualSegments = actuals
+      .filter(ts => ts.actualStart)
+      .sort((a, b) => (a.actualStart ?? '').localeCompare(b.actualStart ?? ''))
+      .map(ts => ({
+        start: ts.actualStart as string,
+        end: (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (ts.actualStart as string),
+      }));
+
+    if (actualSegments.length === 0) return rosterSegments;
+
+    return rosterSegments.map(rosterSeg => {
+      const rStartM = slotToMins(rosterSeg.start);
+      const rEndM = slotToMins(rosterSeg.end);
+      if (rStartM === null || rEndM === null) return rosterSeg;
+      const overlapping = actualSegments.find(a => {
+        const aStartM = slotToMins(a.start);
+        const aEndM = slotToMins(a.end);
+        if (aStartM === null || aEndM === null) return false;
+        return aStartM < rEndM && aEndM > rStartM;
+      });
+      return overlapping ?? rosterSeg;
+    });
   }
 
   const staffAtSlotMap = useMemo(() => {
@@ -1366,14 +1381,17 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   /** Effective times for chip display at a specific slot. Respects overrides and split shifts. */
   function getStaffTimeForSlot(s: RosteredStaff, slot: string): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
-    if (override) {
-      return getStaffTime(s);
-    }
     const seg = getSegmentForSlot(s, slot);
-    if (seg) {
-      return { start: seg.start, end: seg.end };
-    }
-    return getStaffTime(s);
+    const base = seg ?? { start: formatRosterTime(s.startTime), end: formatRosterTime(s.endTime) };
+    if (!override) return base;
+    // For split shifts, the override may only cover one segment (or provide segments).
+    // Show the segment covering this slot while still carrying override metadata like lunch.
+    return {
+      ...base,
+      lunchStart: override.lunchStart,
+      lunchEnd: override.lunchEnd,
+      source: override.source,
+    };
   }
 
   /** Write time override to ALL three sessions so it persists across morning/midday/afternoon.
