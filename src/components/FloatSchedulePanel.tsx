@@ -370,7 +370,7 @@ function BlockRow({
   const typeLabel: Record<BlockType, string> = {
     start: '🌅 Start of shift',
     end:   '🌆 End of shift',
-    break: effectiveCoverType ? coverTypeLabel[effectiveCoverType] : 'â˜• Break cover',
+    break: effectiveCoverType ? coverTypeLabel[effectiveCoverType] : 'Break cover',
   };
   const typeColour: Record<BlockType, string> = {
     start: '#E2F1DA',
