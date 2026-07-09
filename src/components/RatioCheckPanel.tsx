@@ -22,6 +22,7 @@ interface FamilyGroupingConfig {
   slots: string[];      // HH:MM slots this applies to
   color: string;        // hex colour
   heldInRoom?: string;  // which room the grouping is physically held in
+  staffIds?: number[];  // staff explicitly added to this grouping via drag/drop
 }
 
 interface RoomVisitor {
@@ -482,6 +483,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             roomIds: (row.data as { familyGroupingRooms?: string[] }).familyGroupingRooms ?? [],
             slots: (row.data as { familyGroupingSlots?: string[] }).familyGroupingSlots ?? [],
             color: '#7c3aed',
+            staffIds: [],
           }] : [];
 
           const d: RatioCheckSession = {
@@ -1147,6 +1149,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       roomIds: [],
       slots: [],
       color: FG_COLOURS[idx],
+      staffIds: [],
     };
     syncFGToAllSessions(fgs => [...fgs.filter(f => f.id !== newFG.id), newFG]);
     setEditingFgId(newFG.id);
@@ -1182,11 +1185,35 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       roomIds: [],
       slots: [slot],
       color: FG_COLOURS[idx],
+      staffIds: [],
     };
     syncFGToAllSessions(fgs => [...fgs.filter(f => f.id !== newFG.id), newFG]);
     setFgPopoverSlot(null);
     setFgPanelOpen(true);
     setEditingFgId(newFG.id);
+  }
+
+  /** Add a staff member to a family grouping (drag-and-drop) */
+  function addStaffToFG(fgId: string, employeeId: number) {
+    syncFGToAllSessions(fgs => fgs.map(fg => {
+      if (fg.id !== fgId) return fg;
+      const ids = new Set(fg.staffIds ?? []);
+      ids.add(employeeId);
+      return { ...fg, staffIds: [...ids] };
+    }));
+  }
+
+  /** Remove a staff member from every family grouping (used when dragging out to a room/activity) */
+  function removeStaffFromAllFGs(employeeId: number) {
+    syncFGToAllSessions(fgs => fgs.map(fg => ({
+      ...fg,
+      staffIds: (fg.staffIds ?? []).filter(id => id !== employeeId),
+    })));
+  }
+
+  /** Find a rostered staff object by employeeId */
+  function findRosteredStaff(employeeId: number): RosteredStaff | undefined {
+    return rosters.find(r => r.employeeId === employeeId);
   }
 
   /** Set FG slots from a From/To range (replaces slots for that FG) */
@@ -2224,9 +2251,15 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                         const fgColSpan = consecutiveFGRoomCount * 3;
                         const fgReq = getFGRequiredForConfig(slot, fg);
                         const fgChildren = fgRooms.reduce((sum, r) => sum + getChildCount(slot, r.id), 0);
-                        const fgStaffMembers = fgRooms.flatMap(r =>
+                        type FGStaffMember = RosteredStaff & { inRoomId: string; inRoomName: string; isExplicitFG?: boolean };
+                        const fgStaffMembers: FGStaffMember[] = fgRooms.flatMap(r =>
                           getStaffForRoom(slot, r).map(s => ({ ...s, inRoomId: r.id, inRoomName: r.name }))
                         );
+                        const explicitFgStaff: FGStaffMember[] = (fg.staffIds ?? [])
+                          .map(id => findRosteredStaff(id))
+                          .filter((s): s is RosteredStaff => !!s && !fgStaffMembers.some(m => m.employeeId === s.employeeId))
+                          .map(s => ({ ...s, inRoomId: fg.heldInRoom || fgRooms[0]?.id || '', inRoomName: 'Grouping', isExplicitFG: true }));
+                        const allFgStaff: FGStaffMember[] = [...fgStaffMembers, ...explicitFgStaff];
                         const fgEditKey = `fg-${fg.id}:${slot}`;
                         const fgUnassigned = getUnassignedStaffAtSlot(slot);
 
@@ -2234,6 +2267,17 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                           <td
                             key={`fg-${fg.id}-${slot}`}
                             colSpan={fgColSpan}
+                            onDragOver={e => e.preventDefault()}
+                            onDrop={e => {
+                              e.preventDefault();
+                              if (dragState.current) {
+                                const { empId } = dragState.current;
+                                // Add to this grouping and remove from any other grouping.
+                                addStaffToFG(fg.id, empId);
+                                syncFGToAllSessions(fgs => fgs.map(f => f.id === fg.id ? f : { ...f, staffIds: (f.staffIds ?? []).filter(id => id !== empId) }));
+                                dragState.current = null;
+                              }
+                            }}
                             style={{
                               ...tdBase,
                               backgroundColor: hexToRgba(fg.color, 0.07),
@@ -2271,27 +2315,29 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                 <span style={{ color: '#6b7280' }}>Req'd: </span>
                                 <strong style={{ color: fgReq > staffAvail ? '#dc2626' : fg.color }}>{fgReq}</strong>
                               </span>
-                              {fgStaffMembers.length > 0 && (
+                              {allFgStaff.length > 0 && (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
-                                  {fgStaffMembers.map((s, ni) => {
+                                  {allFgStaff.map((s, ni) => {
                                     const move = sessionData.staffMoves[`${s.employeeId}:${slot}`];
                                     const isAdditional = move === '__additional__';
+                                    const isExplicit = !!s.isExplicitFG;
                                     return (
                                       <div key={`${s.employeeId}-${ni}`}
                                         draggable
                                         onDragStart={() => { dragState.current = { empId: s.employeeId, slot, fromSource: 'fg' }; }}
-                                        title={`${s.employeeName} (${s.inRoomName}) - drag to Additional Duties or a room`}
+                                        title={`${s.employeeName} (${s.inRoomName})${isExplicit ? ' - explicit grouping member' : ''} - drag to a room to remove from grouping`}
                                         style={{
                                           fontSize: '9px', cursor: 'grab',
-                                          backgroundColor: isAdditional ? '#fef3c7' : '#f0fdf4',
+                                          backgroundColor: isExplicit ? hexToRgba(fg.color, 0.22) : (isAdditional ? '#fef3c7' : '#f0fdf4'),
                                           color: isAdditional ? '#92400e' : '#166534',
-                                          border: `1px solid ${isAdditional ? '#fde68a' : '#bbf7d0'}`,
+                                          border: `1px solid ${isExplicit ? fg.color : (isAdditional ? '#fde68a' : '#bbf7d0')}`,
                                           borderRadius: '3px', padding: '1px 4px',
                                           display: 'inline-flex', flexDirection: 'column', alignItems: 'center',
                                           userSelect: 'none',
                                         }}
                                       >
                                         <span>{shortName(s.employeeName)}</span>
+                                        {isExplicit && <span style={{ fontSize: '7px', color: fg.color, fontWeight: 700 }}>FG</span>}
                                         {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
                                         {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                         {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
@@ -2454,6 +2500,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                               if (dragState.current) {
                                 const { empId, slot: dragSlot } = dragState.current;
                                 moveStaff(empId, dragSlot, room.id);
+                                removeStaffFromAllFGs(empId);
                                 dragState.current = null;
                               }
                             }}

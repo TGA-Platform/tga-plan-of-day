@@ -1089,7 +1089,7 @@ export default function ReportingPage() {
         // Build combined staffMoves + FG configs + time overrides + notes from all ratio-check sessions
         const ratioStaffMoves: Record<string, string> = {};
         const ratioStaffNotes: Record<string, string> = {};
-        const ratioFGConfigs: Array<{ id: string; label: string; roomIds: string[]; slots: string[]; heldInRoom?: string }> = [];
+        const ratioFGConfigs: Array<{ id: string; label: string; roomIds: string[]; slots: string[]; heldInRoom?: string; staffIds?: number[] }> = [];
         const ratioTimeOverrides: Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string }> = {};
         const ratioVisitors: Array<{ id: string; name: string; wwccNumber?: string; roomId: string; enteredAt: string; exitedAt?: string }> = [];
 
@@ -1383,13 +1383,24 @@ export default function ReportingPage() {
             const roomObj = room ? centre.rooms.find(r => r.name === room) : undefined;
 
             // Check if the resolved room (natural, moved, or float-cover) is part
-            // of a family grouping at this slot. If so, report as grouping.
+            // of a family grouping at this slot, or if the employee has been explicitly
+            // added to the grouping via drag-and-drop. If so, report as grouping.
             let fgPos: { room: string; blockType: EducatorEntry['blockType']; note?: string } | null = null;
             if (roomObj) {
               for (const fg of ratioFGConfigs) {
                 if (!fg.slots.includes(slot)) continue;
                 const fgRoomIds = fg.roomIds.length === 0 ? centre.rooms.map(r => r.id) : fg.roomIds;
                 if (fgRoomIds.includes(roomObj.id)) {
+                  const heldIn = fg.heldInRoom ? (centre.rooms.find(r => r.id === fg.heldInRoom)?.name ?? fg.heldInRoom) : fg.label;
+                  fgPos = { room: heldIn, blockType: 'grouping' as EducatorEntry['blockType'], note: `${fg.label} - held in ${heldIn}` };
+                  break;
+                }
+              }
+            }
+            if (!fgPos) {
+              for (const fg of ratioFGConfigs) {
+                if (!fg.slots.includes(slot)) continue;
+                if ((fg.staffIds ?? []).includes(empId)) {
                   const heldIn = fg.heldInRoom ? (centre.rooms.find(r => r.id === fg.heldInRoom)?.name ?? fg.heldInRoom) : fg.label;
                   fgPos = { room: heldIn, blockType: 'grouping' as EducatorEntry['blockType'], note: `${fg.label} - held in ${heldIn}` };
                   break;
