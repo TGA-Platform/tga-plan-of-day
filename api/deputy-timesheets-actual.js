@@ -98,10 +98,12 @@ export default async function handler(req, res) {
 
       // Parse actual start/end from StartTimeLocalized/EndTimeLocalized.
       // RealTime=true means staff physically clocked in via Deputy kiosk/app.
-      // RealTime=false but with StartTimeLocalized set means manager-approved timesheet
-      // (common for past dates where timesheets are approved from roster).
-      // Both are valid sources of actual times.
-      const hasActualTimes = ts.RealTime || (ts.StartTimeLocalized && ts.EndTimeLocalized);
+      // RealTime=false with StartTimeLocalized set means manager-approved timesheet
+      // (common for past dates). Only use manager-approved times if the shift
+      // has actually started, otherwise future approved rosters appear as actuals.
+      const shiftStartUnix = ts.StartTime || 0;
+      const shiftHasStarted = shiftStartUnix > 0 && (shiftStartUnix * 1000) <= Date.now();
+      const hasActualTimes = ts.RealTime || (shiftHasStarted && ts.StartTimeLocalized && ts.EndTimeLocalized);
       const actualStart = hasActualTimes && ts.StartTimeLocalized
         ? ts.StartTimeLocalized.substring(11, 16)
         : null;
@@ -122,9 +124,14 @@ export default async function handler(req, res) {
         const intState = slot.mixedActivity?.intState;
         if (intState !== 4 && intState !== 2) continue;
 
+        const breakStartUnix = slot.intUnixStart || 0;
+
+        // Skip breaks that haven't started yet (Deputy sometimes lets managers
+        // pre-mark a break as finished before the scheduled time).
+        if (breakStartUnix > 0 && (breakStartUnix * 1000) > Date.now()) continue;
+
         // Block phantom breaks: Deputy sets intUnixStart = StartTime exactly for scheduled placeholders
         // A real break must start at least 30 minutes AFTER shift start
-        const breakStartUnix = slot.intUnixStart || 0;
         if (breakStartUnix > 0 && shiftStartUnix > 0) {
           const diffMins = (breakStartUnix - shiftStartUnix) / 60;
           if (diffMins < 30) continue; // phantom or implausibly early — skip
