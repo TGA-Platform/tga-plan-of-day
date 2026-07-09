@@ -2284,9 +2284,19 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                         const fgReq = getFGRequiredForConfig(slot, fg);
                         const fgChildren = fgRooms.reduce((sum, r) => sum + getChildCount(slot, r.id), 0);
                         type FGStaffMember = RosteredStaff & { inRoomId: string; inRoomName: string; isExplicitFG?: boolean };
-                        const fgStaffMembers: FGStaffMember[] = fgRooms.flatMap(r =>
-                          getStaffForRoom(slot, r).map(s => ({ ...s, inRoomId: r.id, inRoomName: r.name }))
-                        );
+                        const fgStaffMembers: FGStaffMember[] = (() => {
+                          const raw = fgRooms.flatMap(r =>
+                            getStaffForRoom(slot, r).map(s => ({ ...s, inRoomId: r.id, inRoomName: r.name }))
+                          );
+                          // A staff member may be assigned to / covering more than one FG room at the same slot.
+                          // They should only appear once in the grouping cell.
+                          const seen = new Set<number>();
+                          return raw.filter(s => {
+                            if (seen.has(s.employeeId)) return false;
+                            seen.add(s.employeeId);
+                            return true;
+                          });
+                        })();
                         const explicitFgStaff: FGStaffMember[] = (fg.staffIdsBySlot?.[slot] ?? [])
                           .map(id => findRosteredStaff(id))
                           .filter((s): s is RosteredStaff => !!s && !fgStaffMembers.some(m => m.employeeId === s.employeeId))
