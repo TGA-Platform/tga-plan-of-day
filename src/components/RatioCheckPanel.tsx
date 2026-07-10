@@ -778,22 +778,18 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     // slotToMins returns NaN for invalid/empty strings, so use isFinite.
     if (!Number.isFinite(ovStartM) || !Number.isFinite(ovEndM)) return baseSegments;
 
-    // Non-split shift: apply the override start/end where they overlap the rostered
-    // segment. Start moves earlier if the override is earlier; end moves earlier if the
-    // Deputy clock-out is earlier (e.g. staff left sick), otherwise the roster end stays.
-    // If the override does not overlap the roster at all, keep the roster segment so a
-    // saved override from one session does not wipe out a different shift in another session.
+    // Non-split shift: when the override has a complete, valid Deputy actual time that
+    // overlaps the rostered segment, use it as the exact worked window. This gives exact
+    // sign-in/out times once Deputy has processed both ends. If the override only touches
+    // the roster (no real overlap) or does not overlap at all, keep the roster segment so
+    // a saved override from one session does not wipe out a different shift in another session.
     if (!splitSegments) {
       const seg = baseSegments[0];
       const sM = slotToMins(seg.start);
       const eM = slotToMins(seg.end);
       if (!Number.isFinite(sM) || !Number.isFinite(eM)) return baseSegments;
-      if (ovEndM < sM || ovStartM > eM) return baseSegments; // no overlap
-      let start = seg.start;
-      let end = seg.end;
-      if (ovStartM < sM) start = ovStart;
-      if (ovEndM < eM) end = ovEnd;
-      return [{ start, end }];
+      if (ovEndM <= sM || ovStartM >= eM) return baseSegments; // no meaningful overlap
+      return [{ start: ovStart, end: ovEnd }];
     }
 
     // Split shift: adjust each overlapping segment.
