@@ -3150,35 +3150,59 @@ export default function ReportingPage() {
                                 {dates.map(date => (
                                   <th key={date} className="py-2 px-3 text-xs font-semibold text-center" style={{ color: '#5a9228', minWidth: 100 }}>{safeFormat(date, 'EEE d MMM')}</th>
                                 ))}
+                                <th className="py-2 px-3 text-xs font-semibold text-center" style={{ color: '#5a9228', minWidth: 120 }}>Total</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {campuses.sort().map((campus, i) => (
-                                <tr key={campus} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
-                                  <td className="py-2 px-3 font-medium text-xs sticky left-0" style={{ color: '#050505', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>{campus}</td>
-                                  {dates.map(date => {
-                                    const row = byDate[date]?.[campus];
-                                    if (!row) {
-                                      return <td key={date} className="py-2 px-3 text-xs text-center" style={{ color: '#94a3b8' }}>—</td>;
-                                    }
-                                    const casualHours = row.internalCasualHours + row.externalCasualHours;
-                                    const flagged = row.floatSurplus > 0 && casualHours > 0;
-                                    return (
-                                      <td key={date} className="py-2 px-3 text-xs text-center align-top">
-                                        <div className="flex flex-col gap-0.5">
-                                          <span style={{ color: row.floatSurplus < 0 ? '#dc2626' : row.floatSurplus > 0 ? '#166534' : '#596570', fontWeight: 700 }}>
-                                            {row.floatSurplus >= 0 ? '+' : ''}{row.floatSurplus.toFixed(1)}
-                                          </span>
-                                          <span style={{ color: casualHours > 0 ? '#92400e' : '#9ca3af' }}>
-                                            {casualHours.toFixed(1)}h
-                                          </span>
-                                          {flagged && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️</span>}
-                                        </div>
-                                      </td>
-                                    );
-                                  })}
-                                </tr>
-                              ))}
+                              {campuses.sort().map((campus, i) => {
+                                const campusRowsForTotals = staffingAnalysisRows.filter(r => r.campus === campus);
+                                const totalFloatSurplus = campusRowsForTotals.reduce((s, r) => s + r.floatSurplus, 0);
+                                const totalInternalCasualHours = campusRowsForTotals.reduce((s, r) => s + r.internalCasualHours, 0);
+                                const totalExternalCasualHours = campusRowsForTotals.reduce((s, r) => s + r.externalCasualHours, 0);
+                                const totalCasualHours = totalInternalCasualHours + totalExternalCasualHours;
+                                return (
+                                  <tr key={campus} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
+                                    <td className="py-2 px-3 font-medium text-xs sticky left-0" style={{ color: '#050505', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>{campus}</td>
+                                    {dates.map(date => {
+                                      const row = byDate[date]?.[campus];
+                                      if (!row) {
+                                        return <td key={date} className="py-2 px-3 text-xs text-center" style={{ color: '#94a3b8' }}>—</td>;
+                                      }
+                                      const casualHours = row.internalCasualHours + row.externalCasualHours;
+                                      const flagged = row.floatSurplus > 0 && casualHours > 0;
+                                      return (
+                                        <td key={date} className="py-2 px-3 text-xs text-center align-top">
+                                          <div className="flex flex-col gap-0.5">
+                                            <span style={{ color: row.floatSurplus < 0 ? '#dc2626' : row.floatSurplus > 0 ? '#166534' : '#596570', fontWeight: 700 }}>
+                                              {row.floatSurplus >= 0 ? '+' : ''}{row.floatSurplus.toFixed(1)}
+                                            </span>
+                                            <span style={{ color: casualHours > 0 ? '#92400e' : '#9ca3af' }}>
+                                              {casualHours.toFixed(1)}h
+                                            </span>
+                                            {flagged && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️</span>}
+                                          </div>
+                                        </td>
+                                      );
+                                    })}
+                                    <td className="py-2 px-3 text-xs text-center align-top" style={{ backgroundColor: i % 2 === 0 ? '#f9fafb' : '#f3f4f6' }}>
+                                      <div className="flex flex-col gap-0.5">
+                                        <span style={{ color: totalFloatSurplus < 0 ? '#dc2626' : totalFloatSurplus > 0 ? '#166534' : '#596570', fontWeight: 700 }}>
+                                          {totalFloatSurplus >= 0 ? '+' : ''}{totalFloatSurplus.toFixed(1)} surplus
+                                        </span>
+                                        {totalInternalCasualHours > 0 && (
+                                          <span style={{ color: '#92400e' }}>{totalInternalCasualHours.toFixed(1)}h internal</span>
+                                        )}
+                                        {totalExternalCasualHours > 0 && (
+                                          <span style={{ color: '#c2410c' }}>{totalExternalCasualHours.toFixed(1)}h external</span>
+                                        )}
+                                        {totalCasualHours === 0 && (
+                                          <span style={{ color: '#9ca3af' }}>0h casuals</span>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
