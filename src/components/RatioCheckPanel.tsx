@@ -775,18 +775,32 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const ovEnd   = override.end   ?? rosterEnd;
     const ovStartM = slotToMins(ovStart);
     const ovEndM   = slotToMins(ovEnd);
-    if (ovStartM === null || ovEndM === null) return baseSegments;
+    // slotToMins returns NaN for invalid/empty strings, so use isFinite.
+    if (!Number.isFinite(ovStartM) || !Number.isFinite(ovEndM)) return baseSegments;
 
-    // Non-split shift: override fully replaces the rostered segment.
+    // Non-split shift: apply the override start/end where they overlap the rostered
+    // segment. Start moves earlier if the override is earlier; end moves earlier if the
+    // Deputy clock-out is earlier (e.g. staff left sick), otherwise the roster end stays.
+    // If the override does not overlap the roster at all, keep the roster segment so a
+    // saved override from one session does not wipe out a different shift in another session.
     if (!splitSegments) {
-      return [{ start: ovStart, end: ovEnd }];
+      const seg = baseSegments[0];
+      const sM = slotToMins(seg.start);
+      const eM = slotToMins(seg.end);
+      if (!Number.isFinite(sM) || !Number.isFinite(eM)) return baseSegments;
+      if (ovEndM < sM || ovStartM > eM) return baseSegments; // no overlap
+      let start = seg.start;
+      let end = seg.end;
+      if (ovStartM < sM) start = ovStart;
+      if (ovEndM < eM) end = ovEnd;
+      return [{ start, end }];
     }
 
     // Split shift: adjust each overlapping segment.
     const modified = baseSegments.map(seg => {
       const sM = slotToMins(seg.start);
       const eM = slotToMins(seg.end);
-      if (eM === null || sM === null) return seg;
+      if (!Number.isFinite(eM) || !Number.isFinite(sM)) return seg;
       if (ovEndM < sM || ovStartM > eM) return seg; // no overlap
       return {
         start: ovStartM < sM ? ovStart : seg.start,
