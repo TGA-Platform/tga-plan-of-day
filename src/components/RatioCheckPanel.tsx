@@ -423,6 +423,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           const firstStart = actualSegments[0]?.start ?? '';
           const lastEnd = isInProgress ? '' : (actualSegments[actualSegments.length - 1]?.end ?? '');
 
+          if (employeeId === 1611) {
+            console.log('[Deputy debug Anisha]', { firstStart, lastEnd, isInProgress, actualSegments, rosterSegments, existingStart: tss[0]?.rosteredStart, existingEnd: tss[0]?.rosteredEnd });
+          }
+
           const buildNewOverride = (existing: RatioCheckSession['staffTimeOverrides'][string]) => ({
             start: firstStart || existing?.start || '',
             end: lastEnd || existing?.end || '',
@@ -435,6 +439,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           setMorningData(prev => {
             const existing = prev.staffTimeOverrides[key];
             const newOverride = buildNewOverride(existing);
+            if (employeeId === 1611) console.log('[Deputy debug Anisha morning]', { existing, newOverride });
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
             save('morning', next);
@@ -746,12 +751,18 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   /** Build effective rostered segments for a staff member, respecting manual
    *  time overrides. For split shifts, the override extends the overlapping
    *  roster segment(s) rather than replacing the whole shift, so e.g. extending
-   *  Alysha's first float segment to 11:30 keeps her afternoon segment intact. */
+   *  Alysha's first float segment to 11:30 keeps her afternoon segment intact.
+   *  For non-split shifts the override fully replaces the rostered segment so
+   *  early clock-outs (e.g. Deputy actuals 06:38-10:02 vs roster 06:45-14:45)
+   *  are reflected correctly. */
   function getEffectiveSegments(r: RosteredStaff, override?: { start?: string; end?: string; segments?: Array<{ start: string; end: string }> }): Array<{ start: string; end: string }> {
     const rosterStart = formatRosterTime(r.startTime);
     const rosterEnd   = formatRosterTime(r.endTime);
-    const baseSegments = (r.isSplitShift && Array.isArray(r.splitSegments) && r.splitSegments.length > 0)
-      ? r.splitSegments.map(seg => ({ start: formatRosterTime(seg.startTime), end: formatRosterTime(seg.endTime) }))
+    const splitSegments = (r.isSplitShift && Array.isArray(r.splitSegments) && r.splitSegments.length > 0)
+      ? r.splitSegments
+      : null;
+    const baseSegments = splitSegments
+      ? splitSegments.map(seg => ({ start: formatRosterTime(seg.startTime), end: formatRosterTime(seg.endTime) }))
       : [{ start: rosterStart, end: rosterEnd }];
 
     if (override?.segments && override.segments.length > 0) {
@@ -766,7 +777,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const ovEndM   = slotToMins(ovEnd);
     if (ovStartM === null || ovEndM === null) return baseSegments;
 
-    // Apply override to each overlapping segment
+    // Non-split shift: override fully replaces the rostered segment.
+    if (!splitSegments) {
+      return [{ start: ovStart, end: ovEnd }];
+    }
+
+    // Split shift: adjust each overlapping segment.
     const modified = baseSegments.map(seg => {
       const sM = slotToMins(seg.start);
       const eM = slotToMins(seg.end);
@@ -1451,6 +1467,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     }
     return null;
   }
+
 
   /** Effective times for chip display at a specific slot. Respects overrides and split shifts.
    *  Falls back to the planned lunch schedule when no actual lunch override is present. */

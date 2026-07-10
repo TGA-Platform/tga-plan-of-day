@@ -785,6 +785,32 @@ export default function RatioDashboardPage() {
   const [activeView, setActiveView]   = useState<'plan-of-day' | 'ratio-check' | 'summary'>('plan-of-day');
   const [planSubView, setPlanSubView] = useState<'live' | 'plan'>('live');
 
+  // Seed staff time overrides from saved ratio-check data when the RatioCheckPanel
+  // is not mounted (e.g. default Plan of the Day view). RatioCheckPanel will take
+  // over and push live updates once the user switches to that tab.
+  useEffect(() => {
+    if (activeView === 'ratio-check') return;
+    let cancelled = false;
+    async function load() {
+      try {
+        const r = await fetch(`/api/ratio-check?centre_id=${encodeURIComponent(selectedCentreId)}&date=${date}`);
+        if (!r.ok || cancelled) return;
+        const rows: { session: string; data?: { staffTimeOverrides?: Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy' | 'scheduled'; isOvertime?: boolean; comment?: string }> } }[] = await r.json();
+        if (cancelled) return;
+        const merged: Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy' | 'scheduled'; isOvertime?: boolean; comment?: string }> = {};
+        for (const row of rows) {
+          const ovs = row.data?.staffTimeOverrides ?? {};
+          for (const [empId, ov] of Object.entries(ovs)) {
+            merged[empId] = ov;
+          }
+        }
+        setStaffTimeOverrides(merged);
+      } catch { /* offline */ }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [activeView, selectedCentreId, date]);
+
   // Expected mode: use same weekday 7 days ago as attendance source for planning
   // showCurrentOnly: Live mode shows currently signed-in children; Plan uses historical all-day data.
   // For future dates the attendance data comes from last week (effectiveDate = date - 7 days),
