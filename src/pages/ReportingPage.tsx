@@ -3168,17 +3168,22 @@ export default function ReportingPage() {
                                       if (!row) {
                                         return <td key={date} className="py-2 px-3 text-xs text-center" style={{ color: '#94a3b8' }}>—</td>;
                                       }
-                                      const casualHours = row.internalCasualHours + row.externalCasualHours;
-                                      const flagged = row.floatSurplus > 0 && casualHours > 0;
+                                      const flagged = row.floatSurplus > 0 && (row.internalCasualHours + row.externalCasualHours) > 0;
                                       return (
                                         <td key={date} className="py-2 px-3 text-xs text-center align-top">
                                           <div className="flex flex-col gap-0.5">
                                             <span style={{ color: row.floatSurplus < 0 ? '#dc2626' : row.floatSurplus > 0 ? '#166534' : '#596570', fontWeight: 700 }}>
                                               {row.floatSurplus >= 0 ? '+' : ''}{row.floatSurplus.toFixed(1)}
                                             </span>
-                                            <span style={{ color: casualHours > 0 ? '#92400e' : '#9ca3af' }}>
-                                              {casualHours.toFixed(1)}h
-                                            </span>
+                                            {row.internalCasualHours > 0 && (
+                                              <span style={{ color: '#92400e' }}>{row.internalCasualHours.toFixed(1)}h int</span>
+                                            )}
+                                            {row.externalCasualHours > 0 && (
+                                              <span style={{ color: '#c2410c' }}>{row.externalCasualHours.toFixed(1)}h ext</span>
+                                            )}
+                                            {row.internalCasualHours === 0 && row.externalCasualHours === 0 && (
+                                              <span style={{ color: '#9ca3af' }}>0h casuals</span>
+                                            )}
                                             {flagged && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️</span>}
                                           </div>
                                         </td>
