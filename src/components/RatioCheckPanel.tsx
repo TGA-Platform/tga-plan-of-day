@@ -1332,6 +1332,31 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     setTouchSelected(null);
   }
 
+  /** Add the currently tap-selected staff member to a family grouping for their selected slot. */
+  function handleAddSelectedToFG(fgId: string, _slot: string) {
+    if (!touchSelected) return;
+    const empId = touchSelected.empId;
+    // Use the selected staff's slot, consistent with handleZoneTap.
+    const sourceSlot = touchSelected.slot;
+    addStaffToFG(fgId, empId, sourceSlot);
+    // Remove from any other grouping at the same slot.
+    syncFGToAllSessions(fgs => fgs.map(f => {
+      if (f.id === fgId) return f;
+      if (!f.staffIdsBySlot?.[sourceSlot]?.includes(empId)) return f;
+      const bySlot = { ...(f.staffIdsBySlot ?? {}) };
+      bySlot[sourceSlot] = (bySlot[sourceSlot] ?? []).filter(id => id !== empId);
+      if (bySlot[sourceSlot].length === 0) delete bySlot[sourceSlot];
+      return { ...f, staffIdsBySlot: bySlot };
+    }));
+    // Remove them from any room assignment at this slot so they only appear in the FG cell.
+    setSessionData(prev => {
+      const next = { ...prev, staffMoves: { ...prev.staffMoves, [`${empId}:${sourceSlot}`]: '__removed__' } };
+      scheduleAutoSave(next);
+      return next;
+    });
+    setTouchSelected(null);
+  }
+
   /** Get effective times for a staff member: shared override if set, else natural roster times */
   function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
@@ -2386,6 +2411,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                 dragState.current = null;
                               }
                             }}
+                            onClick={e => {
+                              if (touchSelected) {
+                                e.stopPropagation();
+                                handleAddSelectedToFG(fg.id, slot);
+                              }
+                            }}
                             style={{
                               ...tdBase,
                               backgroundColor: hexToRgba(fg.color, 0.07),
@@ -2433,7 +2464,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                       <div key={`${s.employeeId}-${ni}`}
                                         draggable
                                         onDragStart={() => { dragState.current = { empId: s.employeeId, slot, fromSource: 'fg' }; }}
-                                        title={`${s.employeeName} (${s.inRoomName})${isExplicit ? ' - explicit grouping member' : ''} - drag to a room to remove from grouping`}
+                                        onClick={e => { e.stopPropagation(); handleChipTap(s.employeeId, slot, 'fg'); }}
+                                        title={`${s.employeeName} (${s.inRoomName})${isExplicit ? ' - explicit grouping member' : ''} - tap/click then choose a room or activity to remove from grouping`}
                                         style={{
                                           fontSize: '9px', cursor: 'grab',
                                           backgroundColor: isExplicit ? hexToRgba(fg.color, 0.22) : (isAdditional ? '#fef3c7' : '#f0fdf4'),
@@ -2442,6 +2474,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                           borderRadius: '3px', padding: '1px 4px',
                                           display: 'inline-flex', flexDirection: 'column', alignItems: 'center',
                                           userSelect: 'none',
+                                          outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined,
+                                          outlineOffset: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '1px' : undefined,
                                         }}
                                       >
                                         <span>{shortName(s.employeeName)}</span>
