@@ -69,6 +69,7 @@ interface Props {
   children: AttendanceChild[];
   rosters: RosteredStaff[];
   onLunchAlerts?: (alerts: LunchAlert[]) => void;
+  onStaffTimeOverrides?: (overrides: Record<string, RatioCheckSession['staffTimeOverrides'][string]>) => void;
 }
 
 // --- Constants ----------------------------------------------------------------
@@ -225,6 +226,7 @@ function hexToRgba(hex: string, alpha: number): string {
 
 export default function RatioCheckPanel({ centreId, date, rooms, children, rosters,
   onLunchAlerts,
+  onStaffTimeOverrides,
 }: Props) {
   const sydneyToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
   const sydneyNowMins = (() => {
@@ -487,6 +489,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     ...middayData.staffTimeOverrides,
     ...afternoonData.staffTimeOverrides,
   }), [morningData.staffTimeOverrides, middayData.staffTimeOverrides, afternoonData.staffTimeOverrides]);
+
+  useEffect(() => {
+    onStaffTimeOverrides?.(sharedTimeOverrides);
+  }, [sharedTimeOverrides, onStaffTimeOverrides]);
 
   // Planned lunch breaks from the Lunch Break panel — used as a fallback until Deputy actuals override them.
   const scheduledLunchByEmployee = useMemo(() => {

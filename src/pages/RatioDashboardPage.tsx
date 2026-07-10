@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
+﻿import React, { useState, useEffect, useCallback, useMemo, useContext } from 'react';
 import { format } from 'date-fns';
 function safeFormat(d: Date | string | null | undefined, fmt: string): string {
   try {
@@ -24,6 +24,11 @@ import PredictedCoveragePanel from '../components/PredictedCoveragePanel';
 import SummaryTab from '../components/SummaryTab';
 import type { AttendanceChild, RoomRatioStatus, RosteredStaff, FloatStaff, ExternalCasualMeta } from '../types';
 import type { FloatSchedule } from '../components/FloatSchedulePanel';
+
+// Context for Deputy actual / manual staff time overrides surfaced by RatioCheckPanel.
+// Module-level staff chips (room lists, floats, ISS, support) read this so the whole
+// page stays in sync with roster changes and actual clock-in/out times.
+const StaffTimeOverridesContext = React.createContext<Record<string, { start?: string; end?: string }>>({});
 
 // --- Helpers -----------------------------------------------------------------
 
@@ -96,8 +101,10 @@ function AgeBreakdownRow({ label, count, ratio }: { label: string; count: number
 }
 
 function StaffChip({ staff }: { staff: RosteredStaff }) {
-  const start = formatTime(staff.startTime);
-  const end   = formatTime(staff.endTime);
+  const overrides = useContext(StaffTimeOverridesContext);
+  const override = overrides[String(staff.employeeId)];
+  const start = formatTime(override?.start ?? staff.startTime);
+  const end   = formatTime(override?.end ?? staff.endTime);
   // For split shifts each roster entry represents one segment, so show that
   // segment's time. The "SPLIT" badge indicates the full shift is split.
   const timeStr = start && end ? `${start}–${end}` : start || end || '';
@@ -732,6 +739,11 @@ export default function RatioDashboardPage() {
   const navigate = useNavigate();
   const user = getUser();
 
+  // Deputy actual/manual staff time overrides surfaced from RatioCheckPanel so
+  // staff chips across the page (floats, ISS, support, room lists) reflect
+  // roster changes and actual clock-in/out times.
+  const [staffTimeOverrides, setStaffTimeOverrides] = useState<Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy' | 'scheduled'; isOvertime?: boolean; comment?: string }>>({});
+
   // Centre selection — persisted in URL (?centre=wollongong)
   // CEO can pick any; directors default to their own centre
   const availableCentres = user?.role === 'ceo' ? CENTRES : CENTRES.filter(c => c.id === user?.centreId);
@@ -1307,7 +1319,8 @@ export default function RatioDashboardPage() {
   const overallStatus  = roomsAtRisk.length > 0 ? 'red' : 'green';
 
   return (
-    <Layout>
+    <StaffTimeOverridesContext.Provider value={staffTimeOverrides}>
+      <Layout>
       <style>{`
         @media (max-width: 1024px) {
           .ratio-check-table { font-size: 11px; }
@@ -1482,6 +1495,7 @@ export default function RatioDashboardPage() {
             children={children}
             rosters={allRostersWithExternal.filter(r => !leaveUnitIds.includes(r.unitId))}
             onLunchAlerts={setLunchAlerts}
+            onStaffTimeOverrides={setStaffTimeOverrides}
           />
         </div>
       )}
@@ -2018,5 +2032,6 @@ export default function RatioDashboardPage() {
       </>
       )}
     </Layout>
+    </StaffTimeOverridesContext.Provider>
   );
 }
