@@ -12,6 +12,7 @@ function to12h(hhmm: string): string {
 import type { Room, AttendanceChild, RosteredStaff } from '../types';
 import { calcRequiredStaff, parseAgeMonths } from '../utils/ratioEngine';
 import { enqueueSave } from '../utils/syncQueue';
+import type { LunchBreakEntry } from '../utils/lunchScheduler';
 
 // --- Types --------------------------------------------------------------------
 
@@ -47,7 +48,7 @@ interface RatioCheckSession {
     segments?: Array<{ start: string; end: string }>; // split-shift actual segments
     lunchStart?: string;  // HH:MM actual/planned lunch start
     lunchEnd?: string;    // HH:MM actual/planned lunch end
-    source?: 'manual' | 'deputy'; // how was this set?
+    source?: 'manual' | 'deputy' | 'scheduled'; // how was this set?
     isOvertime?: boolean; // staff staying back
     comment?: string;     // free-text note
   }>; // "${empId}" ? custom times
@@ -102,7 +103,7 @@ const EMPTY_SESSION: RatioCheckSession = {
   familyGroupings: [],
   staffMoves: {},
   staffNotes: {},
-  staffTimeOverrides: {} as Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy'; isOvertime?: boolean; comment?: string }>,
+  staffTimeOverrides: {} as Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy' | 'scheduled'; isOvertime?: boolean; comment?: string }>,
   roomVisitors: {},
 };
 
@@ -230,10 +231,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
     return d.getHours() * 60 + d.getMinutes();
   })();
-  const showLunchIndicator = (lunchStart?: string, source?: string) => {
+  const showLunchIndicator = (lunchStart?: string, lunchSource?: string) => {
     if (!lunchStart) return false;
     // Hide Deputy-sourced future lunch breaks on today's view until they have actually started.
-    if (source !== 'deputy' || date !== sydneyToday) return true;
+    // Scheduled and manual lunch breaks are always shown.
+    if (lunchSource !== 'deputy' || date !== sydneyToday) return true;
     return slotToMins(lunchStart) <= sydneyNowMins;
   };
 
@@ -250,6 +252,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const rostersRef = useRef(rosters);
   useEffect(() => { rostersRef.current = rosters; }, [rosters]);
   const [floatScheds,         setFloatScheds]         = useState<any[]>([]);
+  const [lunchSchedule,       setLunchSchedule]       = useState<LunchBreakEntry[]>([]);
 
   const [dayAllocations,      setDayAllocations]      = useState<Record<number,string>>({});
 
@@ -474,6 +477,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     ...afternoonData.staffTimeOverrides,
   }), [morningData.staffTimeOverrides, middayData.staffTimeOverrides, afternoonData.staffTimeOverrides]);
 
+  // Planned lunch breaks from the Lunch Break panel — used as a fallback until Deputy actuals override them.
+  const scheduledLunchByEmployee = useMemo(() => {
+    const map: Record<number, { lunchStart: string; lunchEnd: string }> = {};
+    for (const entry of lunchSchedule) {
+      if (!entry.lunchStart || !entry.lunchEnd) continue;
+      map[entry.employeeId] = { lunchStart: entry.lunchStart, lunchEnd: entry.lunchEnd };
+    }
+    return map;
+  }, [lunchSchedule]);
+
   const sessionData    = activeSession === 'morning' ? morningData : activeSession === 'midday' ? middayData : afternoonData;
   const setSessionData = activeSession === 'morning' ? setMorningData : activeSession === 'midday' ? setMiddayData : setAfternoonData;
   const slots = activeSession === 'morning' ? MORNING_SLOTS : activeSession === 'midday' ? MIDDAY_SLOTS : AFTERNOON_SLOTS;
@@ -489,6 +502,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     // Reset float schedules immediately so stale data from a previous centre
     // doesn't bleed through while the new centre's data loads.
     setFloatScheds([]);
+    setLunchSchedule([]);
     async function load() {
       try {
         const r = await fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centreId)}&date=${date}`);
@@ -552,6 +566,15 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       try {
         const fr = await fetch(`/api/float-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
         if (!cancelled && fr.ok) setFloatScheds(await fr.json());
+      } catch { /* offline */ }
+      // Fetch the planned lunch schedule so chips can show scheduled breaks before Deputy actuals arrive.
+      try {
+        const lr = await fetch(`/api/lunch-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
+        if (!cancelled && lr.ok) {
+          const rows = await lr.json();
+          const entries: LunchBreakEntry[] = Array.isArray(rows) && rows.length > 0 ? rows[0].schedule ?? [] : [];
+          setLunchSchedule(entries);
+        }
       } catch { /* offline */ }
       // Fetch live attendance for the actual date - always real-time for Ratio Check
       try {
@@ -1382,17 +1405,21 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     setTouchSelected(null);
   }
 
-  /** Get effective times for a staff member: shared override if set, else natural roster times */
-  function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
+  /** Get effective times for a staff member: shared override if set, else natural roster times.
+   *  Falls back to the planned lunch schedule when no actual lunch override is present. */
+  function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string; lunchSource?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
-    if (override) {
-      return override;
+    const scheduled = scheduledLunchByEmployee[s.employeeId];
+    const base = { start: formatRosterTime(s.startTime), end: formatRosterTime(s.endTime) };
+    if (!override) {
+      if (scheduled) return { ...base, lunchStart: scheduled.lunchStart, lunchEnd: scheduled.lunchEnd, source: 'scheduled', lunchSource: 'scheduled' };
+      return base;
     }
-    // No override - use roster times, no planned lunch on the chip
-    return {
-      start: formatRosterTime(s.startTime),
-      end: formatRosterTime(s.endTime),
-    };
+    const hasOverrideLunch = !!override.lunchStart;
+    const lunchStart = hasOverrideLunch ? override.lunchStart : scheduled?.lunchStart;
+    const lunchEnd = hasOverrideLunch ? override.lunchEnd : scheduled?.lunchEnd;
+    const lunchSource = hasOverrideLunch ? (override.source ?? 'manual') : (scheduled ? 'scheduled' : undefined);
+    return { ...override, lunchStart, lunchEnd, source: override.source, lunchSource };
   }
 
   /** Get the roster segment that covers the given slot. For split shifts this returns
@@ -1411,19 +1438,24 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return null;
   }
 
-  /** Effective times for chip display at a specific slot. Respects overrides and split shifts. */
-  function getStaffTimeForSlot(s: RosteredStaff, slot: string): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
+  /** Effective times for chip display at a specific slot. Respects overrides and split shifts.
+   *  Falls back to the planned lunch schedule when no actual lunch override is present. */
+  function getStaffTimeForSlot(s: RosteredStaff, slot: string): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string; lunchSource?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
+    const scheduled = scheduledLunchByEmployee[s.employeeId];
     const seg = getSegmentForSlot(s, slot);
     const base = seg ?? { start: formatRosterTime(s.startTime), end: formatRosterTime(s.endTime) };
-    if (!override) return base;
-    // For split shifts, the override may only cover one segment (or provide segments).
-    // Show the segment covering this slot while still carrying override metadata like lunch.
+    if (!override) {
+      if (scheduled) return { ...base, lunchStart: scheduled.lunchStart, lunchEnd: scheduled.lunchEnd, source: 'scheduled', lunchSource: 'scheduled' };
+      return base;
+    }
+    const hasOverrideLunch = !!override.lunchStart;
     return {
       ...base,
-      lunchStart: override.lunchStart,
-      lunchEnd: override.lunchEnd,
+      lunchStart: hasOverrideLunch ? override.lunchStart : scheduled?.lunchStart,
+      lunchEnd: hasOverrideLunch ? override.lunchEnd : scheduled?.lunchEnd,
       source: override.source,
+      lunchSource: hasOverrideLunch ? (override.source ?? 'manual') : (scheduled ? 'scheduled' : undefined),
     };
   }
 
@@ -2748,7 +2780,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                           {staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}{staffTime.end ? `-${to12h(staffTime.end)}` : '→'}
                                         </span>
                                       )}
-                                      {staffTime.lunchStart && showLunchIndicator(staffTime.lunchStart, staffTime.source) && (
+                                      {staffTime.lunchStart && showLunchIndicator(staffTime.lunchStart, staffTime.lunchSource) && (
                                         <span style={{ fontSize: '9px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>
                                           🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}
                                         </span>
@@ -2969,7 +3001,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                   title="Edit time" style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '8px', color: hasTimeOverride ? '#6366f1' : '#9ca3af', padding: '0 1px', lineHeight: 1 }}>⏱</button>
                               </div>
                               {staffTime.start && <span style={{ fontSize: '7px', color: staffTime.source === 'deputy' ? '#0369a1' : hasTimeOverride ? '#6366f1' : '#b45309', fontWeight: hasTimeOverride ? 700 : 400 }}>{staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}{staffTime.end ? `-${to12h(staffTime.end)}` : '→'}</span>}
-              {staffTime.lunchStart && showLunchIndicator(staffTime.lunchStart, staffTime.source) && <span style={{ fontSize: '7px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}</span>}
+              {staffTime.lunchStart && showLunchIndicator(staffTime.lunchStart, staffTime.lunchSource) && <span style={{ fontSize: '7px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}</span>}
                             </div>
 
                           </div>
