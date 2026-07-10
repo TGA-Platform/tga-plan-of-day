@@ -361,15 +361,18 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         if (!r.ok) return;
         const actuals: Array<{
           employeeId: number; actualStart: string | null; actualEnd: string | null;
+          rosteredStart?: string | null; rosteredEnd?: string | null;
           isInProgress: boolean; isRealTime: boolean;
           breaks: Array<{ breakStart: string | null; breakEnd: string | null; type: string; status: string }>;
         }> = await r.json();
 
         // Group actuals by employee. A staff member may have two real timesheets
         // (split shift) — we need both segments, not just the first/last merged.
+        // Include rows with rostered times even if they haven't clocked in yet, so
+        // Deputy roster changes (e.g. sick finish) update the plan of day.
         const byEmployee = new Map<number, typeof actuals>();
         for (const ts of actuals) {
-          if (!ts.actualStart) continue;
+          if (!ts.actualStart && !ts.rosteredStart) continue;
           const list = byEmployee.get(ts.employeeId) ?? [];
           list.push(ts);
           byEmployee.set(ts.employeeId, list);
@@ -378,9 +381,17 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         for (const [employeeId, tss] of byEmployee) {
           const key = String(employeeId);
           const rosterEntry = rostersRef.current.find(r => r.employeeId === employeeId);
-          const rosterSegments = rosterEntry
-            ? getEffectiveSegments(rosterEntry)
-            : [{ start: tss[0]?.actualStart ?? '', end: tss[0]?.actualEnd ?? tss[0]?.actualStart ?? '' }];
+          // Prefer the rostered start/end from Deputy timesheets — these reflect the
+          // latest roster changes (sick finish, shift swaps) even before any clock event.
+          const rosterSegments = (() => {
+            const apiSegments = tss
+              .filter(ts => ts.rosteredStart && ts.rosteredEnd)
+              .sort((a, b) => (a.rosteredStart ?? '').localeCompare(b.rosteredStart ?? ''))
+              .map(ts => ({ start: ts.rosteredStart as string, end: ts.rosteredEnd as string }));
+            if (apiSegments.length > 0) return apiSegments;
+            if (rosterEntry) return getEffectiveSegments(rosterEntry);
+            return [{ start: tss[0]?.actualStart ?? '', end: tss[0]?.actualEnd ?? tss[0]?.actualStart ?? '' }];
+          })();
 
           // Merge actual timesheets with roster segments. For split shifts this keeps
           // the rostered afternoon segment visible even if only the morning actual has
