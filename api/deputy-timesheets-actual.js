@@ -163,8 +163,8 @@ export default async function handler(req, res) {
     // start/end would hide the afternoon shift. The frontend groups/de-duplicates
     // as needed.
 
-    // Cache-control: allow 4-min browser cache (we poll every 5 min)
-    res.setHeader('Cache-Control', 'public, max-age=240, stale-while-revalidate=60');
+    // Don't cache actual timesheets — stale clock-in/out data breaks ratio checks.
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json(results);
 
   } catch (e) {
