@@ -434,7 +434,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
           setMorningData(prev => {
             const existing = prev.staffTimeOverrides[key];
-            if (existing?.source === 'manual') return prev;
+            // Protect manual overrides only while the user is actively editing this session.
+            // On a fresh load, Deputy is authoritative so stale manual overrides get refreshed.
+            if (existing?.source === 'manual' && hasUserEdited.current) return prev;
             const newOverride = buildNewOverride(existing);
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
@@ -443,7 +445,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           });
           setMiddayData(prev => {
             const existing = prev.staffTimeOverrides[key];
-            if (existing?.source === 'manual') return prev;
+            if (existing?.source === 'manual' && hasUserEdited.current) return prev;
             const newOverride = buildNewOverride(existing);
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
@@ -452,7 +454,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           });
           setAfternoonData(prev => {
             const existing = prev.staffTimeOverrides[key];
-            if (existing?.source === 'manual') return prev;
+            if (existing?.source === 'manual' && hasUserEdited.current) return prev;
             const newOverride = buildNewOverride(existing);
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
