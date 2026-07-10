@@ -225,6 +225,18 @@ function hexToRgba(hex: string, alpha: number): string {
 export default function RatioCheckPanel({ centreId, date, rooms, children, rosters,
   onLunchAlerts,
 }: Props) {
+  const sydneyToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
+  const sydneyNowMins = (() => {
+    const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+    return d.getHours() * 60 + d.getMinutes();
+  })();
+  const showLunchIndicator = (lunchStart?: string, source?: string) => {
+    if (!lunchStart) return false;
+    // Hide Deputy-sourced future lunch breaks on today's view until they have actually started.
+    if (source !== 'deputy' || date !== sydneyToday) return true;
+    return slotToMins(lunchStart) <= sydneyNowMins;
+  };
+
   const [activeSession, setActiveSession] = useState<'morning' | 'midday' | 'afternoon'>('morning');
   const [morningData,   setMorningData]   = useState<RatioCheckSession>(EMPTY_SESSION);
   const [middayData,    setMiddayData]    = useState<RatioCheckSession>(EMPTY_SESSION);
@@ -374,9 +386,22 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
           const allBreaks = tss.flatMap(ts => ts.breaks);
           const mealBreak = allBreaks.find(b => b.type === 'meal');
-          const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
-            ? mealBreak.breakStart ?? undefined : undefined;
-          const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
+          // For today's live view, only surface a Deputy lunch break once its scheduled start has passed.
+          // This stops future planned breaks from appearing before they have actually happened.
+          const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+          const nowMins = now.getHours() * 60 + now.getMinutes();
+          const mealBreakStart = mealBreak?.breakStart ?? null;
+          const breakHasStarted = !isToday || (mealBreakStart !== null && slotToMins(mealBreakStart) <= nowMins);
+          const lunchStart = mealBreakStart
+            && (mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress')
+            && breakHasStarted
+            ? mealBreakStart
+            : undefined;
+          const lunchEnd = mealBreak?.breakEnd
+            && mealBreak?.status === 'finished'
+            && breakHasStarted
+            ? mealBreak.breakEnd
+            : undefined;
 
           const isInProgress = tss.some(ts => ts.isInProgress);
           const firstStart = actualSegments[0]?.start ?? '';
@@ -2723,7 +2748,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                           {staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}{staffTime.end ? `-${to12h(staffTime.end)}` : '→'}
                                         </span>
                                       )}
-                                      {staffTime.lunchStart && (
+                                      {staffTime.lunchStart && showLunchIndicator(staffTime.lunchStart, staffTime.source) && (
                                         <span style={{ fontSize: '9px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>
                                           🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}
                                         </span>
@@ -2944,7 +2969,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                   title="Edit time" style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '8px', color: hasTimeOverride ? '#6366f1' : '#9ca3af', padding: '0 1px', lineHeight: 1 }}>⏱</button>
                               </div>
                               {staffTime.start && <span style={{ fontSize: '7px', color: staffTime.source === 'deputy' ? '#0369a1' : hasTimeOverride ? '#6366f1' : '#b45309', fontWeight: hasTimeOverride ? 700 : 400 }}>{staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}{staffTime.end ? `-${to12h(staffTime.end)}` : '→'}</span>}
-              {staffTime.lunchStart && <span style={{ fontSize: '7px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}</span>}
+              {staffTime.lunchStart && showLunchIndicator(staffTime.lunchStart, staffTime.source) && <span style={{ fontSize: '7px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}</span>}
                             </div>
 
                           </div>
