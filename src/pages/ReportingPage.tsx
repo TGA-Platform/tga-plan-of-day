@@ -187,16 +187,7 @@ async function fetchAttendance(campus: string, date: string) {
   return r.ok ? r.json() : [];
 }
 
-async function fetchReportDaily(centreIds: string[], fromDate: string, toDate: string) {
-  const inClause = centreIds.map(id => encodeURIComponent(id)).join(',');
-  const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/report_daily?centre_id=in.(${inClause})&date=gte.${fromDate}&date=lte.${toDate}&select=*`,
-    { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
-  );
-  if (!r.ok) return [];
-  const rows = await r.json();
-  return Array.isArray(rows) ? rows : [];
-}
+
 /** Convert HH:MM string to minutes since midnight. Returns null if invalid. */
 function hhmm(t: string | null | undefined): number | null {
   if (!t) return null;
@@ -1699,7 +1690,17 @@ export default function ReportingPage() {
           const saBufferRequired     = saTotalFloorStaff > 0 ? saTotalFloorStaff / 6 : 0;
           const saFloatUnitIds    = new Set(centre.floatUnitIds ?? []);
           const saNonRatioUnitIds = new Set(centre.nonRatioUnitIds ?? []);
-          const saFloatCount      = (rosters as any[]).filter(r => saFloatUnitIds.has(r.OperationalUnit)).length;
+          // Match the Morning Briefing / Float Pool panel: count only floats that overlap
+          // the 10:00–14:00 core window, and include Z casuals that overlap that window.
+          function overlapsCoreWindow(start: any, end: any) {
+            const sM = hhmm(fmtTime(start));
+            const eM = hhmm(fmtTime(end));
+            if (sM === null || eM === null) return false;
+            return sM < 14 * 60 && eM > 10 * 60;
+          }
+          const saFloatCount =
+            (rosters as any[]).filter(r => saFloatUnitIds.has(r.OperationalUnit) && overlapsCoreWindow(r.StartTime, r.EndTime)).length +
+            (zCasuals as any[]).filter(z => overlapsCoreWindow(z.StartTime, z.EndTime)).length;
           const saAdCount         = (rosters as any[]).filter(r => {
             if (!saNonRatioUnitIds.has(r.OperationalUnit)) return false;
             const un = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '').toLowerCase();
@@ -1767,54 +1768,11 @@ export default function ReportingPage() {
       }
     }
 
-    // ── Staffing Analysis: prefer Supabase snapshot, fall back to live computation ──
-    let finalStaffingRows = staffingRowsAccum;
-    if (needsStaffingAnalysis) {
-      const selectedIds = selectedCentres.map(c => c.id);
-      const snapshotRows: any[] = await fetchReportDaily(selectedIds, fromDate, toDate);
-      if (Array.isArray(snapshotRows) && snapshotRows.length > 0) {
-        const liveByKey = new Map(staffingRowsAccum.map(r => [`${(selectedCentres.find(c => (c.ownaName ?? c.name) === r.campus)?.id ?? r.campus)}:${r.date}`, r]));
-        const snapshotByKey = new Map(snapshotRows.map((r: any) => [`${r.centre_id}:${r.date}`, r]));
-        const merged: StaffingAnalysisRow[] = [];
-        for (const centre of selectedCentres) {
-          const campus = centre.ownaName ?? centre.name;
-          for (const d of dates) {
-            const key = `${centre.id}:${d}`;
-            const snap = snapshotByKey.get(key);
-            if (snap) {
-              merged.push({
-                date:                d,
-                campus,
-                children:            snap.children_attended ?? 0,
-                required:            snap.required_staff ?? 0,
-                totalFloorStaff:     snap.floor_staff ?? 0,
-                roomSurplus:         snap.room_surplus ?? 0,
-                bufferRequired:      snap.buffer_required ?? 0,
-                floatCount:          snap.float_count ?? 0,
-                adAvailable:         snap.ad_available ?? 0,
-                totalFloatersNeeded: snap.total_floaters_needed ?? ((snap.net_shortage ?? 0) + (snap.buffer_required ?? 0)),
-                floatSurplus:        snap.float_surplus ?? 0,
-                status:              snap.staffing_status ?? 'unknown',
-                internalCasualHours: snap.internal_casual_hours ?? 0,
-                externalCasualHours: snap.external_casual_hours ?? 0,
-                internalCasualCount: snap.internal_casual_count ?? 0,
-                externalCasualCount: snap.external_casual_count ?? 0,
-              });
-            } else {
-              const live = liveByKey.get(key);
-              if (live) merged.push(live);
-            }
-          }
-        }
-        finalStaffingRows = merged;
-      }
-    }
-
     setEducatorRows(rows);
     setRatioSnaps(snaps);
     setGroupingTrends(groupingTrendRows);
     setOccupancyRows(occRows);
-    setStaffingAnalysisRows(finalStaffingRows);
+    setStaffingAnalysisRows(staffingRowsAccum);
     setCasualRows(casualAccum);
 
     // ── Process roster-opt results ─────────────────────────────────────────────────
