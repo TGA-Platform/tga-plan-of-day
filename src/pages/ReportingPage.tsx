@@ -9,7 +9,7 @@
  * Scope: individual centre | cluster | all centres
  * Reports: Educator Daily Record | Ratio Report | Trends
  */
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { format, parseISO, startOfWeek, isAfter, isBefore, add } from 'date-fns';
 function safeFormat(d: Date | string | null | undefined, fmt: string): string {
   try {
@@ -20,6 +20,7 @@ function safeFormat(d: Date | string | null | undefined, fmt: string): string {
   } catch { return '--'; }
 }
 import { useNavigate } from 'react-router-dom';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import Layout from '../components/Layout';
 import { CENTRES } from '../config';
 import { getUser, getAllowedCentres } from '../auth';
@@ -529,7 +530,26 @@ export default function ReportingPage() {
   const [rosterSuggestionsLoading, setRosterSuggestionsLoading] = useState(false);
   const [staffingAnalysisRows, setStaffingAnalysisRows] = useState<StaffingAnalysisRow[]>([]);
   const [casualRows, setCasualRows] = useState<CasualDayRow[]>([]);
+  const [casualTrendData, setCasualTrendData] = useState<{ weekStart: string; weekStartLabel: string; totalCents: number; totalDollars: number }[]>([]);
+  const [casualTrendLoading, setCasualTrendLoading] = useState(false);
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean; is_internal_casual?: boolean };
+
+  // Fetch 3-month external casual spend trend when the casual report is open.
+  useEffect(() => {
+    if (viewingReport !== 'casual') return;
+    let cancelled = false;
+    setCasualTrendLoading(true);
+    fetch('/api/casual-spend-trend?weeks=13')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: any[]) => {
+        if (cancelled) return;
+        setCasualTrendData(Array.isArray(data) ? data : []);
+      })
+      .catch(() => setCasualTrendData([]))
+      .finally(() => setCasualTrendLoading(false));
+    return () => { cancelled = true; };
+  }, [viewingReport]);
+
   // WWCC lookup function - tries multiple strategies to handle name mismatches
   const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
   const printRef = useRef<HTMLDivElement>(null);
@@ -3390,6 +3410,28 @@ export default function ReportingPage() {
                       </div>
                     </div>
                   )}
+
+                  {casualTrendLoading ? (
+                    <div className="text-sm italic" style={{ color: '#596570' }}>Loading 3-month casual spend trend…</div>
+                  ) : casualTrendData.length > 0 ? (
+                    <div className="rounded-xl p-4" style={{ backgroundColor: 'white', border: '1px solid #E2F1DA' }}>
+                      <div className="text-sm font-semibold mb-3" style={{ color: '#2d5c18' }}>External Casual Spend - Last 3 Months</div>
+                      <div style={{ width: '100%', height: 280 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={casualTrendData} margin={{ top: 10, right: 20, left: 0, bottom: 30 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                            <XAxis dataKey="weekStartLabel" tick={{ fontSize: 11, fill: '#596570' }} angle={-45} textAnchor="end" interval={0} />
+                            <YAxis tick={{ fontSize: 11, fill: '#596570' }} tickFormatter={(v: number) => `$${v.toLocaleString()}`} />
+                            <Tooltip
+                              formatter={(value: any) => [`$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 'Spend']}
+                              labelFormatter={(label: any) => `Week starting ${label}`}
+                            />
+                            <Bar dataKey="totalDollars" fill="#2d5c18" radius={[4, 4, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  ) : null}
 
                   {casualRows.length === 0 ? (
                     <div className="text-sm italic" style={{ color: '#596570' }}>No casual data for the selected period.</div>

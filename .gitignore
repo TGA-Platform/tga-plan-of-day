@@ -1,3 +1,5 @@
+.vercel_token
+
 # Logs
 logs
 *.log
