@@ -322,9 +322,24 @@ function computeDailyMetrics(centre, date, attendance, rosters, zCasuals, actual
 
   const bufferRequired = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
 
+  function overlapsCoreWindow(start, end) {
+    const sM = hhmmToMins(start);
+    const eM = hhmmToMins(end);
+    if (sM === null || eM === null) return false;
+    return sM < 14 * 60 && eM > 10 * 60;
+  }
+
   const floatUnitIds = new Set(centre.floatUnitIds || []);
   const nonRatioUnitIds = new Set(centre.nonRatioUnitIds || []);
-  const floatCount = allRosters.filter(r => floatUnitIds.has(r.OperationalUnit)).length;
+  // Match the Morning Briefing / Float Pool panel: only count floats that overlap
+  // the 10:00–14:00 core window, and include Z casuals that overlap that window.
+  const floatCount = allRosters.filter(r =>
+    floatUnitIds.has(r.OperationalUnit) &&
+    !r.isSplitShift &&
+    overlapsCoreWindow(r.StartTime, r.EndTime)
+  ).length;
+  const zCasualFloatCount = zCasuals.filter(z => overlapsCoreWindow(z.start_time, z.end_time)).length;
+  const totalFloatCount = floatCount + zCasualFloatCount;
 
   const adCount = allRosters.filter(r => {
     if (!nonRatioUnitIds.has(r.OperationalUnit)) return false;
@@ -335,7 +350,7 @@ function computeDailyMetrics(centre, date, attendance, rosters, zCasuals, actual
 
   const totalFloatersNeeded = netShortage + bufferRequired;
   const roomSurplusAsFloat = Math.max(0, roomSurplus);
-  const effectiveAvailable = floatCount + adAvailable + roomSurplusAsFloat;
+  const effectiveAvailable = totalFloatCount + adAvailable + roomSurplusAsFloat;
   const floatSurplus = effectiveAvailable - totalFloatersNeeded;
 
   let status = 'unknown';
@@ -416,7 +431,7 @@ function computeDailyMetrics(centre, date, attendance, rosters, zCasuals, actual
     net_shortage: netShortage,
     buffer_required: bufferRequired,
     total_floaters_needed: totalFloatersNeeded,
-    float_count: floatCount,
+    float_count: totalFloatCount,
     ad_available: adAvailable,
     float_surplus: floatSurplus,
     staffing_status: status,
