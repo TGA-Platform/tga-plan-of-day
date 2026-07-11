@@ -10,6 +10,7 @@
  */
 
 import { CENTRES } from './_centres.js';
+import { fetchActualTimesheets } from './_actual-timesheets.js';
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
@@ -170,6 +171,20 @@ async function fetchStaffWwcc() {
   return Array.isArray(rows) ? rows : [];
 }
 
+async function fetchInternalCasualNames() {
+  try {
+    const rows = await sbGet('staff_wwcc?is_internal_casual=eq.true&select=full_name,full_name_norm');
+    const names = new Set();
+    for (const r of rows || []) {
+      if (r.full_name_norm) names.add(r.full_name_norm.toLowerCase().replace(/\s+/g, ' ').trim());
+      if (r.full_name) names.add(r.full_name.toLowerCase().replace(/\s+/g, ' ').trim());
+    }
+    return names;
+  } catch {
+    return new Set();
+  }
+}
+
 // ─── Compute functions ───────────────────────────────────────────────────────
 
 function mergeRostersWithZCasuals(rosters, zCasuals) {
@@ -195,9 +210,32 @@ function hashCode(s) {
   return h;
 }
 
-function computeSlotMetrics(centre, date, attendance, rosters, zCasuals) {
+function applyActualsToRosters(rosters, actuals) {
+  if (!actuals || actuals.length === 0) return rosters;
+  const keyActuals = new Map();
+  for (const a of actuals) {
+    if (!a.actualStart) continue;
+    const key = `${a.employeeId}:${a.unitId}`;
+    const existing = keyActuals.get(key);
+    if (!existing) {
+      keyActuals.set(key, { ...a });
+    } else {
+      if (a.actualStart < existing.actualStart) existing.actualStart = a.actualStart;
+      if ((a.actualEnd || '23:59') > (existing.actualEnd || '23:59')) existing.actualEnd = a.actualEnd;
+    }
+  }
+  return rosters.map(r => {
+    const key = `${r.Employee}:${r.OperationalUnit}`;
+    const actual = keyActuals.get(key);
+    if (!actual || !actual.actualStart) return r;
+    return { ...r, StartTime: actual.actualStart, EndTime: actual.actualEnd || r.EndTime };
+  });
+}
+
+function computeSlotMetrics(centre, date, attendance, rosters, zCasuals, actuals) {
   const campus = centre.ownaName ?? centre.name;
-  const allRosters = mergeRostersWithZCasuals(rosters, zCasuals);
+  const rostersWithActuals = applyActualsToRosters(rosters, actuals);
+  const allRosters = mergeRostersWithZCasuals(rostersWithActuals, zCasuals);
 
   const roomUnitIds = new Set(centre.rooms.map(r => r.deputyUnitId));
   const floatUnitIds = new Set(centre.floatUnitIds || []);
@@ -258,11 +296,12 @@ function computeSlotMetrics(centre, date, attendance, rosters, zCasuals) {
   return rows;
 }
 
-function computeDailyMetrics(centre, date, attendance, rosters, zCasuals) {
+function computeDailyMetrics(centre, date, attendance, rosters, zCasuals, actuals, internalCasualNames) {
   const campus = centre.ownaName ?? centre.name;
   const children = attendance.filter(c => c.sign_in).length;
 
-  const allRosters = mergeRostersWithZCasuals(rosters, zCasuals);
+  const rostersWithActuals = applyActualsToRosters(rosters, actuals);
+  const allRosters = mergeRostersWithZCasuals(rostersWithActuals, zCasuals);
 
   const roomData = centre.rooms.map(room => {
     const owna = (room.ownaRoomName ?? room.name).toLowerCase();
@@ -305,6 +344,41 @@ function computeDailyMetrics(centre, date, attendance, rosters, zCasuals) {
   else if (floatSurplus === 0) status = 'amber';
   else status = 'green';
 
+  function normName(n) {
+    return String(n).toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+  function durationHours(start, end) {
+    const sM = hhmmToMins(start);
+    const eM = hhmmToMins(end);
+    if (sM === null || eM === null) return 0;
+    let dur = eM - sM;
+    if (dur < 0) dur += 24 * 60;
+    return dur / 60;
+  }
+
+  let internalCasualHours = 0;
+  let internalCasualCount = 0;
+  for (const r of rostersWithActuals) {
+    if (!r.Employee || r.Employee === 0) continue;
+    const name = r._DPMetaData?.EmployeeInfo?.DisplayName || `Staff ${r.Employee}`;
+    if (!internalCasualNames.has(normName(name))) continue;
+    const dur = durationHours(r.StartTime, r.EndTime);
+    if (dur > 0) {
+      internalCasualHours += dur;
+      internalCasualCount += 1;
+    }
+  }
+
+  let externalCasualHours = 0;
+  let externalCasualCount = 0;
+  for (const z of zCasuals) {
+    const dur = durationHours(z.start_time, z.end_time);
+    if (dur > 0) {
+      externalCasualHours += dur;
+      externalCasualCount += 1;
+    }
+  }
+
   const nonRatioLeaveIds = new Set([...(centre.nonRatioUnitIds || []), ...(centre.leaveUnitIds || [])]);
   const issIds = new Set(centre.issUnitIds || []);
   const floatIds = new Set(centre.floatUnitIds || []);
@@ -333,17 +407,23 @@ function computeDailyMetrics(centre, date, attendance, rosters, zCasuals) {
     campus,
     date,
     children_attended: children,
-    floor_staff: floorSet.size,
+    floor_staff: totalFloorStaff,
     float_staff: floatSet.size,
     iss_staff: issSet.size,
     off_floor_staff: offFloorSet.size,
     required_staff: required,
     room_surplus: roomSurplus,
+    net_shortage: netShortage,
     buffer_required: bufferRequired,
+    total_floaters_needed: totalFloatersNeeded,
     float_count: floatCount,
     ad_available: adAvailable,
     float_surplus: floatSurplus,
     staffing_status: status,
+    internal_casual_hours: internalCasualHours,
+    external_casual_hours: externalCasualHours,
+    internal_casual_count: internalCasualCount,
+    external_casual_count: externalCasualCount,
   };
 }
 
@@ -387,8 +467,17 @@ function computeWwccSnapshot(centre, wwccAll, activeStaffNames) {
 
 // ─── Main snapshot run ───────────────────────────────────────────────────────
 
-async function snapshotCentreDate(centre, date, wwccAll, skipWwcc) {
+async function snapshotCentreDate(centre, date, wwccAll, skipWwcc, internalCasualNames, dateActuals) {
   const campus = centre.ownaName ?? centre.name;
+
+  const allUnitIds = new Set([
+    ...centre.rooms.map(r => r.deputyUnitId),
+    ...(centre.floatUnitIds || []),
+    ...(centre.issUnitIds || []),
+    ...(centre.leaveUnitIds || []),
+    ...(centre.nonRatioUnitIds || []),
+  ]);
+  const actuals = (dateActuals || []).filter(a => allUnitIds.has(a.unitId));
 
   const [rosters, attendance, zCasuals] = await Promise.all([
     fetchRosterCache(date),
@@ -396,8 +485,8 @@ async function snapshotCentreDate(centre, date, wwccAll, skipWwcc) {
     fetchZCasuals(centre.name, date),
   ]);
 
-  const slotRows = computeSlotMetrics(centre, date, attendance, rosters, zCasuals);
-  const dailyRow = computeDailyMetrics(centre, date, attendance, rosters, zCasuals);
+  const slotRows = computeSlotMetrics(centre, date, attendance, rosters, zCasuals, actuals);
+  const dailyRow = computeDailyMetrics(centre, date, attendance, rosters, zCasuals, actuals, internalCasualNames);
 
   await sbPost('report_slot_30', slotRows, 'centre_id,date,time_slot');
   await sbPost('report_daily', [dailyRow], 'centre_id,date');
@@ -462,15 +551,33 @@ export default async function handler(req, res) {
 
   try {
     const wwccAll = skipWwcc ? [] : await fetchStaffWwcc();
+    const internalCasualNames = await fetchInternalCasualNames();
     let totalSlotRows = 0;
     let totalDailyRows = 0;
     let totalWwccRows = 0;
 
     // Process all centres for each date in parallel to fit inside the function timeout.
     for (const date of dates) {
+      // Fetch actual timesheets once per date (all centres combined) to avoid
+      // duplicate Deputy API calls. Per-centre filtering happens downstream.
+      const allUnitIdsForDate = new Set();
+      for (const centre of CENTRES) {
+        for (const id of centre.rooms.map(r => r.deputyUnitId)) allUnitIdsForDate.add(id);
+        for (const id of centre.floatUnitIds || []) allUnitIdsForDate.add(id);
+        for (const id of centre.issUnitIds || []) allUnitIdsForDate.add(id);
+        for (const id of centre.leaveUnitIds || []) allUnitIdsForDate.add(id);
+        for (const id of centre.nonRatioUnitIds || []) allUnitIdsForDate.add(id);
+      }
+      let dateActuals = [];
+      try {
+        dateActuals = await fetchActualTimesheets([...allUnitIdsForDate], date, { persist: true });
+      } catch (err) {
+        console.error(`[cron-reporting-snapshot] actuals fetch failed for ${date}:`, err.message);
+      }
+
       const results = await Promise.all(
         CENTRES.map(centre =>
-          snapshotCentreDate(centre, date, wwccAll, skipWwcc)
+          snapshotCentreDate(centre, date, wwccAll, skipWwcc, internalCasualNames, dateActuals)
             .then(counts => ({ ok: true, counts }))
             .catch(err => {
               console.error(`[cron-reporting-snapshot] ${centre.id} ${date} failed:`, err.message);
