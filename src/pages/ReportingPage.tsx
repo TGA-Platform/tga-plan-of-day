@@ -9,7 +9,7 @@
  * Scope: individual centre | cluster | all centres
  * Reports: Educator Daily Record | Ratio Report | Trends
  */
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { format, parseISO, startOfWeek, isAfter, isBefore, add } from 'date-fns';
 function safeFormat(d: Date | string | null | undefined, fmt: string): string {
   try {
@@ -882,12 +882,14 @@ export default function ReportingPage() {
     setTimeout(() => win.print(), 500);
   };
 
-  // Get selected centre objects
-  const selectedCentres = scopeType === 'all'
-    ? allowed
-    : scopeType === 'cluster'
-    ? allowed.filter(c => CLUSTERS[cluster]?.includes(c.id))
-    : allowed.filter(c => c.id === centreId);
+  // Get selected centre objects (memoised so the casual chart effect doesn't loop)
+  const selectedCentres = useMemo(() => {
+    return scopeType === 'all'
+      ? allowed
+      : scopeType === 'cluster'
+      ? allowed.filter(c => CLUSTERS[cluster]?.includes(c.id))
+      : allowed.filter(c => c.id === centreId);
+  }, [scopeType, cluster, centreId, allowed]);
 
   // Fetch 3-month external casual spend trend + period comparison when the casual report is open.
   // The trend chart always shows the last 13 weeks; the comparison table uses the selected from/to range.
