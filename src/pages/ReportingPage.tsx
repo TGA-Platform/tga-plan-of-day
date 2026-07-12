@@ -531,7 +531,10 @@ export default function ReportingPage() {
   const [staffingAnalysisRows, setStaffingAnalysisRows] = useState<StaffingAnalysisRow[]>([]);
   const [casualRows, setCasualRows] = useState<CasualDayRow[]>([]);
   const [casualTrendData, setCasualTrendData] = useState<{ weekStart: string; weekStartLabel: string; totalCents: number; totalDollars: number }[]>([]);
-  const [casualTrendByCentre, setCasualTrendByCentre] = useState<{ centre: string; totalCents: number; totalDollars: number }[]>([]);
+  const [casualCompareData, setCasualCompareData] = useState<{
+    current:  { centre: string; totalCents: number; totalDollars: number }[];
+    previous: { centre: string; totalCents: number; totalDollars: number }[];
+  }>({ current: [], previous: [] });
   const [casualTrendLoading, setCasualTrendLoading] = useState(false);
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean; is_internal_casual?: boolean };
 
@@ -733,7 +736,7 @@ export default function ReportingPage() {
     // ── Build casual HTML ─────────────────────────────────────────────────────
     // ── Build casual HTML ─────────────────────────────────────────────────────
     const chartSvg = viewingReport === 'casual' ? captureChartSvg() : null;
-    const casualHtml = viewingReport === 'casual' && (casualRows.length > 0 || casualTrendByCentre.length > 0)
+    const casualHtml = viewingReport === 'casual' && (casualRows.length > 0 || casualCompareData.current.length > 0)
       ? (() => {
           const byDate: Record<string, CasualDayRow[]> = {};
           for (const row of casualRows) (byDate[row.date] ??= []).push(row);
@@ -741,19 +744,39 @@ export default function ReportingPage() {
           const chartImage = chartSvg
             ? `<div class="chart-wrap" style="margin-bottom:20px;page-break-inside:avoid;"><div style="font-size:12px;font-weight:700;color:#2d5c18;margin-bottom:8px;">External Casual Spend - Last 3 Months</div>${chartSvg}</div>`
             : '';
-          const breakdownTotalCents = casualTrendByCentre.reduce((s, r) => s + r.totalCents, 0);
-          const breakdown = casualTrendByCentre.length > 0
+          const currentMap = new Map(casualCompareData.current.map(r => [r.centre, r]));
+          const previousMap = new Map(casualCompareData.previous.map(r => [r.centre, r]));
+          const allCentres = Array.from(new Set([...currentMap.keys(), ...previousMap.keys()])).sort();
+          const currentTotal = casualCompareData.current.reduce((s, r) => s + r.totalCents, 0);
+          const previousTotal = casualCompareData.previous.reduce((s, r) => s + r.totalCents, 0);
+          const totalChangeCents = currentTotal - previousTotal;
+          const totalChangePct = previousTotal > 0 ? (totalChangeCents / previousTotal) * 100 : 0;
+          const dateRangeLabel = fromDate === toDate ? safeFormat(new Date(fromDate), 'd MMM yyyy') : `${safeFormat(new Date(fromDate), 'd MMM')} - ${safeFormat(new Date(toDate), 'd MMM yyyy')}`;
+          const prevRangeLabel = (() => {
+            const prevTo = new Date(fromDate + 'T00:00:00+10:00');
+            prevTo.setDate(prevTo.getDate() - 1);
+            const days = Math.max(0, Math.round((new Date(toDate + 'T00:00:00+10:00').getTime() - new Date(fromDate + 'T00:00:00+10:00').getTime()) / (1000 * 60 * 60 * 24)));
+            const prevFrom = new Date(prevTo);
+            prevFrom.setDate(prevFrom.getDate() - days);
+            return days === 0 ? safeFormat(prevTo, 'd MMM yyyy') : `${safeFormat(prevFrom, 'd MMM')} - ${safeFormat(prevTo, 'd MMM yyyy')}`;
+          })();
+          const breakdown = allCentres.length > 0
             ? `<div class="day-block" style="page-break-inside:avoid;">
-                <div class="day-header"><span class="campus">External Casual Spend by Centre - Last 3 Months</span></div>
+                <div class="day-header"><span class="campus">External Casual Spend by Centre - ${dateRangeLabel} vs ${prevRangeLabel}</span></div>
                 <table>
-                  <thead><tr><th>Centre</th><th style="text-align:right">Spend</th><th style="text-align:right">Share</th></tr></thead>
+                  <thead><tr><th>Centre</th><th style="text-align:right">Current</th><th style="text-align:right">Previous</th><th style="text-align:right">Change</th><th style="text-align:right">%</th></tr></thead>
                   <tbody>
-                    ${casualTrendByCentre.map(r => {
-                      const pct = breakdownTotalCents > 0 ? (r.totalCents / breakdownTotalCents) * 100 : 0;
-                      const name = CENTRES.find(c => c.name.toLowerCase() === r.centre.toLowerCase() || (c.ownaName && c.ownaName.toLowerCase() === r.centre.toLowerCase()))?.name ?? r.centre;
-                      return `<tr><td>${name}</td><td style="text-align:right;font-weight:600;color:#c2410c">$${r.totalDollars.toFixed(2)}</td><td style="text-align:right">${pct.toFixed(1)}%</td></tr>`;
+                    ${allCentres.map(centre => {
+                      const cur = currentMap.get(centre);
+                      const prev = previousMap.get(centre);
+                      const curCents = cur?.totalCents ?? 0;
+                      const prevCents = prev?.totalCents ?? 0;
+                      const changeCents = curCents - prevCents;
+                      const changePct = prevCents > 0 ? (changeCents / prevCents) * 100 : 0;
+                      const name = CENTRES.find(c => c.name.toLowerCase() === centre.toLowerCase() || (c.ownaName && c.ownaName.toLowerCase() === centre.toLowerCase()))?.name ?? centre;
+                      return `<tr><td>${name}</td><td style="text-align:right;font-weight:600;color:#c2410c">$${(curCents / 100).toFixed(2)}</td><td style="text-align:right">$${(prevCents / 100).toFixed(2)}</td><td style="text-align:right;font-weight:600;${changeCents >= 0 ? 'color:#c2410c' : 'color:#15803d'}">${changeCents >= 0 ? '+' : ''}$${(changeCents / 100).toFixed(2)}</td><td style="text-align:right">${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%</td></tr>`;
                     }).join('')}
-                    <tr style="background:#fef3c7;font-weight:700"><td>Total</td><td style="text-align:right;color:#c2410c">$${(breakdownTotalCents / 100).toFixed(2)}</td><td style="text-align:right">100%</td></tr>
+                    <tr style="background:#fef3c7;font-weight:700"><td>Total</td><td style="text-align:right;color:#c2410c">$${(currentTotal / 100).toFixed(2)}</td><td style="text-align:right">$${(previousTotal / 100).toFixed(2)}</td><td style="text-align:right;${totalChangeCents >= 0 ? 'color:#c2410c' : 'color:#15803d'}">${totalChangeCents >= 0 ? '+' : ''}$${(totalChangeCents / 100).toFixed(2)}</td><td style="text-align:right">${totalChangePct >= 0 ? '+' : ''}${totalChangePct.toFixed(1)}%</td></tr>
                   </tbody>
                 </table>
               </div>`
@@ -866,30 +889,35 @@ export default function ReportingPage() {
     ? allowed.filter(c => CLUSTERS[cluster]?.includes(c.id))
     : allowed.filter(c => c.id === centreId);
 
-  // Fetch 3-month external casual spend trend when the casual report is open.
-  // Filtered to the currently selected centres so the chart + breakdown match the report scope.
+  // Fetch 3-month external casual spend trend + period comparison when the casual report is open.
+  // The trend chart always shows the last 13 weeks; the comparison table uses the selected from/to range.
   useEffect(() => {
     if (viewingReport !== 'casual') return;
     let cancelled = false;
     setCasualTrendLoading(true);
     const centreNames = selectedCentres.map(c => c.name).join(',');
-    const baseQs = centreNames ? `weeks=13&centres=${encodeURIComponent(centreNames)}` : 'weeks=13';
+    const trendQs = centreNames ? `weeks=13&centres=${encodeURIComponent(centreNames)}` : 'weeks=13';
+    const compareQs = `from=${fromDate}&to=${toDate}${centreNames ? `&centres=${encodeURIComponent(centreNames)}` : ''}`;
     Promise.all([
-      fetch(`/api/casual-spend-trend?${baseQs}`).then(r => r.ok ? r.json() : []),
-      fetch(`/api/casual-spend-trend?${baseQs}&groupBy=centre`).then(r => r.ok ? r.json() : []),
+      fetch(`/api/casual-spend-trend?${trendQs}`).then(r => r.ok ? r.json() : []),
+      fetch(`/api/casual-spend-compare?${compareQs}`).then(r => r.ok ? r.json() : { current: [], previous: [] }),
     ])
-      .then(([weekly, byCentre]: [any[], any[]]) => {
+      .then(([weekly, compare]: [any[], any]) => {
         if (cancelled) return;
         setCasualTrendData(Array.isArray(weekly) ? weekly : []);
-        setCasualTrendByCentre(Array.isArray(byCentre) ? byCentre : []);
+        setCasualCompareData(
+          compare && typeof compare === 'object' && Array.isArray(compare.current) && Array.isArray(compare.previous)
+            ? compare
+            : { current: [], previous: [] }
+        );
       })
       .catch(() => {
         setCasualTrendData([]);
-        setCasualTrendByCentre([]);
+        setCasualCompareData({ current: [], previous: [] });
       })
       .finally(() => setCasualTrendLoading(false));
     return () => { cancelled = true; };
-  }, [viewingReport, selectedCentres]);
+  }, [viewingReport, selectedCentres, fromDate, toDate]);
 
   const generate = useCallback(async () => {
     setLoading(true);
@@ -3487,35 +3515,63 @@ export default function ReportingPage() {
                     </div>
                   ) : null}
 
-                  {!casualTrendLoading && casualTrendByCentre.length > 0 && (() => {
-                    const totalCents = casualTrendByCentre.reduce((s, r) => s + r.totalCents, 0);
+                  {!casualTrendLoading && (casualCompareData.current.length > 0 || casualCompareData.previous.length > 0) && (() => {
+                    const currentMap = new Map(casualCompareData.current.map(r => [r.centre, r]));
+                    const previousMap = new Map(casualCompareData.previous.map(r => [r.centre, r]));
+                    const allCentres = Array.from(new Set([...currentMap.keys(), ...previousMap.keys()])).sort();
+                    const currentTotal = casualCompareData.current.reduce((s, r) => s + r.totalCents, 0);
+                    const previousTotal = casualCompareData.previous.reduce((s, r) => s + r.totalCents, 0);
+                    const totalChangeCents = currentTotal - previousTotal;
+                    const totalChangePct = previousTotal > 0 ? (totalChangeCents / previousTotal) * 100 : 0;
+                    const dateRangeLabel = fromDate === toDate ? safeFormat(new Date(fromDate), 'd MMM yyyy')
+                      : `${safeFormat(new Date(fromDate), 'd MMM')} - ${safeFormat(new Date(toDate), 'd MMM yyyy')}`;
                     return (
                       <div className="rounded-xl p-4" style={{ backgroundColor: 'white', border: '1px solid #E2F1DA' }}>
-                        <div className="text-sm font-semibold mb-3" style={{ color: '#2d5c18' }}>External Casual Spend by Centre - Last 3 Months</div>
-                        <div className="space-y-2">
-                          {casualTrendByCentre.map((r) => {
-                            const pct = totalCents > 0 ? (r.totalCents / totalCents) * 100 : 0;
-                            const displayName = CENTRES.find(c =>
-                              c.name.toLowerCase() === r.centre.toLowerCase() ||
-                              (c.ownaName && c.ownaName.toLowerCase() === r.centre.toLowerCase())
-                            )?.name ?? r.centre;
-                            return (
-                              <div key={r.centre} className="flex items-center gap-3 text-sm">
-                                <div className="w-32 truncate font-medium" style={{ color: '#050505' }}>{displayName}</div>
-                                <div className="flex-1">
-                                  <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: '#E2F1DA' }}>
-                                    <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: '#2d5c18' }} />
-                                  </div>
-                                </div>
-                                <div className="w-20 text-right font-semibold" style={{ color: '#c2410c' }}>${r.totalDollars.toFixed(2)}</div>
-                                <div className="w-12 text-right text-xs" style={{ color: '#596570' }}>{pct.toFixed(1)}%</div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div className="mt-3 pt-3 border-t flex items-center justify-between text-sm" style={{ borderColor: '#E2F1DA' }}>
-                          <span className="font-semibold" style={{ color: '#2d5c18' }}>Total</span>
-                          <span className="font-bold" style={{ color: '#c2410c' }}>${(totalCents / 100).toFixed(2)}</span>
+                        <div className="text-sm font-semibold mb-3" style={{ color: '#2d5c18' }}>External Casual Spend by Centre - {dateRangeLabel} vs Previous Period</div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr style={{ color: '#596570' }}>
+                                <th className="text-left py-1.5">Centre</th>
+                                <th className="text-right py-1.5">Current</th>
+                                <th className="text-right py-1.5">Previous</th>
+                                <th className="text-right py-1.5">Change</th>
+                                <th className="text-right py-1.5">%</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {allCentres.map(centre => {
+                                const cur = currentMap.get(centre);
+                                const prev = previousMap.get(centre);
+                                const curCents = cur?.totalCents ?? 0;
+                                const prevCents = prev?.totalCents ?? 0;
+                                const changeCents = curCents - prevCents;
+                                const changePct = prevCents > 0 ? (changeCents / prevCents) * 100 : 0;
+                                const displayName = CENTRES.find(c =>
+                                  c.name.toLowerCase() === centre.toLowerCase() ||
+                                  (c.ownaName && c.ownaName.toLowerCase() === centre.toLowerCase())
+                                )?.name ?? centre;
+                                return (
+                                  <tr key={centre} className="border-b" style={{ borderColor: '#E2F1DA' }}>
+                                    <td className="py-1.5 font-medium" style={{ color: '#050505' }}>{displayName}</td>
+                                    <td className="py-1.5 text-right font-semibold" style={{ color: '#c2410c' }}>${(curCents / 100).toFixed(2)}</td>
+                                    <td className="py-1.5 text-right" style={{ color: '#596570' }}>${(prevCents / 100).toFixed(2)}</td>
+                                    <td className="py-1.5 text-right font-semibold" style={{ color: changeCents >= 0 ? '#c2410c' : '#15803d' }}>{changeCents >= 0 ? '+' : ''}${(changeCents / 100).toFixed(2)}</td>
+                                    <td className="py-1.5 text-right" style={{ color: changeCents >= 0 ? '#c2410c' : '#15803d' }}>{changePct >= 0 ? '+' : ''}{changePct.toFixed(1)}%</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot>
+                              <tr className="font-bold" style={{ backgroundColor: '#fef3c7' }}>
+                                <td className="py-1.5" style={{ color: '#2d5c18' }}>Total</td>
+                                <td className="py-1.5 text-right" style={{ color: '#c2410c' }}>${(currentTotal / 100).toFixed(2)}</td>
+                                <td className="py-1.5 text-right" style={{ color: '#596570' }}>${(previousTotal / 100).toFixed(2)}</td>
+                                <td className="py-1.5 text-right" style={{ color: totalChangeCents >= 0 ? '#c2410c' : '#15803d' }}>{totalChangeCents >= 0 ? '+' : ''}${(totalChangeCents / 100).toFixed(2)}</td>
+                                <td className="py-1.5 text-right" style={{ color: totalChangeCents >= 0 ? '#c2410c' : '#15803d' }}>{totalChangePct >= 0 ? '+' : ''}{totalChangePct.toFixed(1)}%</td>
+                              </tr>
+                            </tfoot>
+                          </table>
                         </div>
                       </div>
                     );
