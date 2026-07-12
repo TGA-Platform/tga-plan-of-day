@@ -531,6 +531,7 @@ export default function ReportingPage() {
   const [staffingAnalysisRows, setStaffingAnalysisRows] = useState<StaffingAnalysisRow[]>([]);
   const [casualRows, setCasualRows] = useState<CasualDayRow[]>([]);
   const [casualTrendData, setCasualTrendData] = useState<{ weekStart: string; weekStartLabel: string; totalCents: number; totalDollars: number }[]>([]);
+  const [casualTrendByCentre, setCasualTrendByCentre] = useState<{ centre: string; totalCents: number; totalDollars: number }[]>([]);
   const [casualTrendLoading, setCasualTrendLoading] = useState(false);
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean; is_internal_casual?: boolean };
 
@@ -539,13 +540,19 @@ export default function ReportingPage() {
     if (viewingReport !== 'casual') return;
     let cancelled = false;
     setCasualTrendLoading(true);
-    fetch('/api/casual-spend-trend?weeks=13')
-      .then(r => r.ok ? r.json() : [])
-      .then((data: any[]) => {
+    Promise.all([
+      fetch('/api/casual-spend-trend?weeks=13').then(r => r.ok ? r.json() : []),
+      fetch('/api/casual-spend-trend?weeks=13&groupBy=centre').then(r => r.ok ? r.json() : []),
+    ])
+      .then(([weekly, byCentre]: [any[], any[]]) => {
         if (cancelled) return;
-        setCasualTrendData(Array.isArray(data) ? data : []);
+        setCasualTrendData(Array.isArray(weekly) ? weekly : []);
+        setCasualTrendByCentre(Array.isArray(byCentre) ? byCentre : []);
       })
-      .catch(() => setCasualTrendData([]))
+      .catch(() => {
+        setCasualTrendData([]);
+        setCasualTrendByCentre([]);
+      })
       .finally(() => setCasualTrendLoading(false));
     return () => { cancelled = true; };
   }, [viewingReport]);
@@ -3432,6 +3439,40 @@ export default function ReportingPage() {
                       </div>
                     </div>
                   ) : null}
+
+                  {!casualTrendLoading && casualTrendByCentre.length > 0 && (() => {
+                    const totalCents = casualTrendByCentre.reduce((s, r) => s + r.totalCents, 0);
+                    return (
+                      <div className="rounded-xl p-4" style={{ backgroundColor: 'white', border: '1px solid #E2F1DA' }}>
+                        <div className="text-sm font-semibold mb-3" style={{ color: '#2d5c18' }}>External Casual Spend by Centre - Last 3 Months</div>
+                        <div className="space-y-2">
+                          {casualTrendByCentre.map((r) => {
+                            const pct = totalCents > 0 ? (r.totalCents / totalCents) * 100 : 0;
+                            const displayName = CENTRES.find(c =>
+                              c.name.toLowerCase() === r.centre.toLowerCase() ||
+                              (c.ownaName && c.ownaName.toLowerCase() === r.centre.toLowerCase())
+                            )?.name ?? r.centre;
+                            return (
+                              <div key={r.centre} className="flex items-center gap-3 text-sm">
+                                <div className="w-32 truncate font-medium" style={{ color: '#050505' }}>{displayName}</div>
+                                <div className="flex-1">
+                                  <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: '#E2F1DA' }}>
+                                    <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: '#2d5c18' }} />
+                                  </div>
+                                </div>
+                                <div className="w-20 text-right font-semibold" style={{ color: '#c2410c' }}>${r.totalDollars.toFixed(2)}</div>
+                                <div className="w-12 text-right text-xs" style={{ color: '#596570' }}>{pct.toFixed(1)}%</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-3 pt-3 border-t flex items-center justify-between text-sm" style={{ borderColor: '#E2F1DA' }}>
+                          <span className="font-semibold" style={{ color: '#2d5c18' }}>Total</span>
+                          <span className="font-bold" style={{ color: '#c2410c' }}>${(totalCents / 100).toFixed(2)}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {casualRows.length === 0 ? (
                     <div className="text-sm italic" style={{ color: '#596570' }}>No casual data for the selected period.</div>

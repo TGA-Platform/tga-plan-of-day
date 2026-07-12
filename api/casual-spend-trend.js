@@ -1,15 +1,23 @@
 /**
  * /api/casual-spend-trend
  *
- * Returns weekly external (Z) casual spend for the last ~3 months, aggregated
- * across all centres. Used by the Casual Report trend chart.
+ * Returns weekly external (Z) casual spend for the last ~3 months.
+ * Default aggregation is across all centres for the trend chart.
+ * Pass ?groupBy=centre to also get totals broken down by centre.
  *
  * Query params:
- *   weeks - number of weeks to return (default 13, ~3 months)
+ *   weeks   - number of weeks to return (default 13, ~3 months)
+ *   groupBy - 'centre' to return per-centre totals instead of weekly buckets
  *
- * Response:
+ * Response (default):
  * [
  *   { weekStart: '2026-04-21', weekStartLabel: '21 Apr', totalCents: 123450, totalDollars: 1234.50 },
+ *   ...
+ * ]
+ *
+ * Response (?groupBy=centre):
+ * [
+ *   { centre: 'Edgeworth', totalCents: 123450, totalDollars: 1234.50 },
  *   ...
  * ]
  */
@@ -37,6 +45,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const weeks = Math.min(52, Math.max(4, parseInt(req.query.weeks || '13', 10)));
+  const groupBy = req.query.groupBy === 'centre' ? 'centre' : null;
 
   const now = new Date();
   const nowMonday = getMonday(now);
@@ -46,7 +55,8 @@ export default async function handler(req, res) {
   const startDate = getSydneyDateString(start);
 
   try {
-    const url = `${SUPABASE_URL}/rest/v1/z_casuals?date=gte.${startDate}&date=lte.${endDate}&select=date,cost_cents`;
+    const select = groupBy === 'centre' ? 'centre,cost_cents' : 'date,cost_cents';
+    const url = `${SUPABASE_URL}/rest/v1/z_casuals?date=gte.${startDate}&date=lte.${endDate}&select=${select}`;
     const r = await fetch(url, {
       headers: {
         apikey:        SERVICE_KEY,
@@ -59,6 +69,26 @@ export default async function handler(req, res) {
     }
     const rows = await r.json();
     if (!Array.isArray(rows)) return res.status(200).json([]);
+
+    if (groupBy === 'centre') {
+      const byCentre = new Map();
+      for (const row of rows) {
+        const centre = row.centre;
+        const cents = row.cost_cents || 0;
+        if (!centre) continue;
+        byCentre.set(centre, (byCentre.get(centre) || 0) + cents);
+      }
+      const result = [];
+      for (const [centre, totalCents] of byCentre) {
+        result.push({
+          centre,
+          totalCents,
+          totalDollars: Math.round(totalCents) / 100,
+        });
+      }
+      result.sort((a, b) => b.totalCents - a.totalCents);
+      return res.status(200).json(result);
+    }
 
     // Build empty week buckets
     const buckets = new Map();
