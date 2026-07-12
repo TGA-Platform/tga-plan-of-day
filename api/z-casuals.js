@@ -119,6 +119,19 @@ function epochToTime(ms) {
   });
 }
 
+/** Compute paid hours from Z's fields: prefer totalHours, otherwise duration minus break. */
+function paidHoursFromJob(j) {
+  const totalHours = Number(j.totalHours);
+  if (totalHours > 0) return totalHours;
+  const startMs = parseInt(j.startDate);
+  const endMs = parseInt(j.endDate);
+  if (!startMs || !endMs || endMs <= startMs) return 0;
+  const durationHrs = (endMs - startMs) / 3600000;
+  const breakMins = Number(j.finalBreakDuration ?? j.breakDuration ?? 0);
+  const breakHrs = Math.max(0, Math.min(breakMins / 60, durationHrs));
+  return durationHrs - breakHrs;
+}
+
 /** Parse "Filled|1782259200000" → "Filled" */
 function parseStatus(raw) {
   if (!raw) return 'Unknown';
@@ -178,6 +191,9 @@ const JOB_QUERY = `
         certificationLevel
         educatorCertificationLevel
         hourlyRateUsed
+        totalHours
+        breakDuration
+        finalBreakDuration
         educatorProfile {
           givenName
           surname
@@ -244,11 +260,8 @@ async function fetchFromZAndUpsert(centre, date, auth) {
   const results = dayJobs
     .filter(j => !j.isDraft)
     .map(j => {
-      const startMs  = parseInt(j.startDate);
-      const endMs    = parseInt(j.endDate);
-      const durationHrs = (endMs - startMs) / 3600000;
-      const hourlyRate  = j.hourlyRateUsed ?? 0;
-      const costCents   = Math.round(hourlyRate * durationHrs);
+      const hourlyRate = Number(j.hourlyRateUsed) || 0;
+      const costCents  = Math.round(hourlyRate * paidHoursFromJob(j));
 
       const profile  = j.educatorProfile;
       const name     = profile
