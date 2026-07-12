@@ -535,28 +535,6 @@ export default function ReportingPage() {
   const [casualTrendLoading, setCasualTrendLoading] = useState(false);
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean; is_internal_casual?: boolean };
 
-  // Fetch 3-month external casual spend trend when the casual report is open.
-  useEffect(() => {
-    if (viewingReport !== 'casual') return;
-    let cancelled = false;
-    setCasualTrendLoading(true);
-    Promise.all([
-      fetch('/api/casual-spend-trend?weeks=13').then(r => r.ok ? r.json() : []),
-      fetch('/api/casual-spend-trend?weeks=13&groupBy=centre').then(r => r.ok ? r.json() : []),
-    ])
-      .then(([weekly, byCentre]: [any[], any[]]) => {
-        if (cancelled) return;
-        setCasualTrendData(Array.isArray(weekly) ? weekly : []);
-        setCasualTrendByCentre(Array.isArray(byCentre) ? byCentre : []);
-      })
-      .catch(() => {
-        setCasualTrendData([]);
-        setCasualTrendByCentre([]);
-      })
-      .finally(() => setCasualTrendLoading(false));
-    return () => { cancelled = true; };
-  }, [viewingReport]);
-
   // WWCC lookup function - tries multiple strategies to handle name mismatches
   const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
   const printRef = useRef<HTMLDivElement>(null);
@@ -740,14 +718,47 @@ export default function ReportingPage() {
         </table>`
       : '';
 
+    // Capture the on-screen Recharts bar chart so it can be embedded in the PDF.
+    function captureChartSvg(): string | null {
+      const svg = document.querySelector('.recharts-wrapper svg') as SVGSVGElement | null;
+      if (!svg) return null;
+      const clone = svg.cloneNode(true) as SVGSVGElement;
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      const rect = svg.getBoundingClientRect();
+      clone.setAttribute('width', String(Math.round(rect.width || 800)));
+      clone.setAttribute('height', String(Math.round(rect.height || 280)));
+      return clone.outerHTML;
+    }
+
     // ── Build casual HTML ─────────────────────────────────────────────────────
     // ── Build casual HTML ─────────────────────────────────────────────────────
-    const casualHtml = viewingReport === 'casual' && casualRows.length > 0
+    const chartSvg = viewingReport === 'casual' ? captureChartSvg() : null;
+    const casualHtml = viewingReport === 'casual' && (casualRows.length > 0 || casualTrendByCentre.length > 0)
       ? (() => {
           const byDate: Record<string, CasualDayRow[]> = {};
           for (const row of casualRows) (byDate[row.date] ??= []).push(row);
           const dates = Object.keys(byDate).sort();
-          return dates.map(date => {
+          const chartImage = chartSvg
+            ? `<div class="chart-wrap" style="margin-bottom:20px;page-break-inside:avoid;"><div style="font-size:12px;font-weight:700;color:#2d5c18;margin-bottom:8px;">External Casual Spend - Last 3 Months</div>${chartSvg}</div>`
+            : '';
+          const breakdownTotalCents = casualTrendByCentre.reduce((s, r) => s + r.totalCents, 0);
+          const breakdown = casualTrendByCentre.length > 0
+            ? `<div class="day-block" style="page-break-inside:avoid;">
+                <div class="day-header"><span class="campus">External Casual Spend by Centre - Last 3 Months</span></div>
+                <table>
+                  <thead><tr><th>Centre</th><th style="text-align:right">Spend</th><th style="text-align:right">Share</th></tr></thead>
+                  <tbody>
+                    ${casualTrendByCentre.map(r => {
+                      const pct = breakdownTotalCents > 0 ? (r.totalCents / breakdownTotalCents) * 100 : 0;
+                      const name = CENTRES.find(c => c.name.toLowerCase() === r.centre.toLowerCase() || (c.ownaName && c.ownaName.toLowerCase() === r.centre.toLowerCase()))?.name ?? r.centre;
+                      return `<tr><td>${name}</td><td style="text-align:right;font-weight:600;color:#c2410c">$${r.totalDollars.toFixed(2)}</td><td style="text-align:right">${pct.toFixed(1)}%</td></tr>`;
+                    }).join('')}
+                    <tr style="background:#fef3c7;font-weight:700"><td>Total</td><td style="text-align:right;color:#c2410c">$${(breakdownTotalCents / 100).toFixed(2)}</td><td style="text-align:right">100%</td></tr>
+                  </tbody>
+                </table>
+              </div>`
+            : '';
+          return chartImage + breakdown + dates.map(date => {
             const dateRows = byDate[date].sort((a, b) => a.campus.localeCompare(b.campus));
             const dateInternalHours = dateRows.reduce((s, r) => s + r.internalHours, 0);
             const dateExternalHours = dateRows.reduce((s, r) => s + r.externalHours, 0);
@@ -819,9 +830,11 @@ export default function ReportingPage() {
     .badge.grouping{ background: #d1fae5; color: #065f46; }
     .badge.external { background: #fed7aa; color: #c2410c; }
     .footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid #e5f0e5; font-size: 9px; color: #aaa; text-align: center; }
+    .chart-wrap svg { width: 100%; height: auto; max-height: 320px; }
     @media print {
       body { padding: 10px; font-size: 10px; }
       .day-block { page-break-inside: avoid; }
+      .chart-wrap { page-break-inside: avoid; }
       .no-print { display: none; }
       @page { margin: 15mm; size: A4 landscape; }
     }
@@ -852,6 +865,31 @@ export default function ReportingPage() {
     : scopeType === 'cluster'
     ? allowed.filter(c => CLUSTERS[cluster]?.includes(c.id))
     : allowed.filter(c => c.id === centreId);
+
+  // Fetch 3-month external casual spend trend when the casual report is open.
+  // Filtered to the currently selected centres so the chart + breakdown match the report scope.
+  useEffect(() => {
+    if (viewingReport !== 'casual') return;
+    let cancelled = false;
+    setCasualTrendLoading(true);
+    const centreNames = selectedCentres.map(c => c.name).join(',');
+    const baseQs = centreNames ? `weeks=13&centres=${encodeURIComponent(centreNames)}` : 'weeks=13';
+    Promise.all([
+      fetch(`/api/casual-spend-trend?${baseQs}`).then(r => r.ok ? r.json() : []),
+      fetch(`/api/casual-spend-trend?${baseQs}&groupBy=centre`).then(r => r.ok ? r.json() : []),
+    ])
+      .then(([weekly, byCentre]: [any[], any[]]) => {
+        if (cancelled) return;
+        setCasualTrendData(Array.isArray(weekly) ? weekly : []);
+        setCasualTrendByCentre(Array.isArray(byCentre) ? byCentre : []);
+      })
+      .catch(() => {
+        setCasualTrendData([]);
+        setCasualTrendByCentre([]);
+      })
+      .finally(() => setCasualTrendLoading(false));
+    return () => { cancelled = true; };
+  }, [viewingReport, selectedCentres]);
 
   const generate = useCallback(async () => {
     setLoading(true);
@@ -3397,8 +3435,17 @@ export default function ReportingPage() {
 
               return (
                 <div className="space-y-4">
-                  <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
-                    <strong>Casual Report</strong> - Internal and external casual hours by centre and day, with total external casual cost.
+                  <div className="rounded-xl p-4 text-sm flex items-center justify-between gap-3" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
+                    <div>
+                      <strong>Casual Report</strong> - Internal and external casual hours by centre and day, with total external casual cost.
+                    </div>
+                    <button
+                      onClick={handlePrint}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap"
+                      style={{ backgroundColor: '#2d5c18', color: 'white' }}
+                    >
+                      Print / PDF
+                    </button>
                   </div>
 
                   {casualRows.length > 0 && (

@@ -6,8 +6,9 @@
  * Pass ?groupBy=centre to also get totals broken down by centre.
  *
  * Query params:
- *   weeks   - number of weeks to return (default 13, ~3 months)
- *   groupBy - 'centre' to return per-centre totals instead of weekly buckets
+ *   weeks    - number of weeks to return (default 13, ~3 months)
+ *   groupBy  - 'centre' to return per-centre totals instead of weekly buckets
+ *   centres  - comma-separated centre names to filter (e.g. Oatley,Edgeworth)
  *
  * Response (default):
  * [
@@ -46,6 +47,9 @@ export default async function handler(req, res) {
 
   const weeks = Math.min(52, Math.max(4, parseInt(req.query.weeks || '13', 10)));
   const groupBy = req.query.groupBy === 'centre' ? 'centre' : null;
+  const centreFilter = Array.isArray(req.query.centres)
+    ? req.query.centres.join(',')
+    : (req.query.centres || '');
 
   const now = new Date();
   const nowMonday = getMonday(now);
@@ -55,8 +59,12 @@ export default async function handler(req, res) {
   const startDate = getSydneyDateString(start);
 
   try {
-    const select = groupBy === 'centre' ? 'centre,cost_cents' : 'date,cost_cents';
-    const url = `${SUPABASE_URL}/rest/v1/z_casuals?date=gte.${startDate}&date=lte.${endDate}&select=${select}`;
+    const select = 'date,centre,cost_cents';
+    let url = `${SUPABASE_URL}/rest/v1/z_casuals?date=gte.${startDate}&date=lte.${endDate}&select=${select}`;
+    if (centreFilter) {
+      const list = centreFilter.split(',').map(s => s.trim()).filter(Boolean).map(encodeURIComponent).join(',');
+      if (list) url += `&centre=in.(${list})`;
+    }
     const r = await fetch(url, {
       headers: {
         apikey:        SERVICE_KEY,
