@@ -60,12 +60,12 @@ export const CENTRES: Centre[] = [
     nonRatioUnitIds: [130, 131, 197, 165, 141, 235, 324, 337], // Director, AD, Chef, Study, Meeting, Admin, Events, Ed Leader
     outdoorAreas:    ['Outdoor Area'],  // Configurable per centre — add more as needed
     rooms: [
-      { id: 'explorers',   name: 'Explorers',   ageGroup: '0-1 yrs',     ratio: 4,  deputyUnitId: 213, ownaRoomName: '0-1 Room' },
-      { id: 'adventurers', name: 'Adventurers', ageGroup: '1-2 yrs',     ratio: 4,  deputyUnitId: 132, ownaRoomName: '1-2 Room' },
-      { id: 'pioneers',    name: 'Pioneers',    ageGroup: '2-3 yrs',     ratio: 5,  deputyUnitId: 133, ownaRoomName: '2-3 Room 1' },
-      { id: 'voyagers',    name: 'Voyagers',    ageGroup: '2.5-3.5 yrs', ratio: 5,  deputyUnitId: 196, ownaRoomName: '2.5-3.5 Room' },
-      { id: 'creators',    name: 'Creators',    ageGroup: '3-4 yrs',     ratio: 10, deputyUnitId: 159, ownaRoomName: '3-4 Room' },
-      { id: 'achievers',   name: 'Achievers',   ageGroup: '3.5-5 yrs',   ratio: 10, deputyUnitId: 223, ownaRoomName: '3.5-5 Room' },
+      { id: 'explorers',   name: 'Explorers',   ageGroup: '0-1 yrs',     ratio: 4,  deputyUnitId: 213, ownaRoomName: 'Explorers' },
+      { id: 'adventurers', name: 'Adventurers', ageGroup: '1-2 yrs',     ratio: 4,  deputyUnitId: 132, ownaRoomName: 'Adventurers' },
+      { id: 'pioneers',    name: 'Pioneers',    ageGroup: '2-3 yrs',     ratio: 5,  deputyUnitId: 133, ownaRoomName: 'Pioneers' },
+      { id: 'voyagers',    name: 'Voyagers',    ageGroup: '2.5-3.5 yrs', ratio: 5,  deputyUnitId: 196, ownaRoomName: 'Voyagers' },
+      { id: 'creators',    name: 'Creators',    ageGroup: '3-4 yrs',     ratio: 10, deputyUnitId: 159, ownaRoomName: 'Creators' },
+      { id: 'achievers',   name: 'Achievers',   ageGroup: '3.5-5 yrs',   ratio: 10, deputyUnitId: 223, ownaRoomName: 'Achievers' },
     ],
   },
   {
