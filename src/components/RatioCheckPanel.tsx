@@ -427,7 +427,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           // and the fallback to an existing saved override would keep the old short end time.
           if (isInProgress && rosterEntry) {
             const rosterEnd = formatRosterTime(rosterEntry.endTime);
-            if (rosterEnd) lastEnd = rosterEnd;
+            if (rosterEnd) {
+              lastEnd = rosterEnd;
+              // Also extend the last segment so split-shift/multi-unit display uses the
+              // correct end time instead of the stale timesheet rosteredEnd.
+              if (actualSegments.length > 0) {
+                actualSegments[actualSegments.length - 1].end = rosterEnd;
+              }
+            }
           }
 
           if (employeeId === 1611) {
