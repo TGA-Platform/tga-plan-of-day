@@ -2500,6 +2500,9 @@ export default function ReportingPage() {
                                     if (isKitchen) return (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>Kitchen Staff</span>
                                     );
+                                    if (isExternal && noUsefulData) return (
+                                      <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#ffedd5', color: '#9a3412' }}>Refer to Z Staffing Documentation</span>
+                                    );
                                     if (noUsefulData) return <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>No WWCC on file</span>;
                                     if (rec!.under_18) return (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>Under 18</span>
