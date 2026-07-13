@@ -212,11 +212,9 @@ function cellKey(slot: string, roomId: string) {
   return `${slot}:${roomId}`;
 }
 
-// Short display name: "FirstName L."
+// Display full staff names in the grid.
 function shortName(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0].slice(0, 10);
-  return parts[0] + ' ' + parts[parts.length - 1][0] + '.';
+  return name.trim();
 }
 
 // Hex colour with alpha for background tint
