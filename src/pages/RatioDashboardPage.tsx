@@ -13,7 +13,7 @@ import Layout from '../components/Layout';
 import { CENTRES, WOLLONGONG_FLOAT_UNIT_IDS, WOLLONGONG_LEAVE_UNIT_IDS, WOLLONGONG_NONRATIO_UNIT_IDS } from '../config';
 import { getUser } from '../auth';
 import { fetchRosters } from '../deputy';
-import { parseAgeMonths, buildRoomStatus } from '../utils/ratioEngine';
+import { parseAgeMonths, buildRoomStatus, roomNameMatches } from '../utils/ratioEngine';
 import { withCache, bustCache } from '../utils/cache';
 import RatioTimeline from '../components/RatioTimeline';
 import FloatSchedulePanel from '../components/FloatSchedulePanel';
@@ -311,8 +311,7 @@ function minsToAmPm(m: number): string {
 
 // Window when children are present in a room (earliest sign-in ? latest sign-out)
 function roomWindow(room: RoomRatioStatus, children: AttendanceChild[]): { start: number; end: number } | null {
-  const owna = (room.room.ownaRoomName ?? room.room.name).toLowerCase();
-  const rc = children.filter(c => c.sign_in && c.room.toLowerCase().includes(owna));
+  const rc = children.filter(c => c.sign_in && roomNameMatches(c.room, room.room));
   if (!rc.length) return null;
   const starts = rc.map(c => toMins(c.sign_in)).filter((t): t is number => t !== null);
   const ends   = rc.map(c => toMins(c.sign_out) ?? 18 * 60);
@@ -1752,8 +1751,7 @@ export default function RatioDashboardPage() {
                 roomStatus={rs}
                 issAssigned={issStaff.filter(s => staffMoves[s.employeeId] === rs.room.id)}
                 forecast={forecast?.rooms ? (() => {
-                  const owna = (rs.room.ownaRoomName ?? rs.room.name).toLowerCase();
-                  const match = Object.entries(forecast.rooms).find(([k]) => k.toLowerCase().includes(owna) || owna.includes(k.toLowerCase()));
+                  const match = Object.entries(forecast.rooms).find(([k]) => roomNameMatches(k, rs.room));
                   return match ? match[1] : null;
                 })() : null}
                 drag={{

@@ -15,7 +15,7 @@ function isRatioCheckLocked(date: string): boolean {
   return date < today;
 }
 import type { Room, AttendanceChild, RosteredStaff } from '../types';
-import { calcRequiredStaff, parseAgeMonths } from '../utils/ratioEngine';
+import { calcRequiredStaff, parseAgeMonths, roomNameMatches } from '../utils/ratioEngine';
 import { enqueueSave } from '../utils/syncQueue';
 import type { LunchBreakEntry } from '../utils/lunchScheduler';
 
@@ -180,9 +180,8 @@ function countChildrenAtSlot(children: AttendanceChild[], room: Room, slot: stri
 
 function getChildrenAtSlot(children: AttendanceChild[], room: Room, slot: string): AttendanceChild[] {
   const slotMins = slotToMins(slot);
-  const roomName = room.ownaRoomName ?? room.name;
   return children.filter(c => {
-    if (c.room !== roomName) return false;
+    if (!roomNameMatches(c.room, room)) return false;
     if (!c.sign_in) return false;
     const inMins = slotToMins(c.sign_in.slice(0, 5));
     if (inMins > slotMins) return false;
@@ -707,10 +706,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     // forecast can read the same numbers as the plan of the day.
     const requiredByRoom: Record<string, number> = {};
     for (const room of rooms) {
-      const roomChildren = children.filter(c => {
-        const roomName = room.ownaRoomName || room.name;
-        return c.room && c.room.toLowerCase().includes(roomName.toLowerCase());
-      });
+      const roomChildren = children.filter(c => c.room && roomNameMatches(c.room, room));
       requiredByRoom[room.id] = calcRequiredStaff(roomChildren).required;
     }
     const dataWithRequired = { ...data, requiredByRoom };

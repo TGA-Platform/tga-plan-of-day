@@ -5,6 +5,7 @@ export interface Room {
   ratio: number;
   deputyUnitId: number;
   ownaRoomName?: string; // Room name as it appears in Owna/Supabase attendance data
+  roomAliases?: string[]; // Alternative room names used in historical attendance/occupancy data
 }
 
 export interface Centre {

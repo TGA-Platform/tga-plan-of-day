@@ -82,6 +82,21 @@ function toShiftMins(t: string | number | null | undefined): number | null {
   return null;
 }
 
+/** Check whether a child's room string matches a configured room, using ownaRoomName,
+ *  display name, and any historical aliases. Matches in either direction so both
+ *  "0-1" and "0-1 Room" / "Explorers" are handled.
+ */
+export function roomNameMatches(childRoom: string, room: Room): boolean {
+  const child = (childRoom ?? '').toLowerCase();
+  if (!child) return false;
+  const aliases = [
+    room.ownaRoomName,
+    room.name,
+    ...(room.roomAliases ?? []),
+  ].filter((a): a is string => Boolean(a)).map(a => a.toLowerCase());
+  return aliases.some(alias => child.includes(alias) || alias.includes(child));
+}
+
 export function buildRoomStatus(
   room: Room,
   allChildren: AttendanceChild[],
@@ -90,7 +105,7 @@ export function buildRoomStatus(
   currentTimeMins?: number, // Sydney time in minutes since midnight
 ): RoomRatioStatus {
   const roomChildren = allChildren.filter(c => {
-    const roomMatch = c.room.toLowerCase().includes(room.ownaRoomName?.toLowerCase() ?? room.name.toLowerCase());
+    const roomMatch = roomNameMatches(c.room, room);
     if (!roomMatch) return false;
     if (showCurrentOnly) {
       if (!c.sign_in) return false;
