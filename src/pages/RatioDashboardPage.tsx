@@ -109,8 +109,6 @@ function StaffChip({ staff }: { staff: RosteredStaff }) {
   // segment's time. The "SPLIT" badge indicates the full shift is split.
   const timeStr = start && end ? `${start}–${end}` : start || end || '';
   const meta = staff.externalCasualMeta;
-  // Format cost e.g. 38250 → $382.50
-  const costStr = meta?.costCents ? `$${(meta.costCents / 100).toFixed(2)}` : null;
   // Format cert e.g. CERT3 → Cert III, DIPLOMA → Diploma, ECT → ECT, NONE → ''
   const certLabel = meta?.certLevel && meta.certLevel !== 'NONE'
     ? meta.certLevel === 'CERT3' ? 'Cert III'
@@ -144,7 +142,6 @@ function StaffChip({ staff }: { staff: RosteredStaff }) {
         </div>
         <div className="text-xs" style={{ color: '#596570' }}>
           {timeStr || 'Time not set'}
-          {costStr && <span className="ml-1 font-medium" style={{ color: '#c2410c' }}>{costStr}</span>}
         </div>
       </div>
     </div>
