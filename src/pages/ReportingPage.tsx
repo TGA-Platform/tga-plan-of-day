@@ -983,6 +983,7 @@ export default function ReportingPage() {
     const needGroupingSessions = needsEducator;
     const needRatioCheck      = needsEducator || needsStaffingAnalysis;
     const needDeputyActuals   = needsEducator;
+    const needLunchScheds     = needsEducator;
 
 
     if (needsDateLoop) for (const centre of selectedCentres) {
@@ -997,7 +998,7 @@ export default function ReportingPage() {
 
       for (const date of dates) {
         // Fetch only the endpoints the selected reports need.
-        const [att, rosters, zCasuals, allocations, floatScheds, groupingSessionRows, ratioCheckRows, deputyActuals] = await Promise.all([
+        const [att, rosters, zCasuals, allocations, floatScheds, groupingSessionRows, ratioCheckRows, deputyActuals, lunchScheds] = await Promise.all([
           needAttendance ? fetchAttendance(campus, date) : Promise.resolve([]),
           fetchRostersForDate(allUnitIds, date),
           needZCasuals ? fetchZCasualsForDate(centre.name, date) : Promise.resolve([]),
@@ -1010,6 +1011,8 @@ export default function ReportingPage() {
           needRatioCheck ? fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centre.id)}&date=${date}`)
             .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
           needDeputyActuals ? fetch(`/api/${date < today ? 'deputy-actual-timesheets-read' : 'deputy-timesheets-actual'}?unitIds=${allUnitIds.join(',')}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+          needLunchScheds ? fetch(`/api/lunch-schedules?centre=${encodeURIComponent(centre.id)}&date=${date}`)
             .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
         ]);
 
@@ -1676,37 +1679,53 @@ export default function ReportingPage() {
         // the main slot-position loop above. The old grouping_sessions overlay
         // has been removed so the educator report is strictly ratio-check-driven.
 
-        // Build a map of empId → own-lunch float schedule block (planned own break times)
-        const ownLunchByEmpId: Record<number, { startTime: string; endTime: string }> = {};
+        // Build a map of empId → planned lunch break (from lunch schedule or float own-lunch).
+        // Deputy actual lunch always wins; this is the fallback when Deputy has no lunch recorded.
+        const plannedLunchByEmpId: Record<number, { startTime: string; endTime: string; source: 'lunch-schedule' | 'float' }> = {};
+        for (const lsRow of (lunchScheds as any[])) {
+          for (const entry of (lsRow.schedule ?? [])) {
+            if (entry.lunchStart && entry.lunchEnd) {
+              plannedLunchByEmpId[entry.employeeId as number] = {
+                startTime: String(entry.lunchStart),
+                endTime:   String(entry.lunchEnd),
+                source:    'lunch-schedule',
+              };
+            }
+          }
+        }
         for (const fsRow of (floatScheds as any[])) {
           const floatEmpId = fsRow.employee_id as number;
           for (const block of (fsRow.schedule ?? [])) {
             if (String(block.coverType ?? '').toLowerCase() === 'own-lunch') {
-              ownLunchByEmpId[floatEmpId] = { startTime: String(block.startTime ?? ''), endTime: String(block.endTime ?? '') };
+              plannedLunchByEmpId[floatEmpId] = {
+                startTime: String(block.startTime ?? ''),
+                endTime:   String(block.endTime ?? ''),
+                source:    'float',
+              };
             }
           }
         }
 
-        // Inject actual lunch break rows from Ratio Check overrides (Deputy actuals or manual)
-        // Also fall back to planned own-lunch times from the float schedule when Deputy hasn't
-        // clocked the break yet. Label clearly as "Own lunch break" for floats.
+        // Inject lunch break rows. Priority: Deputy actual > planned lunch schedule > float own-lunch.
         const lunchEntriesToAdd: typeof entries = [];
         const seenLunchEmpIds = new Set<number>();
         for (const entry of entries) {
           if (entry.blockType === 'lunch_break') continue;
           if (seenLunchEmpIds.has(entry.employeeId)) continue;
           const override = ratioTimeOverrides[String(entry.employeeId)];
-          const plannedOwnLunch = ownLunchByEmpId[entry.employeeId];
-          // Use Deputy actual times if available, fall back to planned own-lunch from float schedule
-          const lunchStart = override?.lunchStart ?? plannedOwnLunch?.startTime;
-          const lunchEnd   = override?.lunchEnd   ?? plannedOwnLunch?.endTime;
+          const planned = plannedLunchByEmpId[entry.employeeId];
+          const lunchStart = override?.lunchStart ?? planned?.startTime;
+          const lunchEnd   = override?.lunchEnd   ?? planned?.endTime;
           if (!lunchStart) continue;
           seenLunchEmpIds.add(entry.employeeId);
-          const isOwnLunchFloat = !!plannedOwnLunch;
           const hasActual = !!override?.lunchStart;
-          const noteText = isOwnLunchFloat
-            ? (hasActual ? 'Own lunch break' : 'Own lunch break (planned)')
-            : (lunchEnd ? 'Deputy actual' : 'In progress');
+          const noteText = hasActual
+            ? 'Deputy actual'
+            : planned?.source === 'float'
+              ? 'Own lunch break (planned)'
+              : planned?.source === 'lunch-schedule'
+                ? 'Planned lunch break'
+                : (lunchEnd ? 'Deputy actual' : 'In progress');
           // Remove any existing positional lunch_break entry for this employee (will be replaced)
           // Add a clean lunch row with actual or planned times
           lunchEntriesToAdd.push({
