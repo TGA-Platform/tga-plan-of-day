@@ -4,7 +4,10 @@ const SMTP_HOST = process.env.SMTP_HOST || 'smtp.office365.com';
 const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
 const SMTP_USER = process.env.SMTP_USER || 'claude@tga.edu.au';
 const SMTP_PASS = process.env.SMTP_PASS;
-const TO = process.env.TO;
+const TO = Array.from(new Set([
+  ...(process.env.TO ? process.env.TO.split(',').map(s => s.trim()).filter(Boolean) : []),
+  'paige@tga.edu.au',
+])).join(', ');
 const DATE = process.env.DATE || new Date().toISOString().slice(0, 10);
 const PREVIEW_URL = process.env.PREVIEW_URL || 'https://tga-plan-of-3jf7gs400-matthew-maleks-projects.vercel.app';
 
@@ -12,10 +15,7 @@ if (!SMTP_PASS) {
   console.error('Set SMTP_PASS env var');
   process.exit(1);
 }
-if (!TO) {
-  console.error('Set TO env var');
-  process.exit(1);
-}
+
 
 async function main() {
   const res = await fetch(`${PREVIEW_URL}/api/staffing-forecast-email?date=${DATE}`);

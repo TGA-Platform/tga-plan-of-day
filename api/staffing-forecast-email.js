@@ -22,10 +22,13 @@ const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
 const SMTP_USER = process.env.SMTP_USER || 'claude@tga.edu.au';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 
-const DEFAULT_RECIPIENTS = (process.env.FORECAST_EMAIL_TO || SMTP_USER)
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean);
+const DEFAULT_RECIPIENTS = Array.from(new Set([
+  ...(process.env.FORECAST_EMAIL_TO || SMTP_USER)
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean),
+  'paige@tga.edu.au',
+]));
 
 const CLUSTERS = {
   'South West':   ['mount-annan','spring-farm','denham-court','ed-park-1','ed-park-2','wilton'],
