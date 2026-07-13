@@ -421,7 +421,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
           const isInProgress = tss.some(ts => ts.isInProgress);
           const firstStart = actualSegments[0]?.start ?? '';
-          const lastEnd = isInProgress ? '' : (actualSegments[actualSegments.length - 1]?.end ?? '');
+          let lastEnd = isInProgress ? '' : (actualSegments[actualSegments.length - 1]?.end ?? '');
+          // For in-progress shifts, prefer the published roster end time. Deputy timesheets can
+          // carry a stale rosteredEnd when a shift is extended after the timesheet was created,
+          // and the fallback to an existing saved override would keep the old short end time.
+          if (isInProgress && rosterEntry) {
+            const rosterEnd = formatRosterTime(rosterEntry.endTime);
+            if (rosterEnd) lastEnd = rosterEnd;
+          }
 
           if (employeeId === 1611) {
             console.log('[Deputy debug Anisha]', { firstStart, lastEnd, isInProgress, actualSegments, rosterSegments, existingStart: tss[0]?.rosteredStart, existingEnd: tss[0]?.rosteredEnd });
