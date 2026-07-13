@@ -18,6 +18,10 @@
     {
       "path": "/api/cron-reporting-snapshot",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron-ratio-check-freeze",
+      "schedule": "0 10 * * *"
     }
   ]
 }

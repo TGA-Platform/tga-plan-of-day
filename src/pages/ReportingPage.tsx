@@ -933,6 +933,7 @@ export default function ReportingPage() {
     const needsStaffingAnalysis = selectedReports.has('staffing-analysis');
     const needsCasual          = selectedReports.has('casual');
     const needsDateLoop        = needsEducator || needsOccupancy || needsRosterOpt || needsStaffingAnalysis || needsCasual;
+    const today                = todayStr();
 
     const rows: typeof educatorRows = [];
     const snaps: RatioSnap[] = [];
@@ -1008,7 +1009,7 @@ export default function ReportingPage() {
             .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
           needRatioCheck ? fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centre.id)}&date=${date}`)
             .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
-          needDeputyActuals ? fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`)
+          needDeputyActuals ? fetch(`/api/${date < today ? 'deputy-actual-timesheets-read' : 'deputy-timesheets-actual'}?unitIds=${allUnitIds.join(',')}&date=${date}`)
             .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
         ]);
 
