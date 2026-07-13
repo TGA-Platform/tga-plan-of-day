@@ -9,6 +9,11 @@ function to12h(hhmm: string): string {
   const h12 = h % 12 || 12;
   return m === 0 ? `${h12}${ampm}` : `${h12}:${String(m).padStart(2, '0')}${ampm}`;
 }
+
+function isRatioCheckLocked(date: string): boolean {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
+  return date < today;
+}
 import type { Room, AttendanceChild, RosteredStaff } from '../types';
 import { calcRequiredStaff, parseAgeMonths } from '../utils/ratioEngine';
 import { enqueueSave } from '../utils/syncQueue';
@@ -354,6 +359,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const isToday = date === today;
     // Don't fetch future dates - no timesheets yet
     if (date > today) return;
+    // Don't refresh locked past dates (24h after the date) so saved overrides stay stable.
+    if (isRatioCheckLocked(date)) return;
 
     async function fetchActuals() {
       // Don't save until initial data load is complete - avoids overwriting FGs with empty state
