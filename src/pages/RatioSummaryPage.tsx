@@ -11,7 +11,7 @@ function safeFormat(d: Date | string | null | undefined, fmt: string): string {
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { CENTRES } from '../config';
-import { parseAgeMonths, calcRequiredStaff } from '../utils/ratioEngine';
+import { parseAgeMonths, calcRequiredStaff, roomNameMatches } from '../utils/ratioEngine';
 import { withCache, bustCache } from '../utils/cache';
 import { getUser, getAllowedCentres } from '../auth';
 
@@ -190,10 +190,9 @@ export default function RatioSummaryPage() {
         // This avoids bad Deputy-unit-name matching for centres with friendly room names
         let requiredStaff = 0;
         if (configCentre && configCentre.rooms.length > 0) {
-          // Use config rooms with correct ownaRoomName — identical to buildRoomStatus
+          // Use config rooms with correct ownaRoomName / aliases — identical to buildRoomStatus
           for (const room of configCentre.rooms) {
-            const owna = (room.ownaRoomName ?? room.name).toLowerCase();
-            const roomKids = children.filter(c => c.room.toLowerCase().includes(owna));
+            const roomKids = children.filter(c => roomNameMatches(c.room, room));
             const { required } = calcRequiredStaff(roomKids.map(k => ({ ageMonths: k.ageMonths } as any)));
             requiredStaff += required;
           }
