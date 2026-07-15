@@ -1006,10 +1006,15 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     for (const slot of allSlots) {
       const byEmp: Record<number, string | null> = {};
       for (const s of staffAtSlotMap[slot] ?? []) {
-        // 1. Per-slot move to a room
+        // 1. Per-slot move from Ratio Check always wins over Plan-of-Day.
+        //    Room moves put them in that room; activity/removed moves make them unassigned.
         const slotMove = sessionData.staffMoves[`${s.employeeId}:${slot}`];
-        if (slotMove && slotMove !== '__removed__' && roomIds.has(slotMove)) {
-          byEmp[s.employeeId] = slotMove;
+        if (slotMove !== undefined) {
+          if (roomIds.has(slotMove)) {
+            byEmp[s.employeeId] = slotMove;
+          } else {
+            byEmp[s.employeeId] = null;
+          }
           continue;
         }
         // 2. Day-level allocation from Plan view
@@ -1307,14 +1312,17 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const floatCovers = floatCoveringRoomBySlot[slot] ?? {};
     const floatsCoveringRoom = new Set(Object.values(floatCovers).flat());
     return available.filter(r => {
-      // If the staff has a primary room assignment (move, day allocation, natural
-      // room, or float cover), they belong in that room — not in Additional Duties.
+      const moveKey = `${r.employeeId}:${slot}`;
+      const move = sessionData.staffMoves[moveKey];
+      // Explicit activity/removed moves never belong in Additional Duties.
+      if (move !== undefined) {
+        return !roomIds.has(move) && !activityMoves.has(move) && move !== '__removed__';
+      }
+      // If the staff has a primary room assignment (day allocation, natural room,
+      // or float cover), they belong in that room — not in Additional Duties.
       if (primaryRoomMap[r.employeeId] !== null && primaryRoomMap[r.employeeId] !== undefined) return false;
       // Exclude floats actively covering a room via their scheduled plan
       if (floatsCoveringRoom.has(r.employeeId)) return false;
-      const moveKey = `${r.employeeId}:${slot}`;
-      const move = sessionData.staffMoves[moveKey];
-      if (move !== undefined) return !roomIds.has(move) && !activityMoves.has(move) && move !== '__removed__';
       // Native float unit staff: hide from Additional Duties only when they have
       // an active schedule block (covering a room, on lunch, programming etc).
       // If they're on shift but have NO active block (e.g. plan day didn't cover
