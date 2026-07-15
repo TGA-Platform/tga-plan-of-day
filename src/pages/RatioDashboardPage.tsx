@@ -1751,8 +1751,16 @@ export default function RatioDashboardPage() {
                 roomStatus={rs}
                 issAssigned={issStaff.filter(s => staffMoves[s.employeeId] === rs.room.id)}
                 forecast={forecast?.rooms ? (() => {
-                  const match = Object.entries(forecast.rooms).find(([k]) => roomNameMatches(k, rs.room));
-                  return match ? match[1] : null;
+                  const matches = Object.entries(forecast.rooms).filter(([k]) => roomNameMatches(k, rs.room));
+                  if (matches.length === 0) return null;
+                  // Merge matches so old room-name keys (expected) and new room-name
+                  // keys (booked) both contribute to the same card.
+                  const merged: RoomForecastData = matches.reduce((acc, [, data]) => ({
+                    expected: acc?.expected ?? data.expected,
+                    booked: acc?.booked ?? data.booked,
+                    weeksUsed: acc?.weeksUsed ?? data.weeksUsed,
+                  }), null as RoomForecastData);
+                  return merged;
                 })() : null}
                 drag={{
                   onDragStart,
