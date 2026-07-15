@@ -1160,6 +1160,18 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [staffAtSlotMap, offFloorBySlot, floatCoveringRoomBySlot, sessionData.staffMoves, rooms]);
 
+  /** Staff explicitly assigned to any family grouping at a slot */
+  function getExplicitFGStaffIdsAtSlot(slot: string): Set<number> {
+    const ids = new Set<number>();
+    for (const fg of sharedFamilyGroupings) {
+      if (!fg.slots.includes(slot)) continue;
+      for (const empId of fg.staffIdsBySlot?.[slot] ?? []) {
+        ids.add(empId);
+      }
+    }
+    return ids;
+  }
+
   /** Staff for a specific room at a slot - dedup ensures no-one appears in multiple places */
   function getStaffForRoom(slot: string, room: Room): RosteredStaff[] {
     const available = staffAtSlotMap[slot] ?? [];
@@ -1167,6 +1179,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const slotFloatCovers = floatCoveringRoomBySlot[slot] ?? {};
     const floatCovers = slotFloatCovers[room.id] ?? [];
     const allFloatCoverIds = new Set(Object.values(slotFloatCovers).flat());
+    const explicitFgIds = getExplicitFGStaffIdsAtSlot(slot);
     // Exclude anyone manually placed in an activity column or float pool
     const inActivity = new Set<number>(
       available.filter(s => {
@@ -1180,6 +1193,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       // If a staff is covering a room via the Plan Day float schedule, they should
       // appear only in the covered room, not back in their natural/moved room.
       if (allFloatCoverIds.has(s.employeeId)) return false;
+      // Staff explicitly assigned to a family grouping at this slot should only
+      // appear in the family grouping cell, not in a regular room column.
+      if (explicitFgIds.has(s.employeeId)) return false;
       const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
       const effective = getEffectiveRoom(s.employeeId, slot, naturalRoom?.id ?? '');
       return effective === room.id;
@@ -1191,7 +1207,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       floatCovers.includes(s.employeeId) &&
       !offFloor.has(s.employeeId) &&
       !inActivity.has(s.employeeId) &&
-      !globalClaimed.has(s.employeeId)
+      !globalClaimed.has(s.employeeId) &&
+      !explicitFgIds.has(s.employeeId)
     );
     const combined = [...rosterInRoom, ...floatStaffInRoom];
     const seen = new Set<number>();
