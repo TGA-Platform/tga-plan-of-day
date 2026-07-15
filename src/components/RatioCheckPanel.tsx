@@ -997,6 +997,50 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [floatScheds, sessionData.staffMoves]);
 
+  /** Primary room assignment for each on-shift staff member at each slot.
+   *  Enforces one-room-per-staff so nobody can render in two room columns. */
+  const staffPrimaryRoomBySlot = useMemo(() => {
+    const map: Record<string, Record<number, string | null>> = {};
+    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    const roomIds = new Set(rooms.map(r => r.id));
+    for (const slot of allSlots) {
+      const byEmp: Record<number, string | null> = {};
+      for (const s of staffAtSlotMap[slot] ?? []) {
+        // 1. Per-slot move to a room
+        const slotMove = sessionData.staffMoves[`${s.employeeId}:${slot}`];
+        if (slotMove && slotMove !== '__removed__' && roomIds.has(slotMove)) {
+          byEmp[s.employeeId] = slotMove;
+          continue;
+        }
+        // 2. Day-level allocation from Plan view
+        const dayMove = dayAllocations[s.employeeId];
+        if (dayMove && dayMove !== 'float' && dayMove !== 'support' && roomIds.has(dayMove)) {
+          byEmp[s.employeeId] = dayMove;
+          continue;
+        }
+        // 3. Natural roster room
+        const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
+        if (naturalRoom) {
+          byEmp[s.employeeId] = naturalRoom.id;
+          continue;
+        }
+        // 4. Float cover room (only if covering exactly one room at this slot)
+        const slotCovers = floatCoveringRoomBySlot[slot] ?? {};
+        const coveredRooms = Object.entries(slotCovers)
+          .filter(([, ids]) => ids.includes(s.employeeId))
+          .map(([roomId]) => roomId);
+        if (coveredRooms.length === 1) {
+          byEmp[s.employeeId] = coveredRooms[0];
+          continue;
+        }
+        byEmp[s.employeeId] = null;
+      }
+      map[slot] = byEmp;
+    }
+    return map;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staffAtSlotMap, sessionData.staffMoves, dayAllocations, rooms, floatCoveringRoomBySlot]);
+
   // -- Computed getters -------------------------------------------------------
 
   function getChildCount(slot: string, roomId: string): number {
@@ -1227,25 +1271,27 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     );
     const combined = [...rosterInRoom, ...floatStaffInRoom];
     const seen = new Set<number>();
-    return combined.filter(s => {
+    const deduped = combined.filter(s => {
       if (seen.has(s.employeeId)) return false;
       seen.add(s.employeeId);
       return true;
     });
+    // Final guard: a staff member can only render in their primary room for this slot.
+    // This catches any edge case where roster + float-cover + moves accidentally place
+    // the same person in two room columns at once.
+    const primaryRoomMap = staffPrimaryRoomBySlot[slot] ?? {};
+    return deduped.filter(s => primaryRoomMap[s.employeeId] === room.id);
   }
 
   /** Staff on shift at a slot not currently assigned to any room or FG (excludes Additional Duties) */
   function getUnassignedStaffAtSlot(slot: string): RosteredStaff[] {
     const available = staffAtSlotMap[slot] ?? [];
-    const roomUnitIds = new Set(rooms.map(r => r.deputyUnitId));
-    const roomIds = new Set(rooms.map(r => r.id));
+    const primaryRoomMap = staffPrimaryRoomBySlot[slot] ?? {};
     return available.filter(r => {
       const moveKey = `${r.employeeId}:${slot}`;
       const move = sessionData.staffMoves[moveKey];
-      if (move !== undefined) {
-        return !roomIds.has(move) && move !== '__additional__' && move !== '__removed__';
-      }
-      return !roomUnitIds.has(r.unitId);
+      if (move !== undefined && (move === '__additional__' || move === '__removed__')) return false;
+      return primaryRoomMap[r.employeeId] === null;
     });
   }
 
