@@ -367,6 +367,7 @@ function BlockRow({
   const effectiveCoverType = block.coverType ?? inferCoverType(block.notes);
   const isCleaning = effectiveCoverType === 'cleaning';
   const isOwnLunch = effectiveCoverType === 'own-lunch';
+  const isRatio    = effectiveCoverType === 'ratio';
   const typeLabel: Record<BlockType, string> = {
     start: '🌅 Start of shift',
     end:   '🌆 End of shift',
@@ -448,8 +449,8 @@ function BlockRow({
           </div>
         )}
 
-        {/* Staff covering — hidden for cleaning/own-lunch */}
-        {block.type === 'break' && !isCleaning && !isOwnLunch && (
+        {/* Staff covering — hidden for cleaning/own-lunch/ratio */}
+        {block.type === 'break' && !isCleaning && !isOwnLunch && !isRatio && (
           <>
             <div>
               <label className="text-xs mb-1 block" style={{ color: '#596570' }}>Covering staff member</label>
@@ -480,7 +481,23 @@ function BlockRow({
             <label className="text-xs mb-1 block font-medium" style={{ color: '#596570' }}>Cover type</label>
             <select
               value={block.coverType ?? inferCoverType(block.notes) ?? ''}
-              onChange={e => onChange({ ...block, coverType: (e.target.value as CoverType) || undefined })}
+              onChange={e => {
+                const newType = (e.target.value as CoverType) || undefined;
+                // Ratio cover means the float is added to the room to meet ratio —
+                // they are not covering a specific staff member, and notes are cleared.
+                if (newType === 'ratio') {
+                  onChange({
+                    ...block,
+                    coverType: newType,
+                    coveringEmployeeId: null,
+                    coveringEmployeeName: '',
+                    coveringEmployeeRoom: '',
+                    notes: '',
+                  });
+                } else {
+                  onChange({ ...block, coverType: newType });
+                }
+              }}
               className={inputCls} style={inputStyle}>
               <option value="">— select type —</option>
               <option value="lunch">🍽 Lunch / break cover</option>
