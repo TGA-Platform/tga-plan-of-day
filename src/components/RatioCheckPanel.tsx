@@ -1302,10 +1302,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const roomUnitIds = new Set(rooms.map(r => r.deputyUnitId));
     const roomIds = new Set(rooms.map(r => r.id));
     const activityMoves = new Set(['__programming__', '__lunch__', '__cleaning__']);
+    const primaryRoomMap = staffPrimaryRoomBySlot[slot] ?? {};
     // Floats covering a room from the schedule should not appear in Additional Duties
     const floatCovers = floatCoveringRoomBySlot[slot] ?? {};
     const floatsCoveringRoom = new Set(Object.values(floatCovers).flat());
     return available.filter(r => {
+      // If the staff has a primary room assignment (move, day allocation, natural
+      // room, or float cover), they belong in that room — not in Additional Duties.
+      if (primaryRoomMap[r.employeeId] !== null && primaryRoomMap[r.employeeId] !== undefined) return false;
       // Exclude floats actively covering a room via their scheduled plan
       if (floatsCoveringRoom.has(r.employeeId)) return false;
       const moveKey = `${r.employeeId}:${slot}`;
