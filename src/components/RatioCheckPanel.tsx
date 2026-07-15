@@ -1164,7 +1164,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   function getStaffForRoom(slot: string, room: Room): RosteredStaff[] {
     const available = staffAtSlotMap[slot] ?? [];
     const offFloor = offFloorBySlot[slot] ?? new Set<number>();
-    const floatCovers = (floatCoveringRoomBySlot[slot] ?? {})[room.id] ?? [];
+    const slotFloatCovers = floatCoveringRoomBySlot[slot] ?? {};
+    const floatCovers = slotFloatCovers[room.id] ?? [];
+    const allFloatCoverIds = new Set(Object.values(slotFloatCovers).flat());
     // Exclude anyone manually placed in an activity column or float pool
     const inActivity = new Set<number>(
       available.filter(s => {
@@ -1175,6 +1177,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const rosterInRoom = available.filter(s => {
       if (offFloor.has(s.employeeId)) return false;
       if (inActivity.has(s.employeeId)) return false;
+      // If a staff is covering a room via the Plan Day float schedule, they should
+      // appear only in the covered room, not back in their natural/moved room.
+      if (allFloatCoverIds.has(s.employeeId)) return false;
       const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
       const effective = getEffectiveRoom(s.employeeId, slot, naturalRoom?.id ?? '');
       return effective === room.id;
