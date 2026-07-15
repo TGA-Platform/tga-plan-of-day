@@ -1047,6 +1047,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     ) ?? null;
   }
 
+  /** Get the FG id that claims a room at a slot (null if none) */
+  function getFgIdClaimingRoomAtSlot(slot: string, roomId: string): string | null {
+    return getFGForRoomAtSlot(slot, roomId)?.id ?? null;
+  }
+
   /** Get FGs active at a slot */
   function getFGsAtSlot(slot: string): FamilyGroupingConfig[] {
     return sharedFamilyGroupings.filter(fg => fg.slots.includes(slot));
@@ -1187,6 +1192,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         return mv === '__programming__' || mv === '__lunch__' || mv === '__cleaning__' || mv === '__additional__';
       }).map(s => s.employeeId)
     );
+    const roomFgId = getFgIdClaimingRoomAtSlot(slot, room.id);
     const rosterInRoom = available.filter(s => {
       if (offFloor.has(s.employeeId)) return false;
       if (inActivity.has(s.employeeId)) return false;
@@ -1198,7 +1204,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       if (explicitFgIds.has(s.employeeId)) return false;
       const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
       const effective = getEffectiveRoom(s.employeeId, slot, naturalRoom?.id ?? '');
-      return effective === room.id;
+      if (effective !== room.id) return false;
+      // If this room is inside a family grouping, make sure the staff's effective
+      // room belongs to THIS grouping, not a different one. This prevents someone
+      // whose natural/moved room is in FG2 from also showing up in FG3 because
+      // they were explicitly added to FG3.
+      if (roomFgId) {
+        const effectiveFgId = getFgIdClaimingRoomAtSlot(slot, effective);
+        if (effectiveFgId && effectiveFgId !== roomFgId) return false;
+      }
+      return true;
     });
     // Global claimed set: anyone already placed in a room via roster/move cannot
     // also appear as a float cover in a different room at the same slot.
@@ -2512,7 +2527,17 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                         })();
                         const explicitFgStaff: FGStaffMember[] = (fg.staffIdsBySlot?.[slot] ?? [])
                           .map(id => findRosteredStaff(id))
-                          .filter((s): s is RosteredStaff => !!s && !fgStaffMembers.some(m => m.employeeId === s.employeeId))
+                          .filter((s): s is RosteredStaff => {
+                            if (!s) return false;
+                            if (fgStaffMembers.some(m => m.employeeId === s.employeeId)) return false;
+                            // Don't show an explicitly-added FG staff member in this grouping
+                            // if their effective room actually belongs to a different active grouping.
+                            const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
+                            const effective = getEffectiveRoom(s.employeeId, slot, naturalRoom?.id ?? '');
+                            const effectiveFgId = getFgIdClaimingRoomAtSlot(slot, effective);
+                            if (effectiveFgId && effectiveFgId !== fg.id) return false;
+                            return true;
+                          })
                           .map(s => ({ ...s, inRoomId: fg.heldInRoom || fgRooms[0]?.id || '', inRoomName: 'Grouping', isExplicitFG: true }));
                         const allFgStaff: FGStaffMember[] = [...fgStaffMembers, ...explicitFgStaff];
                         const fgEditKey = `fg-${fg.id}:${slot}`;
