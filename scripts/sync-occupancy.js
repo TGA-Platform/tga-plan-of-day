@@ -194,14 +194,20 @@ async function main() {
     const [campus, date] = key.split('|');
     const cap = capacity.get(campus) || 0;
     const byRoom = roomBooked.get(key);
-    return {
+    const row = {
       campus,
       date,
       booked,
       capacity: cap,
-      room_booked: byRoom && Object.keys(byRoom).length > 0 ? byRoom : {},
       updated_at: new Date().toISOString(),
     };
+    // Only write room_booked when we have real per-room data. If the Occupancy tab
+    // doesn't cover this date, leave any existing room_booked alone (e.g. from
+    // update-sharepoint-attendance.js) instead of overwriting it with {}.
+    if (byRoom && Object.keys(byRoom).length > 0) {
+      row.room_booked = byRoom;
+    }
+    return row;
   });
 
   console.log(`  Parsed ${rows.length} campus-day records from ${ws.rowCount - 1} rows`);
