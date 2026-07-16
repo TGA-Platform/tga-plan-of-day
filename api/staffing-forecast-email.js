@@ -106,6 +106,13 @@ function ratioForRoom(roomName) {
   return 5; // default conservative
 }
 
+function ratioForAge(ageMonths) {
+  if (ageMonths === null || ageMonths === undefined) return 5; // conservative default
+  if (ageMonths < 24) return 4;
+  if (ageMonths < 36) return 5;
+  return 10;
+}
+
 function unitType(r, centre) {
   const uid = r.OperationalUnit;
   if ((centre.leaveUnitIds || []).includes(uid)) return 'leave';
@@ -140,6 +147,12 @@ function calcCentreForecast(centre, date, forecasts, childrenExpected, rosters, 
 
   const zCasualFloatCount = zCasualCountByCentre[centre.name] || 0;
 
+  const totalExpected = Array.isArray(childrenExpected) && childrenExpected.length > 0
+    ? childrenExpected.length
+    : null;
+
+  // Compute required per room from children-expected ages (matches dashboard ratio engine).
+  // Fall back to room-forecast required values when children-expected is unavailable.
   const roomData = centre.rooms.map(room => {
     const owna = (room.ownaRoomName ?? room.name).toLowerCase();
     let expected = 0;
@@ -147,18 +160,34 @@ function calcCentreForecast(centre, date, forecasts, childrenExpected, rosters, 
     for (const [roomName, data] of Object.entries(fc.rooms || {})) {
       if (roomName.toLowerCase().includes(owna) || owna.includes(roomName.toLowerCase())) {
         expected += (data.expected ?? 0);
-        if ((data.required ?? null) !== null) {
-          required += data.required;
-        } else {
-          const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
-          required += data.expected > 0 ? Math.ceil(data.expected / ratio) : 0;
+        if (!Array.isArray(childrenExpected) || childrenExpected.length === 0) {
+          if ((data.required ?? null) !== null) {
+            required += data.required;
+          } else {
+            const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
+            required += data.expected > 0 ? Math.ceil(data.expected / ratio) : 0;
+          }
         }
       }
     }
-    const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
-    if (required === 0 && expected > 0) {
+
+    if (Array.isArray(childrenExpected) && childrenExpected.length > 0) {
+      // Sum 1/ratio for each child in this room, then ceiling (matches NSW ratio rules)
+      const roomChildren = childrenExpected.filter(c => {
+        const childRoom = (c.room ?? '').toLowerCase();
+        return childRoom === owna || childRoom.includes(owna) || owna.includes(childRoom);
+      });
+      if (roomChildren.length > 0) {
+        const rawRequired = roomChildren.reduce((s, c) => s + 1 / ratioForAge(c.ageMonths), 0);
+        required = Math.ceil(rawRequired);
+      }
+    }
+
+    if (required === 0 && expected > 0 && !Array.isArray(childrenExpected)) {
+      const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
       required = Math.ceil(expected / ratio);
     }
+
     const roomStaff = rosters.filter(r => r.OperationalUnit === room.deputyUnitId && r.Employee && r.Employee !== 0).length;
     return { room: room.name, expected, required, staffCount: roomStaff };
   });
@@ -172,14 +201,7 @@ function calcCentreForecast(centre, date, forecasts, childrenExpected, rosters, 
     totalRequired = Object.values(fc.rooms).reduce((s, data) => s + (data.required ?? 0), 0);
   }
 
-  // Match the Ratio Dashboard "Expected" number, which uses children-expected (last week's same-weekday attendance).
-  const totalExpected = Array.isArray(childrenExpected) && childrenExpected.length > 0
-    ? childrenExpected.length
-    : totalExpectedFromRooms;
-
   // Last resort: estimate from total expected children using an average ratio.
-  // Use totalExpected so we still produce a required number when room-forecast attendance is missing
-  // but children-expected has data.
   if (totalRequired === 0 && totalExpected > 0) {
     totalRequired = centre.rooms.reduce((s, room) => {
       const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
