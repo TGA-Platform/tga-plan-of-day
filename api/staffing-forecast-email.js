@@ -242,7 +242,7 @@ function buildHtml(summary, opts = {}) {
   `;
 }
 
-async function sendEmails(summary, date, includeClusters = true) {
+async function sendEmails(summary, date) {
   if (!SMTP_PASS) {
     throw new Error('SMTP_PASS not configured');
   }
@@ -277,8 +277,6 @@ async function sendEmails(summary, date, includeClusters = true) {
     });
     results.push({ to: DEFAULT_RECIPIENTS, messageId: info.messageId });
   }
-
-  if (!includeClusters) return results;
 
   // Cluster emails to area managers
   for (const [clusterName, centreIds] of Object.entries(CLUSTERS)) {
@@ -379,10 +377,9 @@ export default async function handler(req, res) {
     const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, childrenExpectedByCentre[centre.id], rosters, internalCasualSet, zCasualCountByCentre));
     const html = buildHtml(summary, { title: `TGA Staffing Forecast — ${formatDateLabel(date)}` });
 
-    const includeClusters = req.query.clusters !== '0' && req.query.includeClusters !== 'false';
     let sent = null;
     if (shouldSend) {
-      sent = await sendEmails(summary, date, includeClusters);
+      sent = await sendEmails(summary, date);
     }
 
     return res.status(200).json({
