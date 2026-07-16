@@ -157,22 +157,20 @@ async function loadPlanOfDayRequired(centreId, date) {
   }
 }
 
-async function forecastForCampus(centreId, campus, date, lastWeekStr, todayStr, allLastWeekRows, allOccRows, allTodayRows) {
-  const attRows = allLastWeekRows.filter(r => r.campus === campus);
+async function forecastForCampus(centreId, campus, date, historicalDate, todayStr, attRows, occRows, todayRows) {
   const lastWeekByRoom = {};
   for (const row of attRows) {
     lastWeekByRoom[row.room] = (lastWeekByRoom[row.room] || 0) + 1;
   }
   const lastWeekRequiredByRoom = requiredFromRows(attRows);
 
-  const occ = allOccRows.find(r => r.campus === campus) || null;
+  const occ = Array.isArray(occRows) && occRows.length > 0 ? occRows[0] : null;
   const roomBooked = (occ?.room_booked && typeof occ.room_booked === 'object') ? occ.room_booked : {};
 
   let actualAttendance = null;
   let roomActual = {};
   let actualRequiredByRoom = {};
   if (date === todayStr) {
-    const todayRows = allTodayRows.filter(r => r.campus === campus);
     actualAttendance = todayRows.length;
     for (const row of todayRows) {
       roomActual[row.room] = (roomActual[row.room] || 0) + 1;
@@ -219,8 +217,44 @@ async function forecastForCampus(centreId, campus, date, lastWeekStr, todayStr, 
     actual:   actualAttendance,
     capacity: occ?.capacity ?? null,
     rooms: roomsOut,
-    lastWeek: lastWeekStr,
+    lastWeek: historicalDate,
   };
+}
+
+/** Find the most recent previous same-weekday with attendance data for a single campus. */
+async function findHistoricalRowsSingleCampus(campus, date, maxWeeks = 8) {
+  const target = new Date(date + 'T12:00:00Z');
+  for (let weeksBack = 1; weeksBack <= maxWeeks; weeksBack++) {
+    const d = new Date(target);
+    d.setUTCDate(d.getUTCDate() - 7 * weeksBack);
+    const dStr = d.toISOString().slice(0, 10);
+    const rows = await supaFetch(`/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${dStr}&select=date,room,child_name,age&limit=5000`);
+    if (Array.isArray(rows) && rows.length > 0) {
+      return { rows, historicalDate: dStr };
+    }
+  }
+  return { rows: [], historicalDate: null };
+}
+
+/** Find the most recent previous same-weekday with attendance data for all campuses. */
+async function findHistoricalRowsAllCampuses(date, maxWeeks = 8) {
+  const target = new Date(date + 'T12:00:00Z');
+  const allRows = [];
+  const historicalDateByCampus = {};
+  for (let weeksBack = 1; weeksBack <= maxWeeks; weeksBack++) {
+    const d = new Date(target);
+    d.setUTCDate(d.getUTCDate() - 7 * weeksBack);
+    const dStr = d.toISOString().slice(0, 10);
+    const rows = await supaFetchAll(`/rest/v1/attendance_daily?date=eq.${dStr}&select=campus,room,child_name,age&order=campus`);
+    if (rows.length === 0) continue;
+    allRows.push(...rows);
+    for (const r of rows) {
+      if (!historicalDateByCampus[r.campus]) {
+        historicalDateByCampus[r.campus] = dStr;
+      }
+    }
+  }
+  return { rows: allRows, historicalDateByCampus };
 }
 
 export default async function handler(req, res) {
@@ -232,19 +266,13 @@ export default async function handler(req, res) {
   const { campus, date, centreId } = req.query;
   if (!campus || !date) return res.status(400).json({ error: 'campus and date required' });
 
-  const target = new Date(date + 'T12:00:00Z');
-  const lastWeek = new Date(target);
-  lastWeek.setUTCDate(lastWeek.getUTCDate() - 7);
-  const lastWeekStr = lastWeek.toISOString().slice(0, 10);
   const todayStr = new Date().toISOString().slice(0, 10);
 
   try {
     // Bulk mode: return forecasts for all campuses in one call
     if (campus === 'all') {
-      const [allLastWeekRows, allOccRows, allTodayRows] = await Promise.all([
-        // Paginate: Supabase REST caps single requests at 1000 rows, so large networks get cut off.
-        // Order by campus so pagination is stable across requests.
-        supaFetchAll(`/rest/v1/attendance_daily?date=eq.${lastWeekStr}&select=campus,room,child_name,age&order=campus`),
+      const [{ rows: allHistoricalRows, historicalDateByCampus }, allOccRows, allTodayRows] = await Promise.all([
+        findHistoricalRowsAllCampuses(date, 8),
         supaFetch(`/rest/v1/daily_occupancy?date=eq.${date}&select=campus,booked,capacity,room_booked&limit=5000`),
         date === todayStr
           ? supaFetchAll(`/rest/v1/attendance_daily?date=eq.${date}&select=campus,room,child_name,age&order=campus`)
@@ -252,88 +280,41 @@ export default async function handler(req, res) {
       ]);
 
       const campuses = [...new Set([
-        ...allLastWeekRows.map(r => r.campus),
+        ...allHistoricalRows.map(r => r.campus),
         ...allOccRows.map(r => r.campus),
         ...allTodayRows.map(r => r.campus),
       ])];
 
       const out = {};
       for (const c of campuses) {
-        out[c] = await forecastForCampus(null, c, date, lastWeekStr, todayStr, allLastWeekRows, allOccRows, allTodayRows);
+        const rowsForCampus = allHistoricalRows.filter(r => r.campus === c);
+        const occForCampus = allOccRows.filter(r => r.campus === c);
+        const todayForCampus = allTodayRows.filter(r => r.campus === c);
+        out[c] = await forecastForCampus(null, c, date, historicalDateByCampus[c] ?? null, todayStr, rowsForCampus, occForCampus, todayForCampus);
       }
       return res.status(200).json(out);
     }
 
-    // Single campus mode
-    const [attRows, occRows, todayRows] = await Promise.all([
-      supaFetch(`/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${lastWeekStr}&select=date,room,child_name,age&limit=5000`),
+    // Single campus mode: find the most recent previous same-weekday with attendance data
+    const [{ rows: attRows, historicalDate }, occRows, todayRows] = await Promise.all([
+      findHistoricalRowsSingleCampus(campus, date, 8),
       supaFetch(`/rest/v1/daily_occupancy?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=booked,capacity,room_booked&limit=1`),
       date === todayStr
         ? supaFetch(`/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=room,child_name,age&limit=5000`)
         : Promise.resolve([]),
     ]);
 
-    const lastWeekByRoom = {};
-    for (const row of (Array.isArray(attRows) ? attRows : [])) {
-      lastWeekByRoom[row.room] = (lastWeekByRoom[row.room] || 0) + 1;
-    }
-    const lastWeekRequiredByRoom = requiredFromRows(Array.isArray(attRows) ? attRows : []);
-
-    const occ = Array.isArray(occRows) && occRows.length > 0 ? occRows[0] : null;
-    const roomBooked = (occ?.room_booked && typeof occ.room_booked === 'object') ? occ.room_booked : {};
-
-    let actualAttendance = null;
-    let roomActual = {};
-    let actualRequiredByRoom = {};
-    if (date === todayStr) {
-      if (Array.isArray(todayRows)) {
-        actualAttendance = todayRows.length;
-        for (const row of todayRows) {
-          roomActual[row.room] = (roomActual[row.room] || 0) + 1;
-        }
-        actualRequiredByRoom = requiredFromRows(todayRows);
-      }
-    }
-
-    const planRequiredByRoom = await loadPlanOfDayRequired(centreId, date);
-
-    const allRoomNames = new Set([
-      ...Object.keys(lastWeekByRoom),
-      ...Object.keys(roomBooked),
-      ...Object.keys(roomActual),
-      ...Object.keys(lastWeekRequiredByRoom),
-      ...Object.keys(actualRequiredByRoom),
-      ...Object.keys(planRequiredByRoom),
-    ]);
-
-    const roomsOut = {};
-    for (const room of allRoomNames) {
-      const bookedCount = roomBooked[room] ?? null;
-      const expectedCount = lastWeekByRoom[room] ?? null;
-      let required = planRequiredByRoom[room]
-        ?? actualRequiredByRoom[room]
-        ?? lastWeekRequiredByRoom[room]
-        ?? null;
-      if (required === null && expectedCount > 0) {
-        required = Math.ceil(expectedCount / ratioForRoom(room));
-      }
-
-      roomsOut[room] = {
-        expected: expectedCount,
-        weeksUsed: expectedCount !== null ? 1 : 0,
-        booked: bookedCount,
-        actual: roomActual[room] ?? null,
-        required,
-      };
-    }
-
-    return res.status(200).json({
-      booked:   occ?.booked   ?? null,
-      actual:   actualAttendance,
-      capacity: occ?.capacity ?? null,
-      rooms: roomsOut,
-      lastWeek: lastWeekStr,
-    });
+    const out = await forecastForCampus(
+      centreId,
+      campus,
+      date,
+      historicalDate,
+      todayStr,
+      Array.isArray(attRows) ? attRows : [],
+      occRows,
+      Array.isArray(todayRows) ? todayRows : []
+    );
+    return res.status(200).json(out);
   } catch (e) {
     console.error('[room-forecast] error:', e.message);
     return res.status(500).json({ error: e.message || 'Server error' });

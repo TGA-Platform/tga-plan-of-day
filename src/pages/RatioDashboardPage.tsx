@@ -842,6 +842,7 @@ export default function RatioDashboardPage() {
   type RoomForecast = { expected: number | null; weeksUsed: number; booked?: number | null };
   type ForecastData = { booked: number | null; capacity: number | null; rooms: Record<string, RoomForecast> };
   const [forecast, setForecast] = useState<ForecastData | null>(null);
+  const [historicalDateDisplay, setHistoricalDateDisplay] = useState<string | null>(null);
 
   // -- Drag-and-drop: manual staff reallocation (persisted per centre+date) --------
   const movesKey = `tga_pod_moves:${selectedCentreId}:${date}`;
@@ -1105,13 +1106,26 @@ export default function RatioDashboardPage() {
       // rather than fetching last week's attendance (which gives wrong ages and wrong room data).
       const useFutureEnrolled = isFutureDate;
 
-      const [attendanceRes, enrolledRes, rosters, forecastRes] = await Promise.all([
+      // Fetch expected children first so we know which historical date the API used
+      // (it falls back to the most recent previous same-weekday with attendance data).
+      let enrolledRes: { children?: { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[]; historicalDate?: string } | { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[] | null = null;
+      if (useFutureEnrolled) {
+        enrolledRes = await withCache(
+          `expected:${campusName}:${date}`,
+          () => fetch(`/api/children-expected?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()),
+          900000
+        );
+      }
+      const enrolledArray = Array.isArray(enrolledRes)
+        ? (enrolledRes as { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[])
+        : (enrolledRes?.children ?? []);
+      const historicalDate = Array.isArray(enrolledRes) ? effectiveDate : (enrolledRes?.historicalDate ?? effectiveDate);
+      setHistoricalDateDisplay(historicalDate);
+
+      const [attendanceRes, rosters, forecastRes] = await Promise.all([
         useFutureEnrolled
           ? Promise.resolve([])
-          : withCache(attKey, () => fetch(`/api/attendance?campus=${encodeURIComponent(campusName)}&date=${effectiveDate}`).then(r => r.json())),
-        useFutureEnrolled
-          ? withCache(`expected:${campusName}:${date}`, () => fetch(`/api/children-expected?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()), 900000)
-          : Promise.resolve([]),
+          : withCache(attKey, () => fetch(`/api/attendance?campus=${encodeURIComponent(campusName)}&date=${historicalDate}`).then(r => r.json())),
         withCache(rosterKey, () => fetchRosters(date, allUnitIds, forceRefresh)),
         withCache(forecastKey, () => fetch(`/api/room-forecast?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()).catch(() => null), 300000),
       ]);
@@ -1119,10 +1133,10 @@ export default function RatioDashboardPage() {
 
       let childRows: AttendanceChild[];
 
-      if (useFutureEnrolled && Array.isArray(enrolledRes) && enrolledRes.length > 0) {
+      if (useFutureEnrolled && enrolledArray.length > 0) {
         // children-expected API returns children expected on this specific weekday
         // based on historical attendance patterns, with age already projected to target date
-        childRows = (enrolledRes as { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[]).map(c => ({
+        childRows = enrolledArray.map(c => ({
           child_name:           c.full_name,
           room:                 c.room ?? '',
           sign_in:              '08:00',  // assumed present all day for ratio planning
@@ -1357,12 +1371,12 @@ export default function RatioDashboardPage() {
       {/* Mode indicator */}
       {viewMode === 'expected' && (
         <div style={{ margin: '0 0 8px', padding: '6px 12px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '8px', fontSize: '12px', color: '#92400e' }}>
-          Expected view — showing predicted attendance from {effectiveDate} (same weekday last week)
+          Expected view — showing predicted attendance from {historicalDateDisplay ?? effectiveDate} (most recent same-weekday with data)
         </div>
       )}
       {viewMode !== 'expected' && date > todayStr() && (
         <div style={{ margin: '0 0 8px', padding: '6px 12px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '8px', fontSize: '12px', color: '#92400e' }}>
-          Future date — no actual attendance yet. Using {effectiveDate} (same weekday last week) as a prediction.
+          Future date — no actual attendance yet. Using {historicalDateDisplay ?? effectiveDate} (most recent same-weekday with data) as a prediction.
         </div>
       )}
       <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
@@ -1377,7 +1391,7 @@ export default function RatioDashboardPage() {
             {effectiveDate !== date ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
                 style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
-                {date > todayStr() ? '📅 Predicted from' : '📊 Expected mode from'} {effectiveDate}
+                {date > todayStr() ? '📅 Predicted from' : '📊 Expected mode from'} {historicalDateDisplay ?? effectiveDate}
               </span>
             ) : ownaRefreshedAt ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
