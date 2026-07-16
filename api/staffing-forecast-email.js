@@ -2,29 +2,21 @@
  * /api/staffing-forecast-email
  *
  * Generates a next-day staffing summary that matches the Plan of Day
- * Staffing Analysis panel exactly. Uses the shared calculator in
- * ./_staffing-analysis.js.
+ * Staffing Analysis panel exactly. This is a generator only — it does NOT
+ * send emails. Emails must be sent from a machine with outbound SMTP access
+ * using scripts/send-forecast-email.cjs.
  *
  * Query params:
  *   date  - optional YYYY-MM-DD, defaults to forecast date (tomorrow, or Monday if called on Friday)
- *   send  - optional "1" to trigger email sends (also auto-triggers when invoked by Vercel cron)
  *
- * Response: JSON summary per centre + HTML email body
+ * Response: JSON summary per centre + HTML email body + pre-built email array.
  */
 
-import nodemailer from 'nodemailer';
 import { CENTRES } from './_centres.js';
 import { calculateStaffingAnalysis } from './_staffing-analysis.js';
 
-const CRON_SECRET = process.env.CRON_SECRET || '';
-
-const SMTP_HOST = process.env.SMTP_HOST || 'smtp.office365.com';
-const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
-const SMTP_USER = process.env.SMTP_USER || 'claude@tga.edu.au';
-const SMTP_PASS = process.env.SMTP_PASS || '';
-
 const DEFAULT_RECIPIENTS = Array.from(new Set([
-  ...(process.env.FORECAST_EMAIL_TO || SMTP_USER)
+  ...(process.env.FORECAST_EMAIL_TO || 'claude@tga.edu.au')
     .split(',')
     .map(s => s.trim())
     .filter(Boolean),
@@ -143,43 +135,23 @@ function buildHtml(summary, opts = {}) {
   `;
 }
 
-async function sendEmails(summary, date, includeClusters = true) {
-  if (!SMTP_PASS) {
-    throw new Error('SMTP_PASS not configured');
-  }
-
-  const transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: false,
-    auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS,
-    },
-    tls: {
-      ciphers: 'SSLv3',
-    },
-  });
-
+function buildEmails(summary, date, includeClusters = true) {
   const dateLabel = formatDateLabel(date);
-  const results = [];
+  const emails = [];
 
   // Full network email to default recipients
   if (DEFAULT_RECIPIENTS.length > 0) {
-    const html = buildHtml(summary, {
-      title: `TGA Staffing Forecast — ${dateLabel}`,
-      subtitle: 'Expected children and required staffing across all centres.',
-    });
-    const info = await transporter.sendMail({
-      from: `"TGA Plan of Day" <${SMTP_USER}>`,
-      to: DEFAULT_RECIPIENTS.join(', '),
+    emails.push({
+      to: DEFAULT_RECIPIENTS,
       subject: `TGA Staffing Forecast — ${dateLabel}`,
-      html,
+      html: buildHtml(summary, {
+        title: `TGA Staffing Forecast — ${dateLabel}`,
+        subtitle: 'Expected children and required staffing across all centres.',
+      }),
     });
-    results.push({ to: DEFAULT_RECIPIENTS, messageId: info.messageId });
   }
 
-  if (!includeClusters) return results;
+  if (!includeClusters) return emails;
 
   // Cluster emails to area managers
   for (const [clusterName, centreIds] of Object.entries(CLUSTERS)) {
@@ -189,41 +161,22 @@ async function sendEmails(summary, date, includeClusters = true) {
     const clusterSummary = summary.filter(s => centreIds.includes(s.centreId));
     if (clusterSummary.length === 0) continue;
 
-    const html = buildHtml(clusterSummary, {
-      title: `TGA Staffing Forecast — ${clusterName} Cluster — ${dateLabel}`,
-      subtitle: `Expected children and required staffing for the ${clusterName} cluster.`,
-    });
-
-    const info = await transporter.sendMail({
-      from: `"TGA Plan of Day" <${SMTP_USER}>`,
-      to: amEmail,
+    emails.push({
+      to: [amEmail],
       subject: `TGA Staffing Forecast — ${clusterName} Cluster — ${dateLabel}`,
-      html,
+      html: buildHtml(clusterSummary, {
+        title: `TGA Staffing Forecast — ${clusterName} Cluster — ${dateLabel}`,
+        subtitle: `Expected children and required staffing for the ${clusterName} cluster.`,
+      }),
     });
-    results.push({ to: [amEmail], cluster: clusterName, messageId: info.messageId });
   }
 
-  return results;
+  return emails;
 }
 
 export default async function handler(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const auth = (req.headers.authorization || '').replace('Bearer ', '');
-  const isCron = CRON_SECRET && auth === CRON_SECRET;
-  const shouldSend = isCron || req.query.send === '1';
-
-  // When invoked by cron, ensure we only send on weekdays at 3pm Sydney.
-  // Vercel cron is UTC, so we schedule two UTC times (4am and 5am) and guard here.
-  if (isCron) {
-    const now = sydneyNow();
-    const day = now.getDay();
-    const hour = now.getHours();
-    if (day === 0 || day === 6 || hour !== 15) {
-      return res.status(200).json({ ok: true, skipped: true, reason: 'Outside weekday 3pm Sydney window' });
-    }
   }
 
   const requestedDate = req.query.date || null;
@@ -328,18 +281,14 @@ export default async function handler(req, res) {
       };
     });
 
-    const html = buildHtml(summary, { title: `TGA Staffing Forecast — ${formatDateLabel(date)}` });
-
     const includeClusters = req.query.clusters !== '0' && req.query.includeClusters !== 'false';
-    let sent = null;
-    if (shouldSend) {
-      sent = await sendEmails(summary, date, includeClusters);
-    }
+    const html = buildHtml(summary, { title: `TGA Staffing Forecast — ${formatDateLabel(date)}` });
+    const emails = buildEmails(summary, date, includeClusters);
 
     return res.status(200).json({
       ok: true,
       date,
-      sent,
+      emails,
       summary: summary.filter(s => s !== null),
       html,
     });
