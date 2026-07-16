@@ -840,8 +840,9 @@ export default function RatioDashboardPage() {
 
   // Booked / Expected forecast data per room
   type RoomForecast = { expected: number | null; weeksUsed: number; booked?: number | null };
-  type ForecastData = { booked: number | null; capacity: number | null; rooms: Record<string, RoomForecast> };
+  type ForecastData = { booked: number | null; capacity: number | null; rooms: Record<string, RoomForecast>; lastWeek?: string | null };
   const [forecast, setForecast] = useState<ForecastData | null>(null);
+  const [forecastHistoricalDate, setForecastHistoricalDate] = useState<string | null>(null);
 
   // -- Drag-and-drop: manual staff reallocation (persisted per centre+date) --------
   const movesKey = `tga_pod_moves:${selectedCentreId}:${date}`;
@@ -1119,6 +1120,7 @@ export default function RatioDashboardPage() {
         ? (enrolledRes as { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[])
         : (enrolledRes?.children ?? []);
       const historicalDate = Array.isArray(enrolledRes) ? effectiveDate : (enrolledRes?.historicalDate ?? effectiveDate);
+      setForecastHistoricalDate(historicalDate);
 
       const [attendanceRes, rosters, forecastRes] = await Promise.all([
         useFutureEnrolled
@@ -1369,12 +1371,12 @@ export default function RatioDashboardPage() {
       {/* Mode indicator */}
       {viewMode === 'expected' && (
         <div style={{ margin: '0 0 8px', padding: '6px 12px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '8px', fontSize: '12px', color: '#92400e' }}>
-          Expected view — showing predicted attendance from {effectiveDate} (same weekday last week)
+          Expected view — showing predicted attendance from {forecastHistoricalDate ?? effectiveDate} (same weekday last week)
         </div>
       )}
       {viewMode !== 'expected' && date > todayStr() && (
         <div style={{ margin: '0 0 8px', padding: '6px 12px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '8px', fontSize: '12px', color: '#92400e' }}>
-          Future date — no actual attendance yet. Using {effectiveDate} (same weekday last week) as a prediction.
+          Future date — no actual attendance yet. Using {forecastHistoricalDate ?? effectiveDate} (same weekday last week) as a prediction.
         </div>
       )}
       <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
@@ -1389,7 +1391,7 @@ export default function RatioDashboardPage() {
             {effectiveDate !== date ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
                 style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
-                {date > todayStr() ? '📅 Predicted from' : '📊 Expected mode from'} {effectiveDate}
+                {date > todayStr() ? '📅 Predicted from' : '📊 Expected mode from'} {forecastHistoricalDate ?? effectiveDate}
               </span>
             ) : ownaRefreshedAt ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
@@ -1582,7 +1584,7 @@ export default function RatioDashboardPage() {
             border: effectiveDate !== date ? '1px solid #fcd34d' : '1px solid #86efac',
           }}>
             {effectiveDate !== date
-              ? `📅 Predicted from ${effectiveDate} (same weekday last week)`
+              ? `📅 Predicted from ${forecastHistoricalDate ?? effectiveDate} (same weekday last week)`
               : '✅ Actual Owna data'}
           </span>
         )}
@@ -2002,7 +2004,7 @@ export default function RatioDashboardPage() {
           allRosters={allRostersWithExternal}
           floats={floats}
           adStaff={adStaff}
-          effectiveDate={effectiveDate}
+          effectiveDate={forecastHistoricalDate ?? effectiveDate}
           targetDate={date}
         />
       )}
@@ -2061,7 +2063,7 @@ export default function RatioDashboardPage() {
           rooms={centre.rooms}
           roomStatuses={effectiveRoomStatuses}
           children={children}
-          historicalDate={planSubView === 'plan' && effectiveDate !== date ? effectiveDate : undefined}
+          historicalDate={planSubView === 'plan' && effectiveDate !== date ? (forecastHistoricalDate ?? effectiveDate) : undefined}
           onClose={() => setScheduledFloat(null)}
           onSaved={(_schedule: FloatSchedule) => {
             setScheduledFloat(null);

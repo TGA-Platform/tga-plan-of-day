@@ -22,6 +22,27 @@ async function supabase(path) {
   return r.json();
 }
 
+// Find the most recent same-weekday with attendance data, falling back
+// further if the immediate previous week has no records yet.
+async function findMostRecentAttendanceDate(campus, targetDate, maxWeeks = 8) {
+  const target = new Date(targetDate + 'T12:00:00+10:00');
+  for (let i = 1; i <= maxWeeks; i++) {
+    const d = new Date(target);
+    d.setDate(d.getDate() - 7 * i);
+    const dStr = d.toISOString().slice(0, 10);
+    const rows = await supabase(
+      `attendance_daily?select=child_name&campus=eq.${encodeURIComponent(campus)}&date=eq.${dStr}&limit=1`
+    );
+    if (Array.isArray(rows) && rows.length > 0) {
+      return dStr;
+    }
+  }
+  // Fallback to last week even if no data, so downstream code gets an empty array
+  const d = new Date(target);
+  d.setDate(d.getDate() - 7);
+  return d.toISOString().slice(0, 10);
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -30,16 +51,13 @@ export default async function handler(req, res) {
   const { campus, date } = req.query;
   if (!campus || !date) return res.status(400).json({ error: 'campus and date are required' });
 
-  // Same weekday last week
   const target = new Date(date + 'T12:00:00+10:00');
-  const lastWeek = new Date(target);
-  lastWeek.setDate(lastWeek.getDate() - 7);
-  const lastWeekStr = lastWeek.toISOString().slice(0, 10);
+  const historicalDate = await findMostRecentAttendanceDate(campus, date);
 
-  // Fetch actual attendance for that day
+  // Fetch actual attendance for the most recent available day
   const [attendanceRows, enrolledRows] = await Promise.all([
     supabase(
-      `attendance_daily?select=child_name,date,room,age&campus=eq.${encodeURIComponent(campus)}&date=eq.${lastWeekStr}&limit=2000`
+      `attendance_daily?select=child_name,date,room,age&campus=eq.${encodeURIComponent(campus)}&date=eq.${historicalDate}&limit=2000`
     ),
     supabase(
       `children_enrolled?select=full_name,dob,room&campus=eq.${encodeURIComponent(campus)}&status=eq.Confirmed&limit=2000`
@@ -52,7 +70,7 @@ export default async function handler(req, res) {
     dobLookup[c.full_name?.toLowerCase().trim()] = c.dob;
   }
 
-  // One record per child from last week's attendance
+  // One record per child from the historical attendance
   const seen = new Map(); // child_name -> { room, dob }
   for (const row of attendanceRows) {
     const key = row.child_name?.toLowerCase().trim();
@@ -78,5 +96,5 @@ export default async function handler(req, res) {
 
   // Short cache — re-check each time (rosters change)
   res.setHeader('Cache-Control', 'public, max-age=900, stale-while-revalidate=300'); // 15 min
-  res.status(200).json(result);
+  res.status(200).json({ children: result, historicalDate });
 }

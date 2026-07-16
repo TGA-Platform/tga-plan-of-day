@@ -121,6 +121,27 @@ function requiredFromRows(rows) {
   return requiredByRoom;
 }
 
+// Find the most recent same-weekday with attendance data, falling back
+// further if the immediate previous week has no records yet.
+async function findMostRecentAttendanceDate(campus, targetDate, maxWeeks = 8) {
+  const target = new Date(targetDate + 'T12:00:00Z');
+  for (let i = 1; i <= maxWeeks; i++) {
+    const d = new Date(target);
+    d.setUTCDate(d.getUTCDate() - 7 * i);
+    const dStr = d.toISOString().slice(0, 10);
+    const path = campus === 'all'
+      ? `/rest/v1/attendance_daily?date=eq.${dStr}&select=campus&limit=1`
+      : `/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${dStr}&select=child_name&limit=1`;
+    const rows = await supaFetch(path);
+    if (Array.isArray(rows) && rows.length > 0) {
+      return dStr;
+    }
+  }
+  const d = new Date(target);
+  d.setUTCDate(d.getUTCDate() - 7);
+  return d.toISOString().slice(0, 10);
+}
+
 async function loadPlanOfDayRequired(centreId, date) {
   if (!centreId) return {};
   try {
@@ -233,12 +254,11 @@ export default async function handler(req, res) {
   if (!campus || !date) return res.status(400).json({ error: 'campus and date required' });
 
   const target = new Date(date + 'T12:00:00Z');
-  const lastWeek = new Date(target);
-  lastWeek.setUTCDate(lastWeek.getUTCDate() - 7);
-  const lastWeekStr = lastWeek.toISOString().slice(0, 10);
   const todayStr = new Date().toISOString().slice(0, 10);
 
   try {
+    const lastWeekStr = await findMostRecentAttendanceDate(campus, date);
+
     // Bulk mode: return forecasts for all campuses in one call
     if (campus === 'all') {
       const [allLastWeekRows, allOccRows, allTodayRows] = await Promise.all([
