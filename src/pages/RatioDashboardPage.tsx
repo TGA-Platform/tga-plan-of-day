@@ -345,6 +345,7 @@ function FloatPoolSection({
   onFloatClick,
   savedFloatIds,
   adStaff = [],
+  onAnalysisUpdate,
 }: {
   floats: FloatStaff[];
   onLeave: RosteredStaff[];
@@ -359,6 +360,7 @@ function FloatPoolSection({
   onFloatClick?: (f: FloatStaff) => void;
   savedFloatIds?: Set<number>;
   adStaff?: RosteredStaff[];
+  onAnalysisUpdate?: (result: { casualsNeeded: number; floatSurplus: number; floatersNeeded: number; floorStaff: number }) => void;
 }) {
   // -- Step 1: Identify short and surplus rooms ---------------------------
   const shortageRooms = [...roomStatuses]
@@ -457,6 +459,20 @@ function FloatPoolSection({
   const casualsHalf   = casualsNeeded - casualsFull >= 0.5 ? 1 : 0;
 
   const coverageOk = casualsNeeded <= 0;
+
+  // Notify parent whenever analysis numbers change so they can be persisted to Supabase
+  const floatSurplusVal = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
+  React.useEffect(() => {
+    if (onAnalysisUpdate) {
+      onAnalysisUpdate({
+        casualsNeeded,
+        floatSurplus: floatSurplusVal,
+        floatersNeeded: totalFloatersNeeded,
+        floorStaff: totalFloorStaff,
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [casualsNeeded, floatSurplusVal, totalFloatersNeeded, totalFloorStaff]);
 
   return (
     <div
@@ -766,6 +782,40 @@ export default function RatioDashboardPage() {
   }
 
   const [date, setDate]               = useState(todayStr());
+
+  // ── Staffing analysis cache — upsert to Supabase whenever float pool recalculates
+  // Debounced: waits 5s after last update to avoid hammering on rapid re-renders
+  const analysisUpsertTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleAnalysisUpdate = useCallback((result: { casualsNeeded: number; floatSurplus: number; floatersNeeded: number; floorStaff: number }) => {
+    if (analysisUpsertTimer.current) clearTimeout(analysisUpsertTimer.current);
+    analysisUpsertTimer.current = setTimeout(async () => {
+      try {
+        const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
+        const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NDE3MjUsImV4cCI6MjA4OTUxNzcyNX0.v_thHOU7xq0gaFhcnb2A3iBl5H7bAp9IbT9IPMg_jTY';
+        await fetch(`${SUPABASE_URL}/rest/v1/staffing_analysis_cache`, {
+          method: 'POST',
+          headers: {
+            'apikey': ANON_KEY,
+            'Authorization': `Bearer ${ANON_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates,return=minimal',
+          },
+          body: JSON.stringify([{
+            centre_id:       selectedCentreId,
+            date:            date,
+            casuals_needed:  result.casualsNeeded,
+            float_surplus:   result.floatSurplus,
+            floaters_needed: result.floatersNeeded,
+            floor_staff:     result.floorStaff,
+            updated_at:      new Date().toISOString(),
+          }]),
+        });
+      } catch (e) {
+        // Best-effort — don't surface errors to user
+        console.warn('[analysis-cache] upsert failed:', e);
+      }
+    }, 5000); // 5s debounce
+  }, [selectedCentreId, date]);
 
   const [children, setChildren]       = useState<AttendanceChild[]>([]);
   const [roomStatuses, setRoomStatuses] = useState<RoomRatioStatus[]>([]);
@@ -1813,6 +1863,7 @@ export default function RatioDashboardPage() {
               onFloatClick={f => setScheduledFloat(f)}
               savedFloatIds={savedFloatIds}
               adStaff={adStaff}
+              onAnalysisUpdate={handleAnalysisUpdate}
             />
         )}
 

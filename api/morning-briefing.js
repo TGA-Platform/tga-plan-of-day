@@ -147,6 +147,24 @@ export default async function handler(req, res) {
     }
   }
 
+  // ── Read staffing_analysis_cache from Supabase ──────────────────────────
+  // Written by RatioDashboardPage every time the float pool recalculates.
+  // If a cached value exists for a centre+date, use it — guarantees the email
+  // shows exactly the same surplus/deficit as the dashboard.
+  let analysisCache = {};
+  try {
+    const cacheRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/staffing_analysis_cache?date=eq.${date}&select=centre_id,casuals_needed,float_surplus,floaters_needed,floor_staff,updated_at`,
+      { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }
+    );
+    if (cacheRes.ok) {
+      const rows = await cacheRes.json();
+      for (const row of rows) analysisCache[row.centre_id] = row;
+    }
+  } catch (e) {
+    console.warn('[morning-briefing] Could not fetch staffing_analysis_cache:', e.message);
+  }
+
   const results = [];
 
   for (const centre of centres) {
@@ -252,6 +270,14 @@ export default async function handler(req, res) {
 
     const roomAbsent = [...absentIds].filter(id => staffIds.has(id)).length;
 
+    // Use cached values from Supabase when available (written by RatioDashboardPage)
+    // so the email always matches the dashboard exactly.
+    const cached = analysisCache[centre.id];
+    const finalCasualsNeeded = cached != null ? cached.casuals_needed : casualsNeeded;
+    const finalFloatSurplus  = cached != null ? cached.float_surplus  : floatSurplus;
+    const finalSurplusVal    = cached != null ? (finalCasualsNeeded > 0 ? -finalCasualsNeeded : finalFloatSurplus) : surplusVal;
+    const finalFloatersNeeded = cached != null ? cached.floaters_needed : totalFloatersNeeded;
+
     results.push({
       centreId:           centre.id,
       name:               centre.name,
@@ -262,10 +288,11 @@ export default async function handler(req, res) {
       floatCount,
       adAvailable,
       requiredStaff:      totalRequired,
-      totalFloatersNeeded,
-      casualsNeeded,
-      floatSurplus,
-      surplusVal,
+      totalFloatersNeeded: finalFloatersNeeded,
+      casualsNeeded:      finalCasualsNeeded,
+      floatSurplus:       finalFloatSurplus,
+      surplusVal:         finalSurplusVal,
+      cachedAt:           cached?.updated_at ?? null,
       allDay: {
         children: allDayKids.length,
         required: allDayPool.totalRequired,
