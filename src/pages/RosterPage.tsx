@@ -8,8 +8,8 @@
  * - Publish: locks the week so it feeds into the ratio dashboard
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { format, startOfWeek, addDays, isToday } from 'date-fns';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { format, startOfWeek, addDays } from 'date-fns';
 import { ChevronLeft, ChevronRight, Plus, Save, Trash2, X, Copy, CheckCircle } from 'lucide-react';
 import Layout from '../components/Layout';
 import { CENTRES } from '../config';
