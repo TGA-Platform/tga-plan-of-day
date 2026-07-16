@@ -81,7 +81,10 @@ export async function fetchActualTimesheets(unitIds, date, opts = {}) {
     if (!unitIdSet.has(unitId)) continue;
 
     const empId    = ts.Employee;
-    const empName  = ts._DPMetaData?.EmployeeInfo?.DisplayName ?? `Staff #${empId}`;
+    const empInfo  = ts._DPMetaData?.EmployeeInfo;
+    const empName  = (empInfo?.FirstName && empInfo?.LastName)
+      ? `${empInfo.FirstName} ${empInfo.LastName}`.trim()
+      : (empInfo?.DisplayName || `Staff #${empId}`);
     const unitName = ts._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '';
 
     const shiftStartUnix = ts.StartTime || 0;
