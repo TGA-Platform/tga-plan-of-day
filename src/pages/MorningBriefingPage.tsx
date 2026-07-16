@@ -53,6 +53,24 @@ function fmtFTE(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
 
+// Same effective-float filter used by the Ratio Dashboard Float Pool panel.
+const CORE_WINDOW_START = 10 * 60;
+const CORE_WINDOW_LATEST_START = 13 * 60 + 30;
+
+function toMins(t: string | null | undefined): number | null {
+  if (!t) return null;
+  const m = String(t).match(/^(\d{1,2}):(\d{2})$/);
+  if (m) return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  return null;
+}
+
+function isEffectiveFloat(start: string | null | undefined, end: string | null | undefined): boolean {
+  const s = toMins(start);
+  const e = toMins(end);
+  if (s === null || e === null) return true; // no time info, keep
+  return e > CORE_WINDOW_START && s < CORE_WINDOW_LATEST_START;
+}
+
 function todayStr() {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
   return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
@@ -222,7 +240,6 @@ export default function MorningBriefingPage() {
         // Use the same rosters as the ratio dashboard (identical cache key)
         const centreRosters = centreRosterMap.get(centre.id) ?? [];
         const zCasuals = zCasualMap.get(centre.id) ?? [];
-        const zCasualFloatCount = zCasuals.length;
         // staffMoves intentionally not used for card stats so they match Ratio Dashboard staffing analysis
         const leaveSet  = new Set((centre.leaveUnitIds  ?? []));
         const floatSet  = new Set((centre.floatUnitIds  ?? []));
@@ -285,7 +302,12 @@ export default function MorningBriefingPage() {
         // Split-shift staff have multiple entries and each counts.
         const floatEntries = centreRosters.filter(r => rawUnitType(r) === 'float');
         const floatIds = new Set(floatEntries.map(r => r.employeeId)); // still need set for absence calc
-        const floatCount = floatEntries.length + zCasualFloatCount; // include Z Staffing external casuals as floats // matches staffing analysis floats.length
+        // Effective float count must match the Ratio Dashboard Float Pool panel:
+        // split-shift float entries don't count as cover, and only floats whose shift
+        // overlaps the 10:00–14:00 core window are useful.
+        const effectiveFloatEntries = floatEntries.filter(r => !r.isSplitShift && isEffectiveFloat(r.startTime, r.endTime));
+        const effectiveZCasualCount = zCasuals.filter((z: { start?: string; end?: string }) => isEffectiveFloat(z.start, z.end)).length;
+        const floatCount = effectiveFloatEntries.length + effectiveZCasualCount;
         // AD = only 'Assistant Director' unitName entries (matches staffing analysis adStaff filter)
         const adCount = centreRosters.filter(r =>
           rawUnitType(r) === 'support' &&

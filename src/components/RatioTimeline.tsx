@@ -11,7 +11,7 @@ import {
   Tooltip, ReferenceArea, ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { calcRequiredStaff, AGE_BRACKETS } from '../utils/ratioEngine';
+import { calcRequiredStaff, AGE_BRACKETS, roomNameMatches } from '../utils/ratioEngine';
 import type { Room, RosteredStaff } from '../types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -150,10 +150,7 @@ export default function RatioTimeline({ room, rooms, children, rosteredStaff, al
   const childTimes = children
     .filter(c => {
       if (isAllRooms) return true; // all rooms combined
-      const r = room!;
-      return c.room === r.ownaRoomName || c.room.toLowerCase().includes(
-        (r.ownaRoomName ?? r.name).toLowerCase()
-      );
+      return roomNameMatches(c.room, room!);
     })
     .map(c => ({
       signIn:    toMinutes(c.sign_in),
@@ -200,12 +197,7 @@ export default function RatioTimeline({ room, rooms, children, rosteredStaff, al
     if (isAllRooms) {
       // Calculate per room and sum
       for (const r of rooms!) {
-        // Use the same includes() match as buildRoomStatus — full ownaRoomName, not split on first word
-        const rChildren = presentKids.filter(c => {
-          const rn = c.roomName.toLowerCase();
-          const owna = (r.ownaRoomName ?? r.name).toLowerCase();
-          return rn.includes(owna);
-        });
+        const rChildren = presentKids.filter(c => roomNameMatches(c.roomName, r));
         const { required: rReq } = calcRequiredStaff(
           rChildren.map(c => ({ ageMonths: c.ageMonths } as any))
         );

@@ -14,7 +14,12 @@ import MorningBriefingPage from './pages/MorningBriefingPage';
 import ReportingPage from './pages/ReportingPage';
 import StaffingStructurePage from './pages/StaffingStructurePage';
 import ComplianceConfigPage from './pages/ComplianceConfigPage';
-import RosterPage from './pages/RosterPage';
+import RosterBuilderPage from './pages/RosterBuilderPage';
+import KioskPage from './pages/KioskPage';
+import KioskNewsPage from './pages/KioskNewsPage';
+import KioskSettingsPage from './pages/KioskSettingsPage';
+import KioskPinsPage from './pages/KioskPinsPage';
+import TimesheetsPage from './pages/TimesheetsPage';
 import ErrorBoundary from './components/ErrorBoundary';
 
 function RequireAuth({ children }: { children: React.ReactElement }) {
@@ -132,7 +137,12 @@ export default function App() {
         <Route path="/reporting" element={<RequireAuth><ReportingPage /></RequireAuth>} />
         <Route path="/staffing" element={<RequireAuth><StaffingStructurePage /></RequireAuth>} />
         <Route path="/compliance-config" element={<RequireAuth><ComplianceConfigPage /></RequireAuth>} />
-        <Route path="/roster" element={<RequireAuth><RosterPage /></RequireAuth>} />
+        <Route path="/roster" element={<RequireAuth><RosterBuilderPage /></RequireAuth>} />
+        <Route path="/timesheets" element={<RequireAuth><TimesheetsPage /></RequireAuth>} />
+        <Route path="/kiosk-news" element={<RequireAuth><KioskNewsPage /></RequireAuth>} />
+        <Route path="/kiosk-settings" element={<RequireAuth><KioskSettingsPage /></RequireAuth>} />
+        <Route path="/kiosk-pins" element={<RequireAuth><KioskPinsPage /></RequireAuth>} />
+        <Route path="/kiosk" element={<KioskPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

@@ -5,6 +5,7 @@ export interface Room {
   ratio: number;
   deputyUnitId: number;
   ownaRoomName?: string; // Room name as it appears in Owna/Supabase attendance data
+  roomAliases?: string[]; // Alternative room names used in historical attendance/occupancy data
 }
 
 export interface Centre {
@@ -147,4 +148,120 @@ export interface StaffMember {
 
 export interface FloatStaff extends RosteredStaff {
   suggestedRoom?: string;
+}
+
+// ── Roster Builder ───────────────────────────────────────────────────────────
+
+export interface RosterWeek {
+  id: string;
+  centre_id: string;
+  week_start: string; // ISO date (Monday)
+  status: 'draft' | 'published';
+  created_by?: string;
+  published_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RosterShift {
+  id: string;
+  roster_week_id: string;
+  centre_id: string;
+  staff_id: string;
+  staff_name: string;
+  date: string; // ISO date
+  start_time: string; // HH:MM
+  end_time: string; // HH:MM
+  room_id?: string;
+  room_name?: string;
+  lunch_start?: string; // HH:MM
+  lunch_duration: number;
+  leave_type?: 'sick' | 'annual' | 'other';
+  splitLeaveFrom?: string; // HH:MM — UI-only field for splitting a shift into worked + leave portions
+  originalRoomId?: string; // UI-only: room before converting to leave
+  originalRoomName?: string; // UI-only
+  is_casual: boolean;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Kiosk Sign-In/Out ───────────────────────────────────────────────────────
+
+export type KioskEventType = 'start_shift' | 'start_lunch' | 'end_lunch' | 'end_shift';
+
+export interface KioskStaffPin {
+  id: string;
+  centre_id: string;
+  staff_id: string;
+  staff_name: string;
+  mobile: string;
+  pin: string;
+  role?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KioskTimeclockEvent {
+  id: string;
+  centre_id: string;
+  staff_id: string;
+  staff_name: string;
+  event_type: KioskEventType;
+  event_time: string; // ISO timestamp
+  event_date: string; // ISO date
+  roster_shift_id?: string;
+  source: 'kiosk' | string;
+  created_at: string;
+}
+
+export interface KioskSession {
+  centre_id: string;
+  staff_id: string;
+  staff_name: string;
+  role?: string;
+  shift: RosterShift | null;
+  events: KioskTimeclockEvent[];
+}
+
+// ── Timesheet Approvals ──────────────────────────────────────────────────────
+
+export type TimesheetStatus = 'pending' | 'approved' | 'flagged';
+
+export interface TimesheetApproval {
+  id: string;
+  centre_id: string;
+  staff_id: string;
+  staff_name: string;
+  date: string; // ISO date
+  roster_shift_id?: string | null;
+  roster_start_time?: string | null;
+  roster_end_time?: string | null;
+  roster_lunch_start?: string | null;
+  roster_lunch_duration?: number | null;
+  actual_start_time?: string | null;
+  actual_end_time?: string | null;
+  actual_lunch_start?: string | null;
+  actual_lunch_end?: string | null;
+  approved_start_time?: string | null;
+  approved_end_time?: string | null;
+  approved_lunch_duration?: number | null;
+  approved_hours: number;
+  status: TimesheetStatus;
+  flags: string[];
+  employee_comment?: string | null;
+  leave_type?: 'sick' | 'annual' | 'other' | null;
+  approver_name?: string | null;
+  approved_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RoundingResult {
+  approvedStart: string; // HH:MM
+  approvedEnd: string; // HH:MM
+  approvedLunchDuration: number; // minutes
+  approvedHours: number;
+  flags: string[];
 }

@@ -9,9 +9,15 @@ function to12h(hhmm: string): string {
   const h12 = h % 12 || 12;
   return m === 0 ? `${h12}${ampm}` : `${h12}:${String(m).padStart(2, '0')}${ampm}`;
 }
+
+function isRatioCheckLocked(date: string): boolean {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
+  return date < today;
+}
 import type { Room, AttendanceChild, RosteredStaff } from '../types';
-import { calcRequiredStaff, parseAgeMonths } from '../utils/ratioEngine';
+import { calcRequiredStaff, parseAgeMonths, roomNameMatches } from '../utils/ratioEngine';
 import { enqueueSave } from '../utils/syncQueue';
+import type { LunchBreakEntry } from '../utils/lunchScheduler';
 
 // --- Types --------------------------------------------------------------------
 
@@ -22,11 +28,14 @@ interface FamilyGroupingConfig {
   slots: string[];      // HH:MM slots this applies to
   color: string;        // hex colour
   heldInRoom?: string;  // which room the grouping is physically held in
+  staffIdsBySlot?: Record<string, number[]>; // staff explicitly added to this grouping, keyed by slot
+  staffIds?: number[];  // legacy: migrated to staffIdsBySlot on load
 }
 
 interface RoomVisitor {
   id: string;           // unique per entry
   name: string;         // display name (free text or from dropdown)
+  wwccNumber?: string;  // Working With Children Check number for visitor compliance
   enteredAt: string;    // HH:MM
   exitedAt?: string;    // HH:MM - set when they leave
 }
@@ -37,12 +46,14 @@ interface RatioCheckSession {
   comments: Record<string, string>; // "HH:MM"
   familyGroupings: FamilyGroupingConfig[];
   staffMoves: Record<string, string>; // "${empId}:${slot}" ? roomId | "none" | "__float__"
+  staffNotes: Record<string, string>; // "${empId}:${slot}" -> free-text note (e.g. ISS room support)
   staffTimeOverrides: Record<string, {
     start: string;
     end: string;
+    segments?: Array<{ start: string; end: string }>; // split-shift actual segments
     lunchStart?: string;  // HH:MM actual/planned lunch start
     lunchEnd?: string;    // HH:MM actual/planned lunch end
-    source?: 'manual' | 'deputy'; // how was this set?
+    source?: 'manual' | 'deputy' | 'scheduled'; // how was this set?
     isOvertime?: boolean; // staff staying back
     comment?: string;     // free-text note
   }>; // "${empId}" ? custom times
@@ -63,6 +74,7 @@ interface Props {
   children: AttendanceChild[];
   rosters: RosteredStaff[];
   onLunchAlerts?: (alerts: LunchAlert[]) => void;
+  onStaffTimeOverrides?: (overrides: Record<string, RatioCheckSession['staffTimeOverrides'][string]>) => void;
 }
 
 // --- Constants ----------------------------------------------------------------
@@ -96,7 +108,8 @@ const EMPTY_SESSION: RatioCheckSession = {
   comments: {},
   familyGroupings: [],
   staffMoves: {},
-  staffTimeOverrides: {} as Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy'; isOvertime?: boolean; comment?: string }>,
+  staffNotes: {},
+  staffTimeOverrides: {} as Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy' | 'scheduled'; isOvertime?: boolean; comment?: string }>,
   roomVisitors: {},
 };
 
@@ -167,9 +180,8 @@ function countChildrenAtSlot(children: AttendanceChild[], room: Room, slot: stri
 
 function getChildrenAtSlot(children: AttendanceChild[], room: Room, slot: string): AttendanceChild[] {
   const slotMins = slotToMins(slot);
-  const roomName = room.ownaRoomName ?? room.name;
   return children.filter(c => {
-    if (c.room !== roomName) return false;
+    if (!roomNameMatches(c.room, room)) return false;
     if (!c.sign_in) return false;
     const inMins = slotToMins(c.sign_in.slice(0, 5));
     if (inMins > slotMins) return false;
@@ -199,11 +211,9 @@ function cellKey(slot: string, roomId: string) {
   return `${slot}:${roomId}`;
 }
 
-// Short display name: "FirstName L."
+// Display full staff names in the grid.
 function shortName(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0].slice(0, 10);
-  return parts[0] + ' ' + parts[parts.length - 1][0] + '.';
+  return name.trim();
 }
 
 // Hex colour with alpha for background tint
@@ -218,7 +228,21 @@ function hexToRgba(hex: string, alpha: number): string {
 
 export default function RatioCheckPanel({ centreId, date, rooms, children, rosters,
   onLunchAlerts,
+  onStaffTimeOverrides,
 }: Props) {
+  const sydneyToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
+  const sydneyNowMins = (() => {
+    const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+    return d.getHours() * 60 + d.getMinutes();
+  })();
+  const showLunchIndicator = (lunchStart?: string, lunchSource?: string) => {
+    if (!lunchStart) return false;
+    // Hide Deputy-sourced future lunch breaks on today's view until they have actually started.
+    // Scheduled and manual lunch breaks are always shown.
+    if (lunchSource !== 'deputy' || date !== sydneyToday) return true;
+    return slotToMins(lunchStart) <= sydneyNowMins;
+  };
+
   const [activeSession, setActiveSession] = useState<'morning' | 'midday' | 'afternoon'>('morning');
   const [morningData,   setMorningData]   = useState<RatioCheckSession>(EMPTY_SESSION);
   const [middayData,    setMiddayData]    = useState<RatioCheckSession>(EMPTY_SESSION);
@@ -228,8 +252,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const initialLoadDone = useRef(false);
   // Callback ref: initial load sets this to trigger an immediate Deputy poll once load is done.
   const wakeDeputyPoll  = useRef<(() => void) | null>(null);
+  // Ref to latest rosters so the Deputy poll can check split-shift status without resetting the interval.
+  const rostersRef = useRef(rosters);
+  useEffect(() => { rostersRef.current = rosters; }, [rosters]);
   const [floatScheds,         setFloatScheds]         = useState<any[]>([]);
-  const [lunchScheds,         setLunchScheds]         = useState<Array<{ employeeId: number; lunchStart: string; lunchEnd: string }>>([]);
+  const [lunchSchedule,       setLunchSchedule]       = useState<LunchBreakEntry[]>([]);
+
   const [dayAllocations,      setDayAllocations]      = useState<Record<number,string>>({});
 
   // -- Lunch break overdue alerts --------------------------------------------
@@ -285,6 +313,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [timeEditorLunchEnd, setTimeEditorLunchEnd] = useState('');
   const [timeEditorOvertime, setTimeEditorOvertime] = useState(false);
   const [timeEditorComment, setTimeEditorComment] = useState('');
+  const [noteEditorModal, setNoteEditorModal] = useState<{ empId: number; name: string; slot: string } | null>(null);
+  const [noteEditorText, setNoteEditorText] = useState('');
   const [fgPanelOpen, setFgPanelOpen] = useState(false);
   const [editingFgId, setEditingFgId] = useState<string | null>(null);
   const [fgPopoverSlot, setFgPopoverSlot] = useState<string | null>(null);
@@ -300,6 +330,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // Visitor log modal state
   const [visitorModal, setVisitorModal] = useState<{ slot: string; roomId: string; roomName: string } | null>(null);
   const [visitorName, setVisitorName] = useState('');
+  const [visitorWWCC, setVisitorWWCC] = useState('');
   const [visitorTime, setVisitorTime] = useState('');
   const [visitorExitTime, setVisitorExitTime] = useState('');
   const [visitorExitModalState, setVisitorExitModalState] = useState<{ slot: string; roomId: string; roomName: string; visitorId: string; visitorName: string; exitTime: string } | null>(null);
@@ -325,45 +356,108 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const isToday = date === today;
     // Don't fetch future dates - no timesheets yet
     if (date > today) return;
+    // Don't refresh locked past dates (24h after the date) so saved overrides stay stable.
+    if (isRatioCheckLocked(date)) return;
 
     async function fetchActuals() {
       // Don't save until initial data load is complete - avoids overwriting FGs with empty state
       if (!initialLoadDone.current) return;
       try {
-        const r = await fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`);
+        const r = await fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`, { cache: 'no-store' });
         if (!r.ok) return;
         const actuals: Array<{
           employeeId: number; actualStart: string | null; actualEnd: string | null;
+          rosteredStart?: string | null; rosteredEnd?: string | null;
           isInProgress: boolean; isRealTime: boolean;
           breaks: Array<{ breakStart: string | null; breakEnd: string | null; type: string; status: string }>;
         }> = await r.json();
 
-        // Merge actuals into time overrides - manual overrides take precedence
+        // Group actuals by employee. A staff member may have two real timesheets
+        // (split shift) — we need both segments, not just the first/last merged.
+        // Include rows with rostered times even if they haven't clocked in yet, so
+        // Deputy roster changes (e.g. sick finish) update the plan of day.
+        const byEmployee = new Map<number, typeof actuals>();
         for (const ts of actuals) {
-          // Accept both real-time clock-ins (kiosk/app) AND manager-approved timesheets
-          // The backend already filters to entries with actual StartTimeLocalized set,
-          // so everything returned here has genuine actual times.
-          if (!ts.actualStart) continue; // no actual times available - skip
-          const key = String(ts.employeeId);
+          if (!ts.actualStart && !ts.rosteredStart) continue;
+          const list = byEmployee.get(ts.employeeId) ?? [];
+          list.push(ts);
+          byEmployee.set(ts.employeeId, list);
+        }
+
+        for (const [employeeId, tss] of byEmployee) {
+          const key = String(employeeId);
+          const rosterEntry = rostersRef.current.find(r => r.employeeId === employeeId);
+          // Prefer the rostered start/end from Deputy timesheets — these reflect the
+          // latest roster changes (sick finish, shift swaps) even before any clock event.
+          const rosterSegments = (() => {
+            const apiSegments = tss
+              .filter(ts => ts.rosteredStart && ts.rosteredEnd)
+              .sort((a, b) => (a.rosteredStart ?? '').localeCompare(b.rosteredStart ?? ''))
+              .map(ts => ({ start: ts.rosteredStart as string, end: ts.rosteredEnd as string }));
+            if (apiSegments.length > 0) return apiSegments;
+            if (rosterEntry) return getEffectiveSegments(rosterEntry);
+            return [{ start: tss[0]?.actualStart ?? '', end: tss[0]?.actualEnd ?? tss[0]?.actualStart ?? '' }];
+          })();
+
+          // Merge actual timesheets with roster segments. For split shifts this keeps
+          // the rostered afternoon segment visible even if only the morning actual has
+          // been clocked in.
+          const actualSegments = mergeActualSegmentsWithRoster(tss, rosterSegments);
+
+          const allBreaks = tss.flatMap(ts => ts.breaks);
+          const mealBreak = allBreaks.find(b => b.type === 'meal');
+          // For today's live view, only surface a Deputy lunch break once its scheduled start has passed.
+          // This stops future planned breaks from appearing before they have actually happened.
+          const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+          const nowMins = now.getHours() * 60 + now.getMinutes();
+          const mealBreakStart = mealBreak?.breakStart ?? null;
+          const breakHasStarted = !isToday || (mealBreakStart !== null && slotToMins(mealBreakStart) <= nowMins);
+          const lunchStart = mealBreakStart
+            && (mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress')
+            && breakHasStarted
+            ? mealBreakStart
+            : undefined;
+          const lunchEnd = mealBreak?.breakEnd
+            && mealBreak?.status === 'finished'
+            && breakHasStarted
+            ? mealBreak.breakEnd
+            : undefined;
+
+          const isInProgress = tss.some(ts => ts.isInProgress);
+          const firstStart = actualSegments[0]?.start ?? '';
+          let lastEnd = isInProgress ? '' : (actualSegments[actualSegments.length - 1]?.end ?? '');
+          // For in-progress shifts, prefer the published roster end time. Deputy timesheets can
+          // carry a stale rosteredEnd when a shift is extended after the timesheet was created,
+          // and the fallback to an existing saved override would keep the old short end time.
+          if (isInProgress && rosterEntry) {
+            const rosterEnd = formatRosterTime(rosterEntry.endTime);
+            if (rosterEnd) {
+              lastEnd = rosterEnd;
+              // Also extend the last segment so split-shift/multi-unit display uses the
+              // correct end time instead of the stale timesheet rosteredEnd.
+              if (actualSegments.length > 0) {
+                actualSegments[actualSegments.length - 1].end = rosterEnd;
+              }
+            }
+          }
+
+          if (employeeId === 1611) {
+            console.log('[Deputy debug Anisha]', { firstStart, lastEnd, isInProgress, actualSegments, rosterSegments, existingStart: tss[0]?.rosteredStart, existingEnd: tss[0]?.rosteredEnd });
+          }
+
+          const buildNewOverride = (existing: RatioCheckSession['staffTimeOverrides'][string]) => ({
+            start: firstStart || existing?.start || '',
+            end: lastEnd || existing?.end || '',
+            segments: actualSegments.length > 1 ? actualSegments : undefined,
+            lunchStart: lunchStart ?? existing?.lunchStart,
+            lunchEnd: lunchEnd ?? existing?.lunchEnd,
+            source: 'deputy' as const,
+          });
 
           setMorningData(prev => {
             const existing = prev.staffTimeOverrides[key];
-            // Don't overwrite manual overrides
-            if (existing?.source === 'manual') return prev;
-
-            const mealBreak = ts.breaks.find(b => b.type === 'meal');
-            const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
-              ? mealBreak.breakStart ?? undefined : undefined;
-            const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
-
-            const newOverride = {
-              start: ts.actualStart ?? existing?.start ?? '',
-              end:   (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (existing?.end ?? ''),
-              lunchStart: lunchStart ?? existing?.lunchStart,
-              lunchEnd:   lunchEnd   ?? existing?.lunchEnd,
-              source: 'deputy' as const,
-            };
-            // Only update if something changed
+            const newOverride = buildNewOverride(existing);
+            if (employeeId === 1611) console.log('[Deputy debug Anisha morning]', { existing, newOverride });
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
             save('morning', next);
@@ -371,18 +465,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           });
           setMiddayData(prev => {
             const existing = prev.staffTimeOverrides[key];
-            if (existing?.source === 'manual') return prev;
-            const mealBreak = ts.breaks.find(b => b.type === 'meal');
-            const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
-              ? mealBreak.breakStart ?? undefined : undefined;
-            const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
-            const newOverride = {
-              start: ts.actualStart ?? existing?.start ?? '',
-              end:   (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (existing?.end ?? ''),
-              lunchStart: lunchStart ?? existing?.lunchStart,
-              lunchEnd:   lunchEnd   ?? existing?.lunchEnd,
-              source: 'deputy' as const,
-            };
+            const newOverride = buildNewOverride(existing);
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
             save('midday', next);
@@ -390,18 +473,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           });
           setAfternoonData(prev => {
             const existing = prev.staffTimeOverrides[key];
-            if (existing?.source === 'manual') return prev;
-            const mealBreak = ts.breaks.find(b => b.type === 'meal');
-            const lunchStart = mealBreak?.status === 'finished' || mealBreak?.status === 'in_progress'
-              ? mealBreak.breakStart ?? undefined : undefined;
-            const lunchEnd = mealBreak?.status === 'finished' ? mealBreak.breakEnd ?? undefined : undefined;
-            const newOverride = {
-              start: ts.actualStart ?? existing?.start ?? '',
-              end:   (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (existing?.end ?? ''),
-              lunchStart: lunchStart ?? existing?.lunchStart,
-              lunchEnd:   lunchEnd   ?? existing?.lunchEnd,
-              source: 'deputy' as const,
-            };
+            const newOverride = buildNewOverride(existing);
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
             save('afternoon', next);
@@ -438,6 +510,20 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     ...afternoonData.staffTimeOverrides,
   }), [morningData.staffTimeOverrides, middayData.staffTimeOverrides, afternoonData.staffTimeOverrides]);
 
+  useEffect(() => {
+    onStaffTimeOverrides?.(sharedTimeOverrides);
+  }, [sharedTimeOverrides, onStaffTimeOverrides]);
+
+  // Planned lunch breaks from the Lunch Break panel — used as a fallback until Deputy actuals override them.
+  const scheduledLunchByEmployee = useMemo(() => {
+    const map: Record<number, { lunchStart: string; lunchEnd: string }> = {};
+    for (const entry of lunchSchedule) {
+      if (!entry.lunchStart || !entry.lunchEnd) continue;
+      map[entry.employeeId] = { lunchStart: entry.lunchStart, lunchEnd: entry.lunchEnd };
+    }
+    return map;
+  }, [lunchSchedule]);
+
   const sessionData    = activeSession === 'morning' ? morningData : activeSession === 'midday' ? middayData : afternoonData;
   const setSessionData = activeSession === 'morning' ? setMorningData : activeSession === 'midday' ? setMiddayData : setAfternoonData;
   const slots = activeSession === 'morning' ? MORNING_SLOTS : activeSession === 'midday' ? MIDDAY_SLOTS : AFTERNOON_SLOTS;
@@ -450,10 +536,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     if (autoSaveTimer.current) { clearTimeout(autoSaveTimer.current); autoSaveTimer.current = null; }
     pendingSave.current = null;
     hasUserEdited.current = false;
-    // Reset float/lunch schedules immediately so stale data from a previous centre
+    // Reset float schedules immediately so stale data from a previous centre
     // doesn't bleed through while the new centre's data loads.
     setFloatScheds([]);
-    setLunchScheds([]);
+    setLunchSchedule([]);
     async function load() {
       try {
         const r = await fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centreId)}&date=${date}`);
@@ -477,6 +563,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             roomIds: (row.data as { familyGroupingRooms?: string[] }).familyGroupingRooms ?? [],
             slots: (row.data as { familyGroupingSlots?: string[] }).familyGroupingSlots ?? [],
             color: '#7c3aed',
+            staffIdsBySlot: {},
           }] : [];
 
           const d: RatioCheckSession = {
@@ -484,9 +571,23 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             ...row.data,
             familyGroupings: row.data.familyGroupings ?? legacyFG,
             staffMoves: row.data.staffMoves ?? {},
+            staffNotes: row.data.staffNotes ?? {},
             staffTimeOverrides: row.data.staffTimeOverrides ?? {},
             roomVisitors: (row.data as any).roomVisitors ?? {},
           };
+          // Migrate legacy FG staffIds (whole-grouping) to per-slot staffIdsBySlot
+          if (d.familyGroupings) {
+            d.familyGroupings = d.familyGroupings.map(fg => {
+              if ((fg.staffIds?.length ?? 0) > 0 && !fg.staffIdsBySlot) {
+                const staffIdsBySlot: Record<string, number[]> = {};
+                for (const slot of fg.slots) {
+                  staffIdsBySlot[slot] = [...fg.staffIds!];
+                }
+                return { ...fg, staffIdsBySlot, staffIds: undefined };
+              }
+              return fg;
+            });
+          }
           if (row.session === 'morning')   setMorningData(d);
           if (row.session === 'midday')    setMiddayData(d);
           if (row.session === 'afternoon') setAfternoonData(d);
@@ -502,16 +603,15 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       try {
         const fr = await fetch(`/api/float-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
         if (!cancelled && fr.ok) setFloatScheds(await fr.json());
-        // Load lunch schedule (from LunchBreakPanel) to show planned lunch times on chips
-        try {
-          const lr = await fetch(`/api/lunch-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
-          if (!cancelled && lr.ok) {
-            const lrows = await lr.json();
-            // API returns [{ schedule: [...] }] - extract the schedule array
-            const sched = Array.isArray(lrows) && lrows.length > 0 ? (lrows[0].schedule ?? []) : [];
-            setLunchScheds(sched.filter((e: any) => e.employeeId && e.lunchStart));
-          }
-        } catch { /* offline */ }
+      } catch { /* offline */ }
+      // Fetch the planned lunch schedule so chips can show scheduled breaks before Deputy actuals arrive.
+      try {
+        const lr = await fetch(`/api/lunch-schedules?centre=${encodeURIComponent(centreId)}&date=${date}`);
+        if (!cancelled && lr.ok) {
+          const rows = await lr.json();
+          const entries: LunchBreakEntry[] = Array.isArray(rows) && rows.length > 0 ? rows[0].schedule ?? [] : [];
+          setLunchSchedule(entries);
+        }
       } catch { /* offline */ }
       // Fetch live attendance for the actual date - always real-time for Ratio Check
       try {
@@ -601,7 +701,17 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const save = useCallback(async (session: 'morning' | 'midday' | 'afternoon', data: RatioCheckSession) => {
     if (!centreId || !date) return; // guard: don't attempt save without required props
     setSaveStatus('saving');
-    const result = await enqueueSave('/api/ratio-check', { centre_id: centreId, date, session, data });
+
+    // Compute required staff per room from the current children list so the roster
+    // forecast can read the same numbers as the plan of the day.
+    const requiredByRoom: Record<string, number> = {};
+    for (const room of rooms) {
+      const roomChildren = children.filter(c => c.room && roomNameMatches(c.room, room));
+      requiredByRoom[room.id] = calcRequiredStaff(roomChildren).required;
+    }
+    const dataWithRequired = { ...data, requiredByRoom };
+
+    const result = await enqueueSave('/api/ratio-check', { centre_id: centreId, date, session, data: dataWithRequired });
     if (result === 'saved') {
       setSaveStatus('saved');
     } else if (result === 'queued') {
@@ -652,6 +762,110 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   }, [liveChildren, hasLiveData, children, historicalChildren, rooms, slots]);
 
   // -- Computed: staff present at each slot -----------------------------------
+
+  /** Build effective rostered segments for a staff member, respecting manual
+   *  time overrides. For split shifts, the override extends the overlapping
+   *  roster segment(s) rather than replacing the whole shift, so e.g. extending
+   *  Alysha's first float segment to 11:30 keeps her afternoon segment intact.
+   *  For non-split shifts the override fully replaces the rostered segment so
+   *  early clock-outs (e.g. Deputy actuals 06:38-10:02 vs roster 06:45-14:45)
+   *  are reflected correctly. */
+  function getEffectiveSegments(r: RosteredStaff, override?: { start?: string; end?: string; segments?: Array<{ start: string; end: string }> }): Array<{ start: string; end: string }> {
+    const rosterStart = formatRosterTime(r.startTime);
+    const rosterEnd   = formatRosterTime(r.endTime);
+    const splitSegments = (r.isSplitShift && Array.isArray(r.splitSegments) && r.splitSegments.length > 0)
+      ? r.splitSegments
+      : null;
+    const baseSegments = splitSegments
+      ? splitSegments.map(seg => ({ start: formatRosterTime(seg.startTime), end: formatRosterTime(seg.endTime) }))
+      : [{ start: rosterStart, end: rosterEnd }];
+
+    if (override?.segments && override.segments.length > 0) {
+      return override.segments;
+    }
+
+    if (!override?.start && !override?.end) return baseSegments;
+
+    const ovStart = override.start ?? rosterStart;
+    const ovEnd   = override.end   ?? rosterEnd;
+    const ovStartM = slotToMins(ovStart);
+    const ovEndM   = slotToMins(ovEnd);
+    // slotToMins returns NaN for invalid/empty strings, so use isFinite.
+    if (!Number.isFinite(ovStartM) || !Number.isFinite(ovEndM)) return baseSegments;
+
+    // Non-split shift: when the override has a complete, valid Deputy actual time that
+    // overlaps the rostered segment, use it as the exact worked window. This gives exact
+    // sign-in/out times once Deputy has processed both ends. If the override only touches
+    // the roster (no real overlap) or does not overlap at all, keep the roster segment so
+    // a saved override from one session does not wipe out a different shift in another session.
+    if (!splitSegments) {
+      const seg = baseSegments[0];
+      const sM = slotToMins(seg.start);
+      const eM = slotToMins(seg.end);
+      if (!Number.isFinite(sM) || !Number.isFinite(eM)) return baseSegments;
+      if (ovEndM <= sM || ovStartM >= eM) return baseSegments; // no meaningful overlap
+      return [{ start: ovStart, end: ovEnd }];
+    }
+
+    // Split shift: adjust each overlapping segment.
+    const modified = baseSegments.map(seg => {
+      const sM = slotToMins(seg.start);
+      const eM = slotToMins(seg.end);
+      if (!Number.isFinite(eM) || !Number.isFinite(sM)) return seg;
+      if (ovEndM < sM || ovStartM > eM) return seg; // no overlap
+      return {
+        start: ovStartM < sM ? ovStart : seg.start,
+        end:   ovEndM   > eM ? ovEnd   : seg.end,
+      };
+    });
+
+    // Sort and merge any segments that now touch/overlap
+    modified.sort((a, b) => (slotToMins(a.start) ?? 0) - (slotToMins(b.start) ?? 0));
+    const merged: Array<{ start: string; end: string }> = [];
+    for (const seg of modified) {
+      const last = merged[merged.length - 1];
+      if (last && (slotToMins(seg.start) ?? 0) <= (slotToMins(last.end) ?? 0)) {
+        if ((slotToMins(seg.end) ?? 0) > (slotToMins(last.end) ?? 0)) {
+          last.end = seg.end;
+        }
+      } else {
+        merged.push(seg);
+      }
+    }
+    return merged;
+  }
+
+  /** Merge actual timesheet segments with rostered segments so that a split-shift
+   *  staff member keeps their rostered afternoon segment even if only the morning
+   *  actual timesheet has been clocked in so far. */
+  function mergeActualSegmentsWithRoster(
+    actuals: Array<{ actualStart: string | null; actualEnd: string | null; isInProgress: boolean }>,
+    rosterSegments: Array<{ start: string; end: string }>
+  ): Array<{ start: string; end: string }> {
+    const actualSegments = actuals
+      .filter(ts => ts.actualStart)
+      .sort((a, b) => (a.actualStart ?? '').localeCompare(b.actualStart ?? ''))
+      .map(ts => ({
+        start: ts.actualStart as string,
+        end: (!ts.isInProgress && ts.actualEnd) ? ts.actualEnd : (ts.actualStart as string),
+      }));
+
+    if (actualSegments.length === 0) return rosterSegments;
+
+    return rosterSegments.map(rosterSeg => {
+      const rStartM = slotToMins(rosterSeg.start);
+      const rEndM = slotToMins(rosterSeg.end);
+      if (rStartM === null || rEndM === null) return rosterSeg;
+      const overlapping = actualSegments.find(a => {
+        const aStartM = slotToMins(a.start);
+        const aEndM = slotToMins(a.end);
+        if (aStartM === null || aEndM === null) return false;
+        return aStartM < rEndM && aEndM > rStartM;
+      });
+      return overlapping ?? rosterSeg;
+    });
+  }
+
   const staffAtSlotMap = useMemo(() => {
     const map: Record<string, RosteredStaff[]> = {};
     // Use allSlots (not just current session) so offFloorStaffBySlot can find
@@ -663,12 +877,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       map[slot] = rosters.filter(r => {
         // Use time override if set, otherwise fall back to raw roster times
         const override = sharedTimeOverrides[String(r.employeeId)];
-        const startStr = override?.start || formatRosterTime(r.startTime);
-        const endStr   = override?.end   || formatRosterTime(r.endTime);
-        if (!startStr || !endStr) return false;
-        const start = slotToMins(startStr);
-        const end   = slotToMins(endStr);
-        if (!(start <= slotMins && end > slotMins)) return false;
+        const segments = getEffectiveSegments(r, override);
+        const inShift = segments.some(seg => {
+          const s = slotToMins(seg.start);
+          const e = slotToMins(seg.end);
+          return s !== null && e !== null && s <= slotMins && e > slotMins;
+        });
+        if (!inShift) return false;
         // Deduplicate: split shift staff have 2 roster entries — only show once per slot
         if (seen.has(r.employeeId)) return false;
         seen.add(r.employeeId);
@@ -692,24 +907,27 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       const progStaff: RosteredStaff[] = [], lunchStaff: RosteredStaff[] = [], cleanStaff: RosteredStaff[] = [];
       for (const fsRow of floatScheds) {
         for (const block of (fsRow.schedule ?? [])) {
+          const ct = String(block.coverType ?? '').toLowerCase();
           const covId = block.coveringEmployeeId as number | undefined;
-          if (!covId) continue;
+          // Cleaning / own-lunch blocks are performed by the floater themselves,
+          // so the off-floor person is the floater when no covering employee is set.
+          const offFloorEmpId = covId ?? ((ct === 'cleaning' || ct === 'own-lunch') ? (fsRow.employee_id as number | undefined) : undefined);
+          if (!offFloorEmpId) continue;
           const bStart = slotToMins(String(block.startTime ?? '00:00'));
           const bEnd   = slotToMins(String(block.endTime   ?? '00:00'));
           if (slotMins < bStart || slotMins >= bEnd) continue;
           // If manually moved to a different activity or back to a room - suppress float-schedule entry
-          const manualMove = sessionData.staffMoves[`${covId}:${slot}`];
+          const manualMove = sessionData.staffMoves[`${offFloorEmpId}:${slot}`];
           if (manualMove !== undefined) continue; // manual placement always wins
-          const staffObj = (staffAtSlotMap[slot] ?? []).find(s => s.employeeId === covId);
+          const staffObj = (staffAtSlotMap[slot] ?? []).find(s => s.employeeId === offFloorEmpId);
           if (!staffObj) continue;
-          const ct = String(block.coverType ?? '').toLowerCase();
           // Deduplicate: only add once per employee per activity column
-          if (ct === 'programming' && !progIds.has(covId)) {
-            progIds.add(covId); progStaff.push(staffObj);
-          } else if (ct === 'cleaning' && !cleanIds.has(covId)) {
-            cleanIds.add(covId); cleanStaff.push(staffObj);
-          } else if (block.type === 'break' && ct !== 'ratio' && !lunchIds.has(covId)) {
-            lunchIds.add(covId); lunchStaff.push(staffObj);
+          if (ct === 'programming' && !progIds.has(offFloorEmpId)) {
+            progIds.add(offFloorEmpId); progStaff.push(staffObj);
+          } else if (ct === 'cleaning' && !cleanIds.has(offFloorEmpId)) {
+            cleanIds.add(offFloorEmpId); cleanStaff.push(staffObj);
+          } else if (block.type === 'break' && ct !== 'ratio' && !lunchIds.has(offFloorEmpId)) {
+            lunchIds.add(offFloorEmpId); lunchStaff.push(staffObj);
           }
         }
       }
@@ -729,17 +947,19 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       const offFloor = new Set<number>();
       for (const fsRow of floatScheds) {
         for (const block of (fsRow.schedule ?? [])) {
+          const ct = String(block.coverType ?? '').toLowerCase();
           const covId = block.coveringEmployeeId as number | undefined;
-          if (!covId) continue;
+          // Cleaning / own-lunch blocks are performed by the floater themselves
+          const offFloorEmpId = covId ?? ((ct === 'cleaning' || ct === 'own-lunch') ? (fsRow.employee_id as number | undefined) : undefined);
+          if (!offFloorEmpId) continue;
           const bStart = slotToMins(String(block.startTime ?? '00:00'));
           const bEnd   = slotToMins(String(block.endTime   ?? '00:00'));
           if (slotMins < bStart || slotMins >= bEnd) continue;
           // Check if manually overridden - if staffMoves points them to a room, they're on floor
-          const manualMove = sessionData.staffMoves[`${covId}:${slot}`];
+          const manualMove = sessionData.staffMoves[`${offFloorEmpId}:${slot}`];
           if (manualMove !== undefined && !activityMoves.has(manualMove)) continue; // back on floor
-          const ct = String(block.coverType ?? '').toLowerCase();
-          if (ct === 'programming' || ct === 'cleaning') offFloor.add(covId);
-          if (block.type === 'break' && ct !== 'ratio') offFloor.add(covId);
+          if (ct === 'programming' || ct === 'cleaning') offFloor.add(offFloorEmpId);
+          if (block.type === 'break' && ct !== 'ratio') offFloor.add(offFloorEmpId);
         }
       }
       map[slot] = offFloor;
@@ -763,6 +983,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           const bStart = slotToMins(String(block.startTime ?? '00:00'));
           const bEnd   = slotToMins(String(block.endTime   ?? '00:00'));
           if (slotMins < bStart || slotMins >= bEnd) continue;
+          // Manual ratio-check moves override scheduled float covers for this slot
+          const manualMove = sessionData.staffMoves[`${floatEmpId}:${slot}`];
+          if (manualMove !== undefined && manualMove !== block.roomId) continue;
           // Float is covering a room (any block type that puts them in a room)
           if (!roomCover[block.roomId]) roomCover[block.roomId] = [];
           if (!roomCover[block.roomId].includes(floatEmpId)) roomCover[block.roomId].push(floatEmpId);
@@ -771,7 +994,57 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       map[slot] = roomCover;
     }
     return map;
-  }, [floatScheds]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [floatScheds, sessionData.staffMoves]);
+
+  /** Primary room assignment for each on-shift staff member at each slot.
+   *  Enforces one-room-per-staff so nobody can render in two room columns. */
+  const staffPrimaryRoomBySlot = useMemo(() => {
+    const map: Record<string, Record<number, string | null>> = {};
+    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    const roomIds = new Set(rooms.map(r => r.id));
+    for (const slot of allSlots) {
+      const byEmp: Record<number, string | null> = {};
+      for (const s of staffAtSlotMap[slot] ?? []) {
+        // 1. Per-slot move from Ratio Check always wins over Plan-of-Day.
+        //    Room moves put them in that room; activity/removed moves make them unassigned.
+        const slotMove = sessionData.staffMoves[`${s.employeeId}:${slot}`];
+        if (slotMove !== undefined) {
+          if (roomIds.has(slotMove)) {
+            byEmp[s.employeeId] = slotMove;
+          } else {
+            byEmp[s.employeeId] = null;
+          }
+          continue;
+        }
+        // 2. Day-level allocation from Plan view
+        const dayMove = dayAllocations[s.employeeId];
+        if (dayMove && dayMove !== 'float' && dayMove !== 'support' && roomIds.has(dayMove)) {
+          byEmp[s.employeeId] = dayMove;
+          continue;
+        }
+        // 3. Natural roster room
+        const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
+        if (naturalRoom) {
+          byEmp[s.employeeId] = naturalRoom.id;
+          continue;
+        }
+        // 4. Float cover room (only if covering exactly one room at this slot)
+        const slotCovers = floatCoveringRoomBySlot[slot] ?? {};
+        const coveredRooms = Object.entries(slotCovers)
+          .filter(([, ids]) => ids.includes(s.employeeId))
+          .map(([roomId]) => roomId);
+        if (coveredRooms.length === 1) {
+          byEmp[s.employeeId] = coveredRooms[0];
+          continue;
+        }
+        byEmp[s.employeeId] = null;
+      }
+      map[slot] = byEmp;
+    }
+    return map;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staffAtSlotMap, sessionData.staffMoves, dayAllocations, rooms, floatCoveringRoomBySlot]);
 
   // -- Computed getters -------------------------------------------------------
 
@@ -823,6 +1096,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     ) ?? null;
   }
 
+  /** Get the FG id that claims a room at a slot (null if none) */
+  function getFgIdClaimingRoomAtSlot(slot: string, roomId: string): string | null {
+    return getFGForRoomAtSlot(slot, roomId)?.id ?? null;
+  }
+
   /** Get FGs active at a slot */
   function getFGsAtSlot(slot: string): FamilyGroupingConfig[] {
     return sharedFamilyGroupings.filter(fg => fg.slots.includes(slot));
@@ -868,13 +1146,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   }
 
   /** Count staff physically on the floor - in a room - at this slot.
-   *  Excludes anyone in Additional Duties, unassigned floats, or off-floor.
+   *  Excludes anyone in Additional Duties, unassigned floats, off-floor, or ISS staff.
+   *  ISS staff may be placed in a room for support but do not count toward ratio.
    *  Includes active visitors (e.g. AD passing through).
    *  Manual override (staffAvailableOverride) still takes priority if set. */
   function getStaffOnFloor(slot: string): number {
     const empIds = new Set<number>();
     for (const room of rooms) {
-      getStaffForRoom(slot, room).forEach(s => empIds.add(s.employeeId));
+      getStaffForRoom(slot, room).forEach(s => {
+        if (!issUnitIdsSet.has(s.unitId)) empIds.add(s.employeeId);
+      });
     }
     // Add active visitors across all rooms at this slot
     let visitorCount = 0;
@@ -911,9 +1192,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     for (const slot of allSlots) {
       const available = staffAtSlotMap[slot] ?? [];
       const offFloor  = offFloorBySlot[slot] ?? new Set<number>();
+      const floatCovers = floatCoveringRoomBySlot[slot] ?? {};
+      const allFloatCoverIds = new Set(Object.values(floatCovers).flat());
       const claimed   = new Set<number>();
       for (const s of available) {
         if (offFloor.has(s.employeeId)) continue;
+        // Staff assigned to cover a room via Plan Day float schedule should appear
+        // in the covered room, not their natural/moved room.
+        if (allFloatCoverIds.has(s.employeeId)) continue;
         const mv = sessionData.staffMoves[`${s.employeeId}:${slot}`];
         if (mv === '__programming__' || mv === '__lunch__' || mv === '__cleaning__' || mv === '__additional__') continue;
         const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
@@ -926,13 +1212,28 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [staffAtSlotMap, offFloorBySlot, sessionData.staffMoves, rooms]);
+  }, [staffAtSlotMap, offFloorBySlot, floatCoveringRoomBySlot, sessionData.staffMoves, rooms]);
+
+  /** Staff explicitly assigned to any family grouping at a slot */
+  function getExplicitFGStaffIdsAtSlot(slot: string): Set<number> {
+    const ids = new Set<number>();
+    for (const fg of sharedFamilyGroupings) {
+      if (!fg.slots.includes(slot)) continue;
+      for (const empId of fg.staffIdsBySlot?.[slot] ?? []) {
+        ids.add(empId);
+      }
+    }
+    return ids;
+  }
 
   /** Staff for a specific room at a slot - dedup ensures no-one appears in multiple places */
   function getStaffForRoom(slot: string, room: Room): RosteredStaff[] {
     const available = staffAtSlotMap[slot] ?? [];
     const offFloor = offFloorBySlot[slot] ?? new Set<number>();
-    const floatCovers = (floatCoveringRoomBySlot[slot] ?? {})[room.id] ?? [];
+    const slotFloatCovers = floatCoveringRoomBySlot[slot] ?? {};
+    const floatCovers = slotFloatCovers[room.id] ?? [];
+    const allFloatCoverIds = new Set(Object.values(slotFloatCovers).flat());
+    const explicitFgIds = getExplicitFGStaffIdsAtSlot(slot);
     // Exclude anyone manually placed in an activity column or float pool
     const inActivity = new Set<number>(
       available.filter(s => {
@@ -940,12 +1241,28 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         return mv === '__programming__' || mv === '__lunch__' || mv === '__cleaning__' || mv === '__additional__';
       }).map(s => s.employeeId)
     );
+    const roomFgId = getFgIdClaimingRoomAtSlot(slot, room.id);
     const rosterInRoom = available.filter(s => {
       if (offFloor.has(s.employeeId)) return false;
       if (inActivity.has(s.employeeId)) return false;
+      // If a staff is covering a room via the Plan Day float schedule, they should
+      // appear only in the covered room, not back in their natural/moved room.
+      if (allFloatCoverIds.has(s.employeeId)) return false;
+      // Staff explicitly assigned to a family grouping at this slot should only
+      // appear in the family grouping cell, not in a regular room column.
+      if (explicitFgIds.has(s.employeeId)) return false;
       const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
       const effective = getEffectiveRoom(s.employeeId, slot, naturalRoom?.id ?? '');
-      return effective === room.id;
+      if (effective !== room.id) return false;
+      // If this room is inside a family grouping, make sure the staff's effective
+      // room belongs to THIS grouping, not a different one. This prevents someone
+      // whose natural/moved room is in FG2 from also showing up in FG3 because
+      // they were explicitly added to FG3.
+      if (roomFgId) {
+        const effectiveFgId = getFgIdClaimingRoomAtSlot(slot, effective);
+        if (effectiveFgId && effectiveFgId !== roomFgId) return false;
+      }
+      return true;
     });
     // Global claimed set: anyone already placed in a room via roster/move cannot
     // also appear as a float cover in a different room at the same slot.
@@ -954,23 +1271,32 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       floatCovers.includes(s.employeeId) &&
       !offFloor.has(s.employeeId) &&
       !inActivity.has(s.employeeId) &&
-      !globalClaimed.has(s.employeeId)
+      !globalClaimed.has(s.employeeId) &&
+      !explicitFgIds.has(s.employeeId)
     );
-    return [...rosterInRoom, ...floatStaffInRoom];
+    const combined = [...rosterInRoom, ...floatStaffInRoom];
+    const seen = new Set<number>();
+    const deduped = combined.filter(s => {
+      if (seen.has(s.employeeId)) return false;
+      seen.add(s.employeeId);
+      return true;
+    });
+    // Final guard: a staff member can only render in their primary room for this slot.
+    // This catches any edge case where roster + float-cover + moves accidentally place
+    // the same person in two room columns at once.
+    const primaryRoomMap = staffPrimaryRoomBySlot[slot] ?? {};
+    return deduped.filter(s => primaryRoomMap[s.employeeId] === room.id);
   }
 
-  /** Staff on shift at a slot not currently assigned to any room (excludes Additional Duties) */
+  /** Staff on shift at a slot not currently assigned to any room or FG (excludes Additional Duties) */
   function getUnassignedStaffAtSlot(slot: string): RosteredStaff[] {
     const available = staffAtSlotMap[slot] ?? [];
-    const roomUnitIds = new Set(rooms.map(r => r.deputyUnitId));
-    const roomIds = new Set(rooms.map(r => r.id));
+    const primaryRoomMap = staffPrimaryRoomBySlot[slot] ?? {};
     return available.filter(r => {
       const moveKey = `${r.employeeId}:${slot}`;
       const move = sessionData.staffMoves[moveKey];
-      if (move !== undefined) {
-        return !roomIds.has(move) && move !== '__additional__';
-      }
-      return !roomUnitIds.has(r.unitId);
+      if (move !== undefined && (move === '__additional__' || move === '__removed__')) return false;
+      return primaryRoomMap[r.employeeId] === null;
     });
   }
 
@@ -981,15 +1307,22 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const roomUnitIds = new Set(rooms.map(r => r.deputyUnitId));
     const roomIds = new Set(rooms.map(r => r.id));
     const activityMoves = new Set(['__programming__', '__lunch__', '__cleaning__']);
+    const primaryRoomMap = staffPrimaryRoomBySlot[slot] ?? {};
     // Floats covering a room from the schedule should not appear in Additional Duties
     const floatCovers = floatCoveringRoomBySlot[slot] ?? {};
     const floatsCoveringRoom = new Set(Object.values(floatCovers).flat());
     return available.filter(r => {
-      // Exclude floats actively covering a room via their scheduled plan
-      if (floatsCoveringRoom.has(r.employeeId)) return false;
       const moveKey = `${r.employeeId}:${slot}`;
       const move = sessionData.staffMoves[moveKey];
-      if (move !== undefined) return !roomIds.has(move) && !activityMoves.has(move);
+      // Explicit activity/removed moves never belong in Additional Duties.
+      if (move !== undefined) {
+        return !roomIds.has(move) && !activityMoves.has(move) && move !== '__removed__';
+      }
+      // If the staff has a primary room assignment (day allocation, natural room,
+      // or float cover), they belong in that room — not in Additional Duties.
+      if (primaryRoomMap[r.employeeId] !== null && primaryRoomMap[r.employeeId] !== undefined) return false;
+      // Exclude floats actively covering a room via their scheduled plan
+      if (floatsCoveringRoom.has(r.employeeId)) return false;
       // Native float unit staff: hide from Additional Duties only when they have
       // an active schedule block (covering a room, on lunch, programming etc).
       // If they're on shift but have NO active block (e.g. plan day didn't cover
@@ -1077,6 +1410,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       roomIds: [],
       slots: [],
       color: FG_COLOURS[idx],
+      staffIdsBySlot: {},
     };
     syncFGToAllSessions(fgs => [...fgs.filter(f => f.id !== newFG.id), newFG]);
     setEditingFgId(newFG.id);
@@ -1112,11 +1446,40 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       roomIds: [],
       slots: [slot],
       color: FG_COLOURS[idx],
+      staffIdsBySlot: {},
     };
     syncFGToAllSessions(fgs => [...fgs.filter(f => f.id !== newFG.id), newFG]);
     setFgPopoverSlot(null);
     setFgPanelOpen(true);
     setEditingFgId(newFG.id);
+  }
+
+  /** Add a staff member to a family grouping for a specific slot */
+  function addStaffToFG(fgId: string, employeeId: number, slot: string) {
+    syncFGToAllSessions(fgs => fgs.map(fg => {
+      if (fg.id !== fgId) return fg;
+      const bySlot = { ...(fg.staffIdsBySlot ?? {}) };
+      const ids = new Set(bySlot[slot] ?? []);
+      ids.add(employeeId);
+      bySlot[slot] = [...ids];
+      return { ...fg, staffIdsBySlot: bySlot };
+    }));
+  }
+
+  /** Remove a staff member from all family groupings at a specific slot */
+  function removeStaffFromAllFGsAtSlot(employeeId: number, slot: string) {
+    syncFGToAllSessions(fgs => fgs.map(fg => {
+      if (!fg.staffIdsBySlot?.[slot]?.includes(employeeId)) return fg;
+      const bySlot = { ...(fg.staffIdsBySlot ?? {}) };
+      bySlot[slot] = (bySlot[slot] ?? []).filter(id => id !== employeeId);
+      if (bySlot[slot].length === 0) delete bySlot[slot];
+      return { ...fg, staffIdsBySlot: bySlot };
+    }));
+  }
+
+  /** Find a rostered staff object by employeeId */
+  function findRosteredStaff(employeeId: number): RosteredStaff | undefined {
+    return rosters.find(r => r.employeeId === employeeId);
   }
 
   /** Set FG slots from a From/To range (replaces slots for that FG) */
@@ -1137,6 +1500,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       scheduleAutoSave(next);
       return next;
     });
+    // Moving to a room/activity means the staff is no longer explicitly assigned to any FG at this slot
+    removeStaffFromAllFGsAtSlot(empId, slot);
   }
 
   function resetStaffMove(empId: number, slot: string) {
@@ -1165,31 +1530,83 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     setTouchSelected(null);
   }
 
-  /** Get effective times for a staff member: shared override if set, else natural roster times */
-  function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string } {
+  /** Add the currently tap-selected staff member to a family grouping for their selected slot. */
+  function handleAddSelectedToFG(fgId: string, _slot: string) {
+    if (!touchSelected) return;
+    const empId = touchSelected.empId;
+    // Use the selected staff's slot, consistent with handleZoneTap.
+    const sourceSlot = touchSelected.slot;
+    addStaffToFG(fgId, empId, sourceSlot);
+    // Remove from any other grouping at the same slot.
+    syncFGToAllSessions(fgs => fgs.map(f => {
+      if (f.id === fgId) return f;
+      if (!f.staffIdsBySlot?.[sourceSlot]?.includes(empId)) return f;
+      const bySlot = { ...(f.staffIdsBySlot ?? {}) };
+      bySlot[sourceSlot] = (bySlot[sourceSlot] ?? []).filter(id => id !== empId);
+      if (bySlot[sourceSlot].length === 0) delete bySlot[sourceSlot];
+      return { ...f, staffIdsBySlot: bySlot };
+    }));
+    // Remove them from any room assignment at this slot so they only appear in the FG cell.
+    setSessionData(prev => {
+      const next = { ...prev, staffMoves: { ...prev.staffMoves, [`${empId}:${sourceSlot}`]: '__removed__' } };
+      scheduleAutoSave(next);
+      return next;
+    });
+    setTouchSelected(null);
+  }
+
+  /** Get effective times for a staff member: shared override if set, else natural roster times.
+   *  Falls back to the planned lunch schedule when no actual lunch override is present. */
+  function getStaffTime(s: RosteredStaff): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string; lunchSource?: string } {
     const override = sharedTimeOverrides[String(s.employeeId)];
-    // Planned lunch from LunchBreakPanel (room staff) - fallback when Deputy hasn't recorded actual yet
-    const lunchEntry = lunchScheds.find(e => e.employeeId === s.employeeId);
-    // Planned lunch from FloatSchedulePanel (float staff own-lunch block)
-    const fsRow = floatScheds.find(f => f.employee_id === s.employeeId);
-    const ownLunch = fsRow?.schedule?.find((b: any) => b.coverType === 'own-lunch');
-    // Planned lunch: prefer LunchBreakPanel, fall back to FloatSchedule own-lunch
-    const plannedLunchStart = lunchEntry?.lunchStart ?? ownLunch?.startTime ?? undefined;
-    const plannedLunchEnd   = lunchEntry?.lunchEnd   ?? ownLunch?.endTime   ?? undefined;
-    if (override) {
-      // Deputy actual lunch takes priority; fall back to planned if Deputy hasn't recorded it yet
-      return {
-        ...override,
-        lunchStart: override.lunchStart ?? plannedLunchStart,
-        lunchEnd:   override.lunchEnd   ?? plannedLunchEnd,
-      };
+    const scheduled = scheduledLunchByEmployee[s.employeeId];
+    const base = { start: formatRosterTime(s.startTime), end: formatRosterTime(s.endTime) };
+    if (!override) {
+      if (scheduled) return { ...base, lunchStart: scheduled.lunchStart, lunchEnd: scheduled.lunchEnd, source: 'scheduled', lunchSource: 'scheduled' };
+      return base;
     }
-    // No Deputy override - use roster times + planned lunch
+    const hasOverrideLunch = !!override.lunchStart;
+    const lunchStart = hasOverrideLunch ? override.lunchStart : scheduled?.lunchStart;
+    const lunchEnd = hasOverrideLunch ? override.lunchEnd : scheduled?.lunchEnd;
+    const lunchSource = hasOverrideLunch ? (override.source ?? 'manual') : (scheduled ? 'scheduled' : undefined);
+    return { ...override, lunchStart, lunchEnd, source: override.source, lunchSource };
+  }
+
+  /** Get the roster segment that covers the given slot. For split shifts this returns
+   *  the matching segment so the chip shows the correct shift times. */
+  function getSegmentForSlot(s: RosteredStaff, slot: string): { start: string; end: string } | null {
+    const slotMins = slotToMins(slot);
+    if (slotMins === null) return null;
+    const segments = getEffectiveSegments(s, sharedTimeOverrides[String(s.employeeId)]);
+    for (const seg of segments) {
+      const sM = slotToMins(seg.start);
+      const eM = slotToMins(seg.end);
+      if (sM !== null && eM !== null && sM <= slotMins && eM > slotMins) {
+        return seg;
+      }
+    }
+    return null;
+  }
+
+
+  /** Effective times for chip display at a specific slot. Respects overrides and split shifts.
+   *  Falls back to the planned lunch schedule when no actual lunch override is present. */
+  function getStaffTimeForSlot(s: RosteredStaff, slot: string): { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string; lunchSource?: string } {
+    const override = sharedTimeOverrides[String(s.employeeId)];
+    const scheduled = scheduledLunchByEmployee[s.employeeId];
+    const seg = getSegmentForSlot(s, slot);
+    const base = seg ?? { start: formatRosterTime(s.startTime), end: formatRosterTime(s.endTime) };
+    if (!override) {
+      if (scheduled) return { ...base, lunchStart: scheduled.lunchStart, lunchEnd: scheduled.lunchEnd, source: 'scheduled', lunchSource: 'scheduled' };
+      return base;
+    }
+    const hasOverrideLunch = !!override.lunchStart;
     return {
-      start: formatRosterTime(s.startTime),
-      end: formatRosterTime(s.endTime),
-      lunchStart: plannedLunchStart,
-      lunchEnd:   plannedLunchEnd,
+      ...base,
+      lunchStart: hasOverrideLunch ? override.lunchStart : scheduled?.lunchStart,
+      lunchEnd: hasOverrideLunch ? override.lunchEnd : scheduled?.lunchEnd,
+      source: override.source,
+      lunchSource: hasOverrideLunch ? (override.source ?? 'manual') : (scheduled ? 'scheduled' : undefined),
     };
   }
 
@@ -1222,33 +1639,74 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     setAfternoonData(prev =>{ const next = removeOverride(prev); save('afternoon',next); return next; });
   }
 
+  /** Add/edit a free-text note for a staff member in a specific slot.
+   *  Used for ISS room-support notes that flow through to the Reg 151 report. */
+  function updateStaffNote(empId: number, slot: string, note: string) {
+    setSessionData(prev => {
+      const key = `${empId}:${slot}`;
+      const notes = { ...prev.staffNotes };
+      if (note.trim()) notes[key] = note.trim();
+      else delete notes[key];
+      const next = { ...prev, staffNotes: notes };
+      scheduleAutoSave(next);
+      return next;
+    });
+  }
+
   // -- Visitor log helpers --------------------------------------------------
 
   function getVisitorKey(slot: string, roomId: string) { return `${slot}:${roomId}`; }
 
+  /** Return visitors stored under this exact slot:room bucket (used by the 7am summary). */
   function getVisitorsForSlotRoom(slot: string, roomId: string): RoomVisitor[] {
     return sessionData.roomVisitors?.[getVisitorKey(slot, roomId)] ?? [];
   }
 
-  /** Count visitors currently present at a slot in a room (entered = slotMins, not yet exited or exit > slotMins) */
-  function countActiveVisitors(slot: string, roomId: string): number {
-    const slotMins = slotToMins(slot);
-    return getVisitorsForSlotRoom(slot, roomId).filter(v => {
-      const entered = slotToMins(v.enteredAt);
-      if (entered > slotMins) return false;
-      if (v.exitedAt) {
-        const exited = slotToMins(v.exitedAt);
-        return exited > slotMins;
-      }
-      return true; // still present
-    }).length;
+  /** Find which slot bucket a visitor was originally stored in.
+   *  Key format is `${slot}:${roomId}`; slot itself contains a colon (HH:MM),
+   *  so we take everything before the final colon. */
+  function findVisitorStorageSlot(roomId: string, visitorId: string): string | null {
+    for (const [key, list] of Object.entries(sessionData.roomVisitors ?? {})) {
+      if (!key.endsWith(`:${roomId}`)) continue;
+      if (list?.some(v => v.id === visitorId)) return key.slice(0, key.lastIndexOf(':'));
+    }
+    return null;
   }
 
-  function addVisitor(slot: string, roomId: string, name: string, enteredAt: string, exitedAt?: string) {
+  /** Return visitors active in a room at a given slot, regardless of which bucket they were stored in.
+   *  This lets visitors "pull through" to every slot they were physically present. */
+  function getActiveVisitorsForSlotRoom(slot: string, roomId: string): RoomVisitor[] {
+    const slotMins = slotToMins(slot);
+    const active: RoomVisitor[] = [];
+    const seen = new Set<string>();
+    for (const [key, list] of Object.entries(sessionData.roomVisitors ?? {})) {
+      if (!key.endsWith(`:${roomId}`)) continue;
+      for (const v of list ?? []) {
+        if (seen.has(v.id)) continue;
+        const entered = slotToMins(v.enteredAt);
+        if (entered === null || entered > slotMins) continue;
+        if (v.exitedAt) {
+          const exited = slotToMins(v.exitedAt);
+          if (exited !== null && exited <= slotMins) continue;
+        }
+        seen.add(v.id);
+        active.push(v);
+      }
+    }
+    return active;
+  }
+
+  /** Count visitors currently present at a slot in a room (entered <= slotMins, not yet exited or exit > slotMins) */
+  function countActiveVisitors(slot: string, roomId: string): number {
+    return getActiveVisitorsForSlotRoom(slot, roomId).length;
+  }
+
+  function addVisitor(slot: string, roomId: string, name: string, enteredAt: string, exitedAt?: string, wwccNumber?: string) {
     const key = getVisitorKey(slot, roomId);
     const newVisitor: RoomVisitor = {
       id: Math.random().toString(36).slice(2, 9),
       name: name.trim(),
+      wwccNumber: wwccNumber?.trim() || undefined,
       enteredAt,
       exitedAt,
     };
@@ -1303,6 +1761,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const nowTime = `${hh}:${mm}`;
     setVisitorModal({ slot, roomId, roomName });
     setVisitorName('');
+    setVisitorWWCC('');
     setVisitorTime(nowTime); // prefill with actual current time
     setVisitorExitTime('');
   }
@@ -1319,7 +1778,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   /** Confirm adding a visitor from the modal */
   function confirmAddVisitor() {
     if (!visitorModal || !visitorName.trim()) return;
-    addVisitor(visitorModal.slot, visitorModal.roomId, visitorName, visitorTime || visitorModal.slot, visitorExitTime || undefined);
+    addVisitor(visitorModal.slot, visitorModal.roomId, visitorName, visitorTime || visitorModal.slot, visitorExitTime || undefined, visitorWWCC || undefined);
     setVisitorModal(null);
   }
 
@@ -2098,12 +2557,47 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                         // First room of this FG — render merged cell
                         renderedFGIds.add(fg.id);
                         const fgRooms = fgRoomsForSlot;
-                        const fgColSpan = fgRooms.length * 3;
+                        // Defensive: only span consecutive rooms from this position.
+                        // If an FG somehow includes non-consecutive rooms, this prevents the
+                        // merged cell from bleeding into totals / Additional columns.
+                        const roomIndex = rooms.findIndex(r => r.id === room.id);
+                        let consecutiveFGRoomCount = 0;
+                        for (let i = roomIndex; i < rooms.length; i++) {
+                          if (fgRooms.some(r => r.id === rooms[i].id)) consecutiveFGRoomCount++;
+                          else break;
+                        }
+                        const fgColSpan = consecutiveFGRoomCount * 3;
                         const fgReq = getFGRequiredForConfig(slot, fg);
                         const fgChildren = fgRooms.reduce((sum, r) => sum + getChildCount(slot, r.id), 0);
-                        const fgStaffMembers = fgRooms.flatMap(r =>
-                          getStaffForRoom(slot, r).map(s => ({ ...s, inRoomId: r.id, inRoomName: r.name }))
-                        );
+                        type FGStaffMember = RosteredStaff & { inRoomId: string; inRoomName: string; isExplicitFG?: boolean };
+                        const fgStaffMembers: FGStaffMember[] = (() => {
+                          const raw = fgRooms.flatMap(r =>
+                            getStaffForRoom(slot, r).map(s => ({ ...s, inRoomId: r.id, inRoomName: r.name }))
+                          );
+                          // A staff member may be assigned to / covering more than one FG room at the same slot.
+                          // They should only appear once in the grouping cell.
+                          const seen = new Set<number>();
+                          return raw.filter(s => {
+                            if (seen.has(s.employeeId)) return false;
+                            seen.add(s.employeeId);
+                            return true;
+                          });
+                        })();
+                        const explicitFgStaff: FGStaffMember[] = (fg.staffIdsBySlot?.[slot] ?? [])
+                          .map(id => findRosteredStaff(id))
+                          .filter((s): s is RosteredStaff => {
+                            if (!s) return false;
+                            if (fgStaffMembers.some(m => m.employeeId === s.employeeId)) return false;
+                            // Don't show an explicitly-added FG staff member in this grouping
+                            // if their effective room actually belongs to a different active grouping.
+                            const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
+                            const effective = getEffectiveRoom(s.employeeId, slot, naturalRoom?.id ?? '');
+                            const effectiveFgId = getFgIdClaimingRoomAtSlot(slot, effective);
+                            if (effectiveFgId && effectiveFgId !== fg.id) return false;
+                            return true;
+                          })
+                          .map(s => ({ ...s, inRoomId: fg.heldInRoom || fgRooms[0]?.id || '', inRoomName: 'Grouping', isExplicitFG: true }));
+                        const allFgStaff: FGStaffMember[] = [...fgStaffMembers, ...explicitFgStaff];
                         const fgEditKey = `fg-${fg.id}:${slot}`;
                         const fgUnassigned = getUnassignedStaffAtSlot(slot);
 
@@ -2111,6 +2605,36 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                           <td
                             key={`fg-${fg.id}-${slot}`}
                             colSpan={fgColSpan}
+                            onDragOver={e => e.preventDefault()}
+                            onDrop={e => {
+                              e.preventDefault();
+                              if (dragState.current) {
+                                const { empId } = dragState.current;
+                                // Add to this grouping for this slot and remove from any other grouping at this slot.
+                                addStaffToFG(fg.id, empId, slot);
+                                syncFGToAllSessions(fgs => fgs.map(f => {
+                                  if (f.id === fg.id) return f;
+                                  if (!f.staffIdsBySlot?.[slot]?.includes(empId)) return f;
+                                  const bySlot = { ...(f.staffIdsBySlot ?? {}) };
+                                  bySlot[slot] = (bySlot[slot] ?? []).filter(id => id !== empId);
+                                  if (bySlot[slot].length === 0) delete bySlot[slot];
+                                  return { ...f, staffIdsBySlot: bySlot };
+                                }));
+                                // Remove them from any room assignment at this slot so they only appear in the FG cell
+                                setSessionData(prev => {
+                                  const next = { ...prev, staffMoves: { ...prev.staffMoves, [`${empId}:${slot}`]: '__removed__' } };
+                                  scheduleAutoSave(next);
+                                  return next;
+                                });
+                                dragState.current = null;
+                              }
+                            }}
+                            onClick={e => {
+                              if (touchSelected) {
+                                e.stopPropagation();
+                                handleAddSelectedToFG(fg.id, slot);
+                              }
+                            }}
                             style={{
                               ...tdBase,
                               backgroundColor: hexToRgba(fg.color, 0.07),
@@ -2148,27 +2672,32 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                 <span style={{ color: '#6b7280' }}>Req'd: </span>
                                 <strong style={{ color: fgReq > staffAvail ? '#dc2626' : fg.color }}>{fgReq}</strong>
                               </span>
-                              {fgStaffMembers.length > 0 && (
+                              {allFgStaff.length > 0 && (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
-                                  {fgStaffMembers.map((s, ni) => {
+                                  {allFgStaff.map((s, ni) => {
                                     const move = sessionData.staffMoves[`${s.employeeId}:${slot}`];
                                     const isAdditional = move === '__additional__';
+                                    const isExplicit = !!s.isExplicitFG;
                                     return (
                                       <div key={`${s.employeeId}-${ni}`}
                                         draggable
                                         onDragStart={() => { dragState.current = { empId: s.employeeId, slot, fromSource: 'fg' }; }}
-                                        title={`${s.employeeName} (${s.inRoomName}) - drag to Additional Duties or a room`}
+                                        onClick={e => { e.stopPropagation(); handleChipTap(s.employeeId, slot, 'fg'); }}
+                                        title={`${s.employeeName} (${s.inRoomName})${isExplicit ? ' - explicit grouping member' : ''} - tap/click then choose a room or activity to remove from grouping`}
                                         style={{
                                           fontSize: '9px', cursor: 'grab',
-                                          backgroundColor: isAdditional ? '#fef3c7' : '#f0fdf4',
+                                          backgroundColor: isExplicit ? hexToRgba(fg.color, 0.22) : (isAdditional ? '#fef3c7' : '#f0fdf4'),
                                           color: isAdditional ? '#92400e' : '#166534',
-                                          border: `1px solid ${isAdditional ? '#fde68a' : '#bbf7d0'}`,
+                                          border: `1px solid ${isExplicit ? fg.color : (isAdditional ? '#fde68a' : '#bbf7d0')}`,
                                           borderRadius: '3px', padding: '1px 4px',
                                           display: 'inline-flex', flexDirection: 'column', alignItems: 'center',
                                           userSelect: 'none',
+                                          outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined,
+                                          outlineOffset: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '1px' : undefined,
                                         }}
                                       >
                                         <span>{shortName(s.employeeName)}</span>
+                                        {isExplicit && <span style={{ fontSize: '7px', color: fg.color, fontWeight: 700 }}>FG</span>}
                                         {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
                                         {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                         {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
@@ -2283,8 +2812,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                       const childCount = cell?.children ?? autoChildCounts[key] ?? 0;
                       const required = getStaffRequired(slot, room);
                       const roomStaff = getStaffForRoom(slot, room);
-                      // Per-room ratio check: red if room has fewer staff than required
-                      const roomUnderRatio = required > 0 && roomStaff.length < required;
+                      // ISS staff are visible in the room but do not count toward ratio.
+                      const ratioStaffCount = roomStaff.filter(s => !issUnitIdsSet.has(s.unitId)).length;
+                      // Per-room ratio check: red if room has fewer ratio staff than required
+                      const roomUnderRatio = required > 0 && ratioStaffCount < required;
                       const unassignedStaff = getUnassignedStaffAtSlot(slot);
                       const editCellKey = `${room.id}:${slot}`;
 
@@ -2338,7 +2869,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                               {roomStaff.map(s => {
                                 const hasOverride = sessionData.staffMoves[`${s.employeeId}:${slot}`] !== undefined;
                                 const hasTimeOverride = !!sessionData.staffTimeOverrides[String(s.employeeId)];
-                                const staffTime = getStaffTime(s);
+                                const staffTime = getStaffTimeForSlot(s, slot);
                                 return (
                                   <div
                                     key={s.employeeId}
@@ -2368,6 +2899,18 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                         {s.isInternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fef3c7', color: '#92400e', flexShrink: 0, lineHeight: '13px' }}>IC</span>}
                                         {s.isExternalCasual && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#fed7aa', color: '#c2410c', flexShrink: 0, lineHeight: '13px' }}>EC</span>}
                                         {issUnitIdsSet.has(s.unitId) && <span style={{ fontSize: '8px', fontWeight: 700, padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', flexShrink: 0, lineHeight: '13px' }}>ISS</span>}
+                                        {issUnitIdsSet.has(s.unitId) && (
+                                          <button
+                                            className="no-print"
+                                            onClick={e => { e.stopPropagation(); const key = `${s.employeeId}:${slot}`; setNoteEditorText(sessionData.staffNotes[key] ?? ''); setNoteEditorModal({ empId: s.employeeId, name: s.employeeName, slot }); }}
+                                            title={sessionData.staffNotes[`${s.employeeId}:${slot}`] ? `ISS note: ${sessionData.staffNotes[`${s.employeeId}:${slot}`]}` : 'Add ISS support note'}
+                                            style={{
+                                              border: 'none', background: 'none', cursor: 'pointer',
+                                              fontSize: '10px', color: sessionData.staffNotes[`${s.employeeId}:${slot}`] ? '#6d28d9' : '#9ca3af', padding: '0 1px', lineHeight: 1,
+                                              display: 'inline-flex', alignItems: 'center',
+                                            }}
+                                          >📝</button>
+                                        )}
                                         <button
                                           className="no-print"
                                           onClick={e => { e.stopPropagation(); const t = getStaffTime(s); setTimeEditorStart(t.start); setTimeEditorEnd(t.end); setTimeEditorLunchStart(t.lunchStart ?? ''); setTimeEditorLunchEnd(t.lunchEnd ?? ''); setTimeEditorOvertime(sessionData.staffTimeOverrides[s.employeeId]?.isOvertime ?? false); setTimeEditorComment(sessionData.staffTimeOverrides[s.employeeId]?.comment ?? ''); setTimeEditorModal({ empId: s.employeeId, name: s.employeeName, rosterStart: formatRosterTime(s.startTime) || '', rosterEnd: formatRosterTime(s.endTime) || '' }); }}
@@ -2398,7 +2941,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                           {staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}{staffTime.end ? `-${to12h(staffTime.end)}` : '→'}
                                         </span>
                                       )}
-                                      {staffTime.lunchStart && (
+                                      {staffTime.lunchStart && showLunchIndicator(staffTime.lunchStart, staffTime.lunchSource) && (
                                         <span style={{ fontSize: '9px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>
                                           🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}
                                         </span>
@@ -2408,14 +2951,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                   </div>
                                 );
                               })}
-                              {roomStaff.length === 0 && getVisitorsForSlotRoom(slot, room.id).length === 0 && (
+                              {roomStaff.length === 0 && getActiveVisitorsForSlotRoom(slot, room.id).length === 0 && (
                                 <span style={{ fontSize: '9px', color: '#93c5fd', fontStyle: 'italic' }}>
                                   {dragOver === `${room.id}:${slot}` ? 'Drop here' : '-'}
                                 </span>
                               )}
 
-                              {/* Visitor chips */}
-                              {getVisitorsForSlotRoom(slot, room.id).map(v => {
+                              {/* Visitor chips - show active visitors for this slot even if stored under a different sign-in slot */}
+                              {getActiveVisitorsForSlotRoom(slot, room.id).map(v => {
                                 const slotMins = slotToMins(slot);
                                 const entered = slotToMins(v.enteredAt);
                                 const exited = v.exitedAt ? slotToMins(v.exitedAt) : null;
@@ -2432,9 +2975,19 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '3px', width: '100%' }}>
                                       <span style={{ fontSize: '9px' }}>✎</span>
                                       <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{v.name}</span>
+                                      {v.wwccNumber && (
+                                        <span
+                                          title={`WWCC: ${v.wwccNumber}`}
+                                          style={{ fontSize: '8px', padding: '0 3px', borderRadius: '3px', backgroundColor: '#ede9fe', color: '#6d28d9', fontWeight: 600, flexShrink: 0 }}
+                                        >WWCC</span>
+                                      )}
                                       <button
                                         className="no-print"
-                                        onClick={e => { e.stopPropagation(); removeVisitor(slot, room.id, v.id); }}
+                                        onClick={e => {
+                                          e.stopPropagation();
+                                          const storageSlot = findVisitorStorageSlot(room.id, v.id) ?? slot;
+                                          removeVisitor(storageSlot, room.id, v.id);
+                                        }}
                                         title="Remove visitor entry"
                                         style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '9px', color: '#dc2626', padding: '0 1px', lineHeight: 1, marginLeft: 'auto', fontWeight: 700 }}
                                       >✕</button>
@@ -2446,7 +2999,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                         : isActive && (
                                           <button
                                             className="no-print"
-                                            onClick={e => { e.stopPropagation(); openVisitorExitModal(slot, room.id, room.name, v.id, v.name); }}
+                                            onClick={e => {
+                                              e.stopPropagation();
+                                              const storageSlot = findVisitorStorageSlot(room.id, v.id) ?? slot;
+                                              openVisitorExitModal(storageSlot, room.id, room.name, v.id, v.name);
+                                            }}
                                             title="Record exit time"
                                             style={{
                                               fontSize: '8px', padding: '0px 4px', borderRadius: '3px',
@@ -2578,7 +3135,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px', minHeight: '20px' }}>
                       {getAdditionalDutiesStaff(slot).map(s => {
                         const hasTimeOverride = !!sessionData.staffTimeOverrides[String(s.employeeId)];
-                        const staffTime = getStaffTime(s);
+                        const staffTime = getStaffTimeForSlot(s, slot);
                         return (
                           <div key={s.employeeId} style={{ position: 'relative', display: 'inline-block' }}>
                             <div
@@ -2605,7 +3162,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                                   title="Edit time" style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '8px', color: hasTimeOverride ? '#6366f1' : '#9ca3af', padding: '0 1px', lineHeight: 1 }}>⏱</button>
                               </div>
                               {staffTime.start && <span style={{ fontSize: '7px', color: staffTime.source === 'deputy' ? '#0369a1' : hasTimeOverride ? '#6366f1' : '#b45309', fontWeight: hasTimeOverride ? 700 : 400 }}>{staffTime.source === 'deputy' ? '● ' : ''}{to12h(staffTime.start)}{staffTime.end ? `-${to12h(staffTime.end)}` : '→'}</span>}
-              {staffTime.lunchStart && <span style={{ fontSize: '7px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}</span>}
+              {staffTime.lunchStart && showLunchIndicator(staffTime.lunchStart, staffTime.lunchSource) && <span style={{ fontSize: '7px', color: staffTime.lunchEnd ? '#0369a1' : '#d97706' }}>🍝 {to12h(staffTime.lunchStart)}{staffTime.lunchEnd ? `-${to12h(staffTime.lunchEnd)}` : '...'}</span>}
                             </div>
 
                           </div>
@@ -2864,6 +3421,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '13px', color: '#374151', minWidth: '56px' }}>WWCC</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. WWC123456789"
+                    value={visitorWWCC}
+                    onChange={e => setVisitorWWCC(e.target.value)}
+                    style={{ fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1, outline: 'none' }}
+                  />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <span style={{ fontSize: '13px', color: '#374151', minWidth: '56px' }}>Enter</span>
                   <input type="time" value={visitorTime} onChange={e => setVisitorTime(e.target.value)}
                     style={{ fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px', flex: 1 }} />
@@ -2970,6 +3537,37 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                 onClick={() => { clearStaffTimeOverride(timeEditorModal.empId); setTimeEditorModal(null); }}
                 style={{ padding: '9px 14px', borderRadius: '8px', border: '1px solid #fca5a5', backgroundColor: '#fee2e2', color: '#dc2626', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
               >Reset</button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* -- ISS note editor modal -- */}
+      {noteEditorModal && (
+        <>
+          <div className="no-print" style={{ position: 'fixed', inset: 0, zIndex: 999, backgroundColor: 'rgba(0,0,0,0.35)' }} onClick={() => setNoteEditorModal(null)} />
+          <div className="no-print" style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 1000, backgroundColor: 'white', borderRadius: '12px', padding: '16px', width: '320px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 700, color: '#2d5c18', fontSize: '14px' }}>{noteEditorModal.name} — ISS note</span>
+              <button onClick={() => setNoteEditorModal(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#9ca3af', padding: '0 2px', lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ fontSize: '12px', color: '#6b7280' }}>Record which room/child this ISS staff member is supporting. This note appears on the Reg 151 report.</div>
+            <textarea
+              value={noteEditorText}
+              onChange={e => setNoteEditorText(e.target.value)}
+              placeholder="e.g. Supporting Toddlers room"
+              rows={3}
+              style={{ fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '8px', resize: 'vertical', fontFamily: 'inherit' }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => { updateStaffNote(noteEditorModal.empId, noteEditorModal.slot, noteEditorText); setNoteEditorModal(null); }}
+                style={{ flex: 1, padding: '9px', borderRadius: '8px', border: 'none', backgroundColor: '#2d5c18', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+              >Save note</button>
+              <button
+                onClick={() => setNoteEditorModal(null)}
+                style={{ padding: '9px 14px', borderRadius: '8px', border: '1px solid #d1d5db', backgroundColor: '#f9fafb', color: '#374151', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
+              >Cancel</button>
             </div>
           </div>
         </>

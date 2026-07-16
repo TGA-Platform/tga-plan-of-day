@@ -1,0 +1,687 @@
+﻿[
+  {
+    "Employee": 708,
+    "OperationalUnit": 263,
+    "StartTime": "08:30",
+    "EndTime": "16:30",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 263,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] Centre Director",
+        "OperationalUnitName": "Centre Director"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 820,
+    "OperationalUnit": 264,
+    "StartTime": "09:30",
+    "EndTime": "17:30",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 819,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/820/135/135",
+        "Employee": 820,
+        "Pronouns": 0,
+        "DisplayName": "Emily Sergi",
+        "CustomPronouns": "",
+        "EmployeeProfile": 820
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 264,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] Assistant Director",
+        "OperationalUnitName": "Assistant Director"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1762,
+    "OperationalUnit": 338,
+    "StartTime": "07:30",
+    "EndTime": "16:30",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1761,
+        "Photo": "https://d11hmzhsuwuq9f.cloudfront.net/my/avatar?name=A+W&width=135&height=135",
+        "Employee": 1762,
+        "Pronouns": 0,
+        "DisplayName": "Alyssa Warburton",
+        "CustomPronouns": "",
+        "EmployeeProfile": 1762
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 338,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] Ed Leader",
+        "OperationalUnitName": "Ed Leader"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1926,
+    "OperationalUnit": 277,
+    "StartTime": "07:00",
+    "EndTime": "14:30",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1924,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/1926/135/135",
+        "Employee": 1926,
+        "Pronouns": 0,
+        "DisplayName": "Cheryl Brownlee",
+        "CustomPronouns": null,
+        "EmployeeProfile": 1926
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 277,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] Chef",
+        "OperationalUnitName": "Chef"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 2273,
+    "OperationalUnit": 278,
+    "StartTime": "09:00",
+    "EndTime": "14:00",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 2271,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/2273/135/135",
+        "Employee": 2273,
+        "Pronouns": 0,
+        "DisplayName": "Sarah Kamara",
+        "CustomPronouns": null,
+        "EmployeeProfile": 2273
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 278,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] ISS",
+        "OperationalUnitName": "ISS"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1678,
+    "OperationalUnit": 265,
+    "StartTime": "08:45",
+    "EndTime": "16:45",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1677,
+        "Photo": "https://d11hmzhsuwuq9f.cloudfront.net/my/avatar?name=M+S&width=135&height=135",
+        "Employee": 1678,
+        "Pronouns": 0,
+        "DisplayName": "Mavis Shaw",
+        "CustomPronouns": "",
+        "EmployeeProfile": 1678
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 265,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 0-1 Explorers",
+        "OperationalUnitName": "0-1 Explorers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 2155,
+    "OperationalUnit": 265,
+    "StartTime": "10:00",
+    "EndTime": "18:00",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 2153,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/2155/135/135",
+        "Employee": 2155,
+        "Pronouns": 0,
+        "DisplayName": "Bianca Morley",
+        "CustomPronouns": null,
+        "EmployeeProfile": 2155
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 265,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 0-1 Explorers",
+        "OperationalUnitName": "0-1 Explorers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1675,
+    "OperationalUnit": 266,
+    "StartTime": "09:15",
+    "EndTime": "17:15",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1674,
+        "Photo": "https://d11hmzhsuwuq9f.cloudfront.net/my/avatar?name=T+D&width=135&height=135",
+        "Employee": 1675,
+        "Pronouns": 0,
+        "DisplayName": "Tracy Dadisho",
+        "CustomPronouns": null,
+        "EmployeeProfile": 1675
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 266,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 1-2 Adventurers",
+        "OperationalUnitName": "1-2 Adventurers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1706,
+    "OperationalUnit": 266,
+    "StartTime": "06:45",
+    "EndTime": "14:45",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1705,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/1706/135/135",
+        "Employee": 1706,
+        "Pronouns": 0,
+        "DisplayName": "Tumarah Levinge-moore",
+        "CustomPronouns": null,
+        "EmployeeProfile": 1706
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 266,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 1-2 Adventurers",
+        "OperationalUnitName": "1-2 Adventurers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 2062,
+    "OperationalUnit": 266,
+    "StartTime": "08:00",
+    "EndTime": "17:00",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 2060,
+        "Photo": "https://d11hmzhsuwuq9f.cloudfront.net/my/avatar?name=N+G&width=135&height=135",
+        "Employee": 2062,
+        "Pronouns": 0,
+        "DisplayName": "Nicole Galas",
+        "CustomPronouns": null,
+        "EmployeeProfile": 2062
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 266,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 1-2 Adventurers",
+        "OperationalUnitName": "1-2 Adventurers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1657,
+    "OperationalUnit": 267,
+    "StartTime": "07:30",
+    "EndTime": "15:30",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1656,
+        "Photo": "https://d11hmzhsuwuq9f.cloudfront.net/my/avatar?name=C+D&width=135&height=135",
+        "Employee": 1657,
+        "Pronouns": 0,
+        "DisplayName": "Chloe Davis",
+        "CustomPronouns": null,
+        "EmployeeProfile": 1657
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 267,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 2-3 Voyagers",
+        "OperationalUnitName": "2-3 Voyagers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1835,
+    "OperationalUnit": 267,
+    "StartTime": "08:00",
+    "EndTime": "17:00",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1833,
+        "Photo": "https://d11hmzhsuwuq9f.cloudfront.net/my/avatar?name=H+S&width=135&height=135",
+        "Employee": 1835,
+        "Pronouns": 0,
+        "DisplayName": "Hayley Sheridan-Allis",
+        "CustomPronouns": "",
+        "EmployeeProfile": 1835
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 267,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 2-3 Voyagers",
+        "OperationalUnitName": "2-3 Voyagers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1878,
+    "OperationalUnit": 267,
+    "StartTime": "06:45",
+    "EndTime": "15:45",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1876,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/1878/135/135",
+        "Employee": 1878,
+        "Pronouns": 0,
+        "DisplayName": "Maddison Wright",
+        "CustomPronouns": null,
+        "EmployeeProfile": 1878
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 267,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 2-3 Voyagers",
+        "OperationalUnitName": "2-3 Voyagers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 857,
+    "OperationalUnit": 269,
+    "StartTime": "07:00",
+    "EndTime": "15:00",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 856,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/857/135/135",
+        "Employee": 857,
+        "Pronouns": 0,
+        "DisplayName": "Antonia Sergi",
+        "CustomPronouns": "",
+        "EmployeeProfile": 857
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 269,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 3-5 Achievers",
+        "OperationalUnitName": "3-5 Achievers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1676,
+    "OperationalUnit": 269,
+    "StartTime": "10:00",
+    "EndTime": "18:00",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1675,
+        "Photo": "https://d11hmzhsuwuq9f.cloudfront.net/my/avatar?name=K+H&width=135&height=135",
+        "Employee": 1676,
+        "Pronouns": 0,
+        "DisplayName": "Kali Hudson",
+        "CustomPronouns": null,
+        "EmployeeProfile": 1676
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 269,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 3-5 Achievers",
+        "OperationalUnitName": "3-5 Achievers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1930,
+    "OperationalUnit": 269,
+    "StartTime": "08:15",
+    "EndTime": "17:15",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1928,
+        "Photo": "https://d11hmzhsuwuq9f.cloudfront.net/my/avatar?name=T+S&width=135&height=135",
+        "Employee": 1930,
+        "Pronouns": 0,
+        "DisplayName": "Tatiana Salame",
+        "CustomPronouns": null,
+        "EmployeeProfile": 1930
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 269,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] 3-5 Achievers",
+        "OperationalUnitName": "3-5 Achievers"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 1942,
+    "OperationalUnit": 272,
+    "StartTime": "07:30",
+    "EndTime": "16:30",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 1940,
+        "Photo": "https://d11hmzhsuwuq9f.cloudfront.net/my/avatar?name=A+M&width=135&height=135",
+        "Employee": 1942,
+        "Pronouns": 0,
+        "DisplayName": "Ashlee Myles",
+        "CustomPronouns": "",
+        "EmployeeProfile": 1942
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 272,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] Annual Leave",
+        "OperationalUnitName": "Annual Leave"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  },
+  {
+    "Employee": 2031,
+    "OperationalUnit": 272,
+    "StartTime": "08:30",
+    "EndTime": "16:30",
+    "_DPMetaData": {
+      "System": "Roster",
+      "CreatorInfo": {
+        "Id": 707,
+        "Photo": "https://thegroveacademy.au.deputy.com/assets/php/image_preview.php/708/135/135",
+        "Employee": 708,
+        "Pronouns": 0,
+        "DisplayName": "Channtelle Yassir",
+        "CustomPronouns": null,
+        "EmployeeProfile": 708
+      },
+      "EmployeeInfo": {
+        "Id": 2029,
+        "Photo": "https://d11hmzhsuwuq9f.cloudfront.net/my/avatar?name=O+F&width=135&height=135",
+        "Employee": 2031,
+        "Pronouns": 0,
+        "DisplayName": "Olivia Fahim",
+        "CustomPronouns": "",
+        "EmployeeProfile": 2031
+      },
+      "SwapManageByInfo": [],
+      "OperationalUnitInfo": {
+        "Id": 272,
+        "Company": 20,
+        "CompanyName": "The Grove Academy - Spring Farm",
+        "LabelWithCompany": "[SF] Annual Leave",
+        "OperationalUnitName": "Annual Leave"
+      },
+      "HasRequestedOpenShift": false
+    },
+    "Comment": "",
+    "Open": false
+  }
+]
+

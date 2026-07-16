@@ -4,9 +4,10 @@
  * Allows manual time overrides. Saves to Supabase for the Reg 151 report.
  */
 import { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import type { RoomRatioStatus, FloatStaff, RosteredStaff } from '../types';
 import type { LunchBreakEntry, LunchWindow } from '../utils/lunchScheduler';
-import { generateLunchSchedule, DEFAULT_LUNCH_WINDOW } from '../utils/lunchScheduler';
+import { generateLunchSchedule, DEFAULT_LUNCH_WINDOW, parseShiftTime } from '../utils/lunchScheduler';
 import { loadCentreRules, getBreakWindow } from '../utils/centreRules';
 import { minsToHHMM, hhmmToMins } from '../utils/timeUtils';
 
@@ -150,8 +151,16 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
   const [loading, setLoading]     = useState(true);
   const [saving, setSaving]       = useState(false);
   const [saved, setSaved]         = useState(false);
-  const [editing, setEditing]     = useState<number | null>(null); // employeeId being edited
-  const [collapsed, setCollapsed] = useState(false);
+  const [editing, setEditing]         = useState<number | null>(null); // employeeId whose break time is being edited
+  const [editingCoverFor, setEditingCoverFor] = useState<number | null>(null); // employeeId whose coverer is being edited
+  const [collapsed, setCollapsed]     = useState(false);
+  const [printing, setPrinting]       = useState(false);
+
+  useEffect(() => {
+    if (printing) document.body.classList.add('lunch-printing');
+    else document.body.classList.remove('lunch-printing');
+    return () => { document.body.classList.remove('lunch-printing'); };
+  }, [printing]);
 
   // Load centre rules first, THEN load saved schedule or auto-generate
   // (must be a single effect to avoid race: rules must be resolved before generation)
@@ -246,6 +255,20 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
     setSaved(false);
   };
 
+  /** Return support staff (AD/Ed Leader) whose shift overlaps the given break window.
+   *  Used to let directors swap auto-assigned lunch coverers. */
+  function eligibleSupportCovers(entry: LunchBreakEntry): RosteredStaff[] {
+    const breakStart = hhmmToMins(entry.lunchStart);
+    const breakEnd   = hhmmToMins(entry.lunchEnd);
+    return (supportStaff ?? []).filter(s => {
+      const shiftStart = hhmmToMins(parseShiftTime(s.startTime));
+      const shiftEnd   = hhmmToMins(parseShiftTime(s.endTime));
+      // Shift must fully cover the break window, with a small buffer so the coverer
+      // is still on shift when the break ends.
+      return shiftStart <= breakStart && shiftEnd >= breakEnd + 5;
+    });
+  }
+
   const uncoveredCount = schedule.filter(e => e.needsCover && !e.coveredBy).length;
   const roomGroups = schedule.reduce<Record<string, LunchBreakEntry[]>>((acc, e) => {
     (acc[e.room] ??= []).push(e);
@@ -253,7 +276,32 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
   }, {});
 
   return (
-    <div className="rounded-2xl border overflow-hidden shadow-sm" style={{ borderColor: '#fde68a' }}>
+    <div className="rounded-2xl border overflow-hidden shadow-sm lunch-break-panel" style={{ borderColor: '#fde68a' }}>
+      <style>{`
+        /* Normal screen: hide the print-only view */
+        .lunch-print-view { display: none; }
+
+        @media print {
+          /* When printing the lunch plan, hide everything on the page except
+             the dedicated A4 print view container. */
+          body.lunch-printing > *:not(.lunch-print-container) { display: none !important; }
+          body.lunch-printing .lunch-print-container {
+            display: block !important;
+            position: static !important;
+            width: 100% !important;
+            height: auto !important;
+            overflow: visible !important;
+            background: white !important;
+          }
+          body.lunch-printing .lunch-print-view { display: block !important; }
+
+          /* Legacy fallback: if user prints without the portal class, still
+             keep the panel reasonably clean. */
+          .lunch-break-panel { box-shadow: none !important; border: 1px solid #d1d5db !important; }
+          .lunch-break-panel button, .lunch-break-panel .cursor-pointer { display: none !important; }
+          .lunch-break-panel .bg-white { display: block !important; }
+        }
+      `}</style>
       {/* Header */}
       <div
         className="px-4 py-3 flex items-center justify-between cursor-pointer select-none"
@@ -289,6 +337,21 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
             style={{ backgroundColor: saved ? '#16a34a' : '#d97706' }}
           >
             {saved ? '✓ Saved' : saving ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            onClick={() => {
+              setPrinting(true);
+              // Give React a tick to render the print view, then print.
+              setTimeout(() => {
+                window.print();
+                setTimeout(() => setPrinting(false), 500);
+              }, 50);
+            }}
+            className="text-xs px-2.5 py-1 rounded-lg border font-medium"
+            style={{ borderColor: '#fde68a', color: '#92400e', backgroundColor: 'white' }}
+            title="Print lunch break plan"
+          >
+            🖨 Print
           </button>
           <span className="text-xs" style={{ color: '#b45309' }}>{collapsed ? '▾' : '▴'}</span>
         </div>
@@ -378,7 +441,17 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
                         </div>
 
                         {/* RIGHT - cover person entering the room */}
-                        <div className="px-4 py-3 flex flex-col gap-1" style={{ backgroundColor: entry.coveredBy ? coverColor.bg + '88' : '#fef2f2' }}>
+                        <div
+                          className="px-4 py-3 flex flex-col gap-1"
+                          style={{ backgroundColor: entry.coveredBy ? coverColor.bg + '88' : '#fef2f2' }}
+                          onClick={() => {
+                            // Only support-type covers (or uncovered entries) can be swapped via this UI.
+                            // Float/ISS/surplus covers are authoritative from other systems.
+                            if (!entry.coveredBy || entry.coveredBy.type === 'support') {
+                              setEditingCoverFor(editingCoverFor === entry.employeeId ? null : entry.employeeId);
+                            }
+                          }}
+                        >
                           {entry.coveredBy ? (
                             <>
                               <div className="flex items-center gap-2">
@@ -387,6 +460,9 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
                                   {coverColor.label}
                                 </span>
                                 <span className="text-sm font-semibold" style={{ color: '#111827' }}>{entry.coveredBy.name}</span>
+                                {!entry.coveredBy || entry.coveredBy.type === 'support' ? (
+                                  <span className="text-xs no-print" style={{ color: '#9ca3af', marginLeft: 'auto' }}>✎ Swap</span>
+                                ) : null}
                               </div>
                               <div className="text-xs" style={{ color: '#6b7280' }}>
                                 Enters <strong>{room}</strong>
@@ -403,7 +479,40 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
                             <div className="flex flex-col gap-1">
                               <span className="text-xs font-semibold" style={{ color: '#dc2626' }}>⚠ No cover available</span>
                               <span className="text-xs" style={{ color: '#9ca3af' }}>Ratio may drop during this break.</span>
-                              <span className="text-xs" style={{ color: '#9ca3af' }}>Assign a float to cover.</span>
+                              <span className="text-xs no-print" style={{ color: '#92400e' }}>Click to assign AD / Ed Leader cover</span>
+                            </div>
+                          )}
+
+                          {/* Cover swap dropdown for support-type covers and uncovered breaks */}
+                          {editingCoverFor === entry.employeeId && (
+                            <div className="mt-2 no-print" onClick={e => e.stopPropagation()}>
+                              <select
+                                className="text-xs border rounded-lg px-2 py-1 w-full"
+                                style={{ borderColor: '#fed7aa', color: '#9a3412', backgroundColor: 'white' }}
+                                value={entry.coveredBy?.employeeId ?? ''}
+                                onChange={e => {
+                                  const id = e.target.value ? Number(e.target.value) : null;
+                                  if (!id) {
+                                    updateEntry(entry.employeeId, { coveredBy: null, needsCover: true });
+                                  } else {
+                                    const staff = eligibleSupportCovers(entry).find(s => s.employeeId === id);
+                                    if (staff) {
+                                      updateEntry(entry.employeeId, {
+                                        coveredBy: { employeeId: staff.employeeId, name: staff.employeeName, type: 'support' },
+                                        needsCover: false,
+                                      });
+                                    }
+                                  }
+                                  setEditingCoverFor(null);
+                                }}
+                              >
+                                <option value="">— No AD/EL cover —</option>
+                                {eligibleSupportCovers(entry).map(s => (
+                                  <option key={s.employeeId} value={s.employeeId}>
+                                    {s.employeeName} ({s.unitName})
+                                  </option>
+                                ))}
+                              </select>
                             </div>
                           )}
                         </div>
@@ -419,6 +528,75 @@ export default function LunchBreakPanel({ centreId, date, roomStatuses, floats, 
             </div>
           )}
         </div>
+      )}
+
+      {/* A4 print-only view rendered to document.body via portal */}
+      {printing && createPortal(
+        <div className="lunch-print-container">
+          <div className="lunch-print-view" style={{ fontFamily: 'Arial, sans-serif', padding: '24px', color: '#1f2937' }}>
+            <div style={{ textAlign: 'center', marginBottom: '20px', borderBottom: '2px solid #92400e', paddingBottom: '12px' }}>
+              <h1 style={{ fontSize: '22px', fontWeight: 'bold', color: '#92400e', margin: 0 }}>Lunch Break Plan</h1>
+              <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '6px' }}>
+                Centre: {centreId} · Date: {date} · Window: {window_.start}-{window_.end} ({window_.durationMins} min breaks)
+              </div>
+            </div>
+
+            {Object.entries(roomGroups).map(([room, entries]) => (
+              <div key={room} style={{ marginBottom: '24px', pageBreakInside: 'avoid' }}>
+                <h2 style={{ fontSize: '14px', fontWeight: 'bold', color: '#92400e', backgroundColor: '#fffbeb', padding: '6px 10px', borderRadius: '6px', marginBottom: '10px' }}>
+                  {room} — {entries.length} break{entries.length === 1 ? '' : 's'} scheduled
+                </h2>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#f3f4f6' }}>
+                      <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #d1d5db', width: '30%' }}>Staff Member & Shift</th>
+                      <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #d1d5db', width: '22%' }}>Lunch Break</th>
+                      <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #d1d5db', width: '28%' }}>Cover Person</th>
+                      <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #d1d5db', width: '20%' }}>Cover Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {entries.map(entry => (
+                      <tr key={entry.employeeId}>
+                        <td style={{ padding: '8px', borderBottom: '1px solid #e5e7eb', verticalAlign: 'top' }}>
+                          <div style={{ fontWeight: 600 }}>{entry.name}</div>
+                          <div style={{ color: '#6b7280' }}>{entry.shiftStart}-{entry.shiftEnd}</div>
+                        </td>
+                        <td style={{ padding: '8px', borderBottom: '1px solid #e5e7eb', verticalAlign: 'top' }}>
+                          {entry.lunchStart} - {entry.lunchEnd} ({window_.durationMins} min)
+                        </td>
+                        <td style={{ padding: '8px', borderBottom: '1px solid #e5e7eb', verticalAlign: 'top' }}>
+                          {entry.coveredBy ? (
+                            <div>
+                              <div style={{ fontWeight: 600 }}>{entry.coveredBy.name}</div>
+                              <div style={{ color: '#6b7280', fontSize: '10px' }}>Enters {entry.room}</div>
+                            </div>
+                          ) : (
+                            <span style={{ color: '#dc2626', fontWeight: 600 }}>⚠ No cover</span>
+                          )}
+                        </td>
+                        <td style={{ padding: '8px', borderBottom: '1px solid #e5e7eb', verticalAlign: 'top' }}>
+                          {entry.coveredBy ? `${entry.lunchStart} - ${entry.lunchEnd}` : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+
+            {uncoveredCount > 0 && (
+              <div style={{ marginTop: '20px', padding: '12px', backgroundColor: '#fef2f2', borderRadius: '6px', color: '#dc2626', fontSize: '12px', fontWeight: 600 }}>
+                ⚠ {uncoveredCount} uncovered break{uncoveredCount === 1 ? '' : 's'} need attention.
+              </div>
+            )}
+
+            <div style={{ marginTop: '30px', fontSize: '10px', color: '#9ca3af', textAlign: 'center' }}>
+              Generated from Plan of Day · {new Date().toLocaleString('en-AU', { timeZone: 'Australia/Sydney' })}
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

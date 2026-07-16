@@ -19,8 +19,11 @@ export const PAGES: PagePermission[] = [
   { key: 'summary',    label: 'All Centres Summary',    description: 'Cross-centre overview' },
   { key: 'week',       label: 'Week Overview',          description: 'Week-at-a-glance staffing view' },
   { key: 'reporting',  label: 'Reports',                description: 'Attendance & compliance reports' },
+  { key: 'roster',     label: 'Roster Builder',         description: 'Weekly roster drafting & publishing' },
+  { key: 'timesheets', label: 'Timesheets',             description: 'Review and approve staff timesheets' },
   { key: 'config',     label: 'Centre Configuration',   description: 'Room & break configuration' },
   { key: 'settings',   label: 'Settings / User Mgmt',   description: 'User management & role permissions' },
+  { key: 'kiosk_news', label: 'Kiosk News',             description: 'Post announcements to the staff kiosk' },
 ];
 
 export type RolePermissions = Record<string, boolean>;
@@ -40,8 +43,11 @@ export function getBuiltinDefaults(role: AppRole): RolePermissions {
         summary:   true,
         week:      true,
         reporting: true,
+        roster:    true,
+        timesheets:true,
         config:    false,
         settings:  false,
+        kiosk_news:true,
       };
     case 'assistant_director':
       // Assistant Directors: Plan of Day + Ratio Check + Summary. No reports/config/settings.
@@ -51,6 +57,8 @@ export function getBuiltinDefaults(role: AppRole): RolePermissions {
         summary:   true,
         week:      false,
         reporting: false,
+        roster:    false,
+        timesheets:false,
         config:    false,
         settings:  false,
       };

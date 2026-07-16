@@ -1,6 +1,7 @@
 /**
  * Cron job: refresh Z Staffing external casuals for all TGA centres.
  * Run every 5 minutes. Fetches live from Z API and caches in Supabase z_casuals.
+ * Caches the past 7 days plus the next 6 days so historical dates still load.
  */
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
@@ -104,6 +105,25 @@ function parseStatus(raw) {
   return raw.split('|')[0];
 }
 
+function hhmmToMins(t) {
+  const [h, m] = t.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+/** Compute paid hours from Z's fields: prefer totalHours, otherwise duration minus break. */
+function paidHoursFromJob(j) {
+  const totalHours = Number(j.totalHours);
+  if (totalHours > 0) return totalHours;
+  const startMs = parseInt(j.startDate);
+  const endMs = parseInt(j.endDate);
+  if (!startMs || !endMs || endMs <= startMs) return 0;
+  const durationHrs = (endMs - startMs) / 3600000;
+  const breakMins = Number(j.finalBreakDuration ?? j.breakDuration ?? 0);
+  const breakHrs = Math.max(0, Math.min(breakMins / 60, durationHrs));
+  return durationHrs - breakHrs;
+}
+
 async function upsertToSupabase(rows) {
   if (!rows.length) return;
   // Use z_job_id as the conflict target so existing rows are updated.
@@ -140,6 +160,9 @@ const JOB_QUERY = `
         certificationLevel
         educatorCertificationLevel
         hourlyRateUsed
+        totalHours
+        breakDuration
+        finalBreakDuration
         educatorProfile {
           givenName
           surname
@@ -178,6 +201,9 @@ async function fetchCentre(centre, dates, auth) {
         const profile  = j.educatorProfile;
         const name     = profile ? `${profile.givenName} ${profile.surname}`.trim() : null;
         const certLevel = j.educatorCertificationLevel || profile?.certificationLevel || j.certificationLevel || 'NONE';
+        const fetchedRate = Number(j.hourlyRateUsed) || 0;
+        const costCents = Math.round(fetchedRate * paidHoursFromJob(j));
+
         return {
           zJobId:      j.id,
           name:        name || null,
@@ -186,7 +212,7 @@ async function fetchCentre(centre, dates, auth) {
           status:      parseStatus(j.status),
           isFilled:    j.isFilled,
           certLevel,
-          costCents:   Math.round((j.hourlyRateUsed ?? 0) * ((parseInt(j.endDate) - parseInt(j.startDate)) / 3600000)),
+          costCents,
           workspaceId: j.workspaceId,
         };
       })
@@ -226,7 +252,7 @@ export default async function handler(req, res) {
 
   const baseDate = req.query.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
   const dates = [];
-  for (let i = 0; i < 7; i++) {
+  for (let i = -7; i < 7; i++) {
     dates.push(addDays(baseDate, i));
   }
 
@@ -253,6 +279,7 @@ export default async function handler(req, res) {
     }
 
     await upsertToSupabase(rows);
+    console.log(`[cron-z-casuals] Refreshed ${rows.length} rows using ${auth.source}`);
     return res.status(200).json({ ok: true, dates, centres: centres.length, rows: rows.length });
   } catch (err) {
     console.error('[cron-z-casuals] Fatal:', err.message);

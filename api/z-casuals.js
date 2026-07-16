@@ -119,6 +119,19 @@ function epochToTime(ms) {
   });
 }
 
+/** Compute paid hours from Z's fields: prefer totalHours, otherwise duration minus break. */
+function paidHoursFromJob(j) {
+  const totalHours = Number(j.totalHours);
+  if (totalHours > 0) return totalHours;
+  const startMs = parseInt(j.startDate);
+  const endMs = parseInt(j.endDate);
+  if (!startMs || !endMs || endMs <= startMs) return 0;
+  const durationHrs = (endMs - startMs) / 3600000;
+  const breakMins = Number(j.finalBreakDuration ?? j.breakDuration ?? 0);
+  const breakHrs = Math.max(0, Math.min(breakMins / 60, durationHrs));
+  return durationHrs - breakHrs;
+}
+
 /** Parse "Filled|1782259200000" → "Filled" */
 function parseStatus(raw) {
   if (!raw) return 'Unknown';
@@ -178,6 +191,9 @@ const JOB_QUERY = `
         certificationLevel
         educatorCertificationLevel
         hourlyRateUsed
+        totalHours
+        breakDuration
+        finalBreakDuration
         educatorProfile {
           givenName
           surname
@@ -203,7 +219,11 @@ function shapeRows(dbRows) {
   }));
 }
 
-async function readCached(centre, date) {
+function sydneyToday() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+}
+
+async function readCached(centre, date, allowStale = false) {
   const cacheUrl = `${SUPABASE_URL}/rest/v1/z_casuals?centre=eq.${encodeURIComponent(centre)}&date=eq.${date}&select=*&order=fetched_at.desc`;
   const cacheResp = await fetch(cacheUrl, {
     headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
@@ -211,8 +231,10 @@ async function readCached(centre, date) {
   if (!cacheResp.ok) return null;
   const cached = await cacheResp.json();
   if (!cached?.length) return null;
-  const newest = new Date(cached[0].fetched_at).getTime();
-  if (Date.now() - newest > 30 * 60 * 1000) return null;
+  if (!allowStale) {
+    const newest = new Date(cached[0].fetched_at).getTime();
+    if (Date.now() - newest > 30 * 60 * 1000) return null;
+  }
   return shapeRows(cached);
 }
 
@@ -238,11 +260,8 @@ async function fetchFromZAndUpsert(centre, date, auth) {
   const results = dayJobs
     .filter(j => !j.isDraft)
     .map(j => {
-      const startMs  = parseInt(j.startDate);
-      const endMs    = parseInt(j.endDate);
-      const durationHrs = (endMs - startMs) / 3600000;
-      const hourlyRate  = j.hourlyRateUsed ?? 0;
-      const costCents   = Math.round(hourlyRate * durationHrs);
+      const hourlyRate = Number(j.hourlyRateUsed) || 0;
+      const costCents  = Math.round(hourlyRate * paidHoursFromJob(j));
 
       const profile  = j.educatorProfile;
       const name     = profile
@@ -331,8 +350,11 @@ export default async function handler(req, res) {
     return res.status(200).json([]);
   }
 
+  const today = sydneyToday();
+  const isPastDate = date < today;
+
   try {
-    const cached = await readCached(normCentre, date);
+    const cached = await readCached(normCentre, date, isPastDate);
     if (cached) return res.status(200).json(cached);
     return res.status(200).json([]);
   } catch (err) {

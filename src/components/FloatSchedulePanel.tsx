@@ -206,14 +206,15 @@ function buildInitialSchedule(
    * - Ratio satisfied         -> programming cover for next available staff member
    * Consecutive steps with the same assignment are merged into one block.
    */
-  function buildSegment(from: number, to: number): void {
+  function buildSegment(from: number, to: number, allowRatio = true): void {
     if (from >= to) return;
     const STEP = 15;
     let cur = from;
 
     while (cur < to) {
-      // Check for ratio shortage at this point
-      const shortRoom = suggestRoom(cur, Math.min(cur + STEP, to), children, statuses);
+      // Check for ratio shortage at this point (disabled inside the lunch window so
+      // lunch covers are not auto-converted to ratio covers)
+      const shortRoom = allowRatio ? suggestRoom(cur, Math.min(cur + STEP, to), children, statuses) : null;
 
       if (shortRoom) {
         // Extend ratio block while the same room is still short
@@ -285,9 +286,9 @@ function buildInitialSchedule(
   for (let i = 0; i < breakSlots.length; i++) {
     const { staff, breakStart } = breakSlots[i];
     const breakEnd = Math.min(breakStart + breakDuration, lunchWindowEnd);
-    // Dynamic gap before this break (inside the lunch window)
+    // Dynamic gap before this break (inside the lunch window) — no auto ratio covers
     if (cursor < breakStart - 1) {
-      buildSegment(cursor, breakStart);
+      buildSegment(cursor, breakStart, false);
     }
     blocks.push({
       id: uid(), type: 'break',
@@ -323,9 +324,9 @@ function buildInitialSchedule(
     cursor += breakDuration;
   }
 
-  // Dynamic gap remaining inside lunch window after last break
+  // Dynamic gap remaining inside lunch window after last break — no auto ratio covers
   if (hasLunchWindow && cursor < lunchWindowEnd - 1) {
-    buildSegment(cursor, lunchWindowEnd);
+    buildSegment(cursor, lunchWindowEnd, false);
     cursor = lunchWindowEnd;
   } else if (hasLunchWindow && cursor < lunchWindowEnd) {
     cursor = lunchWindowEnd;
@@ -366,10 +367,11 @@ function BlockRow({
   const effectiveCoverType = block.coverType ?? inferCoverType(block.notes);
   const isCleaning = effectiveCoverType === 'cleaning';
   const isOwnLunch = effectiveCoverType === 'own-lunch';
+  const isRatio    = effectiveCoverType === 'ratio';
   const typeLabel: Record<BlockType, string> = {
     start: '🌅 Start of shift',
     end:   '🌆 End of shift',
-    break: effectiveCoverType ? coverTypeLabel[effectiveCoverType] : 'â˜• Break cover',
+    break: effectiveCoverType ? coverTypeLabel[effectiveCoverType] : 'Break cover',
   };
   const typeColour: Record<BlockType, string> = {
     start: '#E2F1DA',
@@ -447,8 +449,8 @@ function BlockRow({
           </div>
         )}
 
-        {/* Staff covering — hidden for cleaning/own-lunch */}
-        {block.type === 'break' && !isCleaning && !isOwnLunch && (
+        {/* Staff covering — hidden for cleaning/own-lunch/ratio */}
+        {block.type === 'break' && !isCleaning && !isOwnLunch && !isRatio && (
           <>
             <div>
               <label className="text-xs mb-1 block" style={{ color: '#596570' }}>Covering staff member</label>
@@ -479,7 +481,23 @@ function BlockRow({
             <label className="text-xs mb-1 block font-medium" style={{ color: '#596570' }}>Cover type</label>
             <select
               value={block.coverType ?? inferCoverType(block.notes) ?? ''}
-              onChange={e => onChange({ ...block, coverType: (e.target.value as CoverType) || undefined })}
+              onChange={e => {
+                const newType = (e.target.value as CoverType) || undefined;
+                // Ratio cover means the float is added to the room to meet ratio —
+                // they are not covering a specific staff member, and notes are cleared.
+                if (newType === 'ratio') {
+                  onChange({
+                    ...block,
+                    coverType: newType,
+                    coveringEmployeeId: null,
+                    coveringEmployeeName: '',
+                    coveringEmployeeRoom: '',
+                    notes: '',
+                  });
+                } else {
+                  onChange({ ...block, coverType: newType });
+                }
+              }}
               className={inputCls} style={inputStyle}>
               <option value="">— select type —</option>
               <option value="lunch">🍽 Lunch / break cover</option>
@@ -501,8 +519,9 @@ function BlockRow({
               onChange({
                 ...block,
                 notes: newNotes,
-                // Auto-select cover type from notes if not already manually set
-                ...(inferred && !block.coverType ? { coverType: inferred } : {}),
+                // Auto-select cover type from notes so they stay in sync.
+                // e.g. "Lunch break cover" notes must default to lunch cover type.
+                ...(inferred ? { coverType: inferred } : {}),
               });
             }}
             placeholder="e.g. additional details"

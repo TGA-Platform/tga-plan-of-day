@@ -22,7 +22,7 @@ interface RatioCheckSession {
   comments: Record<string, string>;
   familyGroupings: unknown[];
   staffMoves: Record<string, string>;       // "${empId}:${slot}" → roomId | special
-  staffTimeOverrides: Record<string, { start: string; end: string }>;
+  staffTimeOverrides: Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }> }>;
 }
 
 type ActivityKey = '__additional__' | '__programming__' | '__lunch__' | '__cleaning__';

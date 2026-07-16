@@ -25,7 +25,9 @@ export async function fetchEmployeeNames(ids: number[]): Promise<Record<number, 
         const employees = await res.json();
         if (Array.isArray(employees)) {
           for (const emp of employees) {
-            const name = emp.DisplayName || `${emp.FirstName || ''} ${emp.LastName || ''}`.trim() || `Staff #${emp.Id}`;
+            const name = (emp.FirstName && emp.LastName)
+              ? `${emp.FirstName} ${emp.LastName}`.trim()
+              : (emp.DisplayName || `Staff #${emp.Id}`);
             employeeCache[emp.Id] = name;
           }
         }
@@ -51,11 +53,12 @@ export async function fetchRosters(date: string, unitIds: number[], force = fals
     });
     
     if (!res.ok) {
-      console.error('Deputy proxy failed:', res.status, await res.text());
-      throw new Error(`Deputy proxy ${res.status}`);
+      const text = await res.text().catch(() => '');
+      console.error('Deputy proxy failed:', res.status, text);
+      throw new Error(`Deputy proxy ${res.status}: ${text || 'empty response'}`);
     }
-    
-    const rosters = await res.json();
+
+    const rosters = await res.json().catch(() => []);
     if (!Array.isArray(rosters) || rosters.length === 0) return [];
     
     // Get employee names
@@ -71,16 +74,23 @@ export async function fetchRosters(date: string, unitIds: number[], force = fals
         if (uName.includes('study time')) return false;
         return true;
       })
-      .map((r: any) => ({
-        employeeId:    r.Employee,
-        employeeName:  r._DPMetaData?.EmployeeInfo?.DisplayName || names[r.Employee] || `Staff #${r.Employee}`,
-        startTime:     r.StartTime || '',
-        endTime:       r.EndTime   || '',
-        unitId:        r.OperationalUnit,
-        unitName:      r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '',
-        isSplitShift:  r.isSplitShift ?? false,
-        splitSegments: r.splitSegments?.map((s: any) => ({ startTime: s.StartTime, endTime: s.EndTime })) ?? undefined,
-      }));
+      .map((r: any) => {
+        const empInfo = r._DPMetaData?.EmployeeInfo;
+        const displayName = empInfo?.DisplayName || '';
+        const fullName = (empInfo?.FirstName && empInfo?.LastName)
+          ? `${empInfo.FirstName} ${empInfo.LastName}`.trim()
+          : '';
+        return {
+          employeeId:    r.Employee,
+          employeeName:  names[r.Employee] || fullName || displayName || `Staff #${r.Employee}`,
+          startTime:     r.StartTime || '',
+          endTime:       r.EndTime   || '',
+          unitId:        r.OperationalUnit,
+          unitName:      r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '',
+          isSplitShift:  r.isSplitShift ?? false,
+          splitSegments: r.splitSegments?.map((s: any) => ({ startTime: s.StartTime, endTime: s.EndTime })) ?? undefined,
+        };
+      });
 
     // Dedup and time conversion is handled server-side in api/deputy-rosters.js
     return mapped;

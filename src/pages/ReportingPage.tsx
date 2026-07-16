@@ -9,8 +9,8 @@
  * Scope: individual centre | cluster | all centres
  * Reports: Educator Daily Record | Ratio Report | Trends
  */
-import { useState, useCallback, useRef } from 'react';
-import { format } from 'date-fns';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { format, parseISO, startOfWeek, isAfter, isBefore, add } from 'date-fns';
 function safeFormat(d: Date | string | null | undefined, fmt: string): string {
   try {
     if (!d) return '--';
@@ -20,10 +20,12 @@ function safeFormat(d: Date | string | null | undefined, fmt: string): string {
   } catch { return '--'; }
 }
 import { useNavigate } from 'react-router-dom';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import Layout from '../components/Layout';
 import { CENTRES } from '../config';
 import { getUser, getAllowedCentres } from '../auth';
 import { calcRequiredStaff, parseAgeMonths } from '../utils/ratioEngine';
+import type { ExternalCasualMeta } from '../types';
 // ─── Clusters ─────────────────────────────────────────────────────────────────
 const CLUSTERS: Record<string, string[]> = {
   'South West':   ['mount-annan','spring-farm','denham-court','ed-park-1','ed-park-2','wilton'],
@@ -73,6 +75,17 @@ interface WwccExpiryRow {
   exemptReason?: 'under_18' | 'kitchen'; // why they have no WWCC (exempt)
 }
 
+interface CasualDayRow {
+  date: string;
+  campus: string;
+  centreId: string;
+  internalCount: number;      // number of internal casual shifts
+  internalHours: number;      // total internal casual hours
+  externalCount: number;      // number of external (Z) casual shifts
+  externalHours: number;      // total external casual hours
+  externalCostCents: number;  // total external casual cost for the day
+}
+
 interface OccupancyRow {
   date:           string;
   campus:         string;
@@ -85,13 +98,14 @@ interface OccupancyRow {
 }
 
 interface RosterSlotData {
-  time:        string;
-  totalDays:   number;
-  sumChildren: number;
-  sumStaff:    number;    // floor staff = room + floats (used for surplus)
-  sumOffFloor: number;    // non-ratio staff (directors, chefs, admin) on shift
-  sumISS:      number;    // ISS staff on shift (shown separately, not in ratio count)
-  sumRequired: number;
+  time:                    string;
+  totalDays:               number;
+  sumChildren:             number;
+  sumStaff:                number;    // floor staff = room + floats (used for surplus)
+  sumOffFloor:             number;    // non-ratio staff (directors, chefs, admin) on shift
+  sumOffFloorExclDirector: number;    // off-floor staff excluding centre director
+  sumISS:                  number;    // ISS staff on shift (shown separately, not in ratio count)
+  sumRequired:             number;
 }
 
 interface RosterOptResult {
@@ -103,6 +117,36 @@ interface RosterRec {
   campus: string;
   text:   string;
   type:   'overstaffed' | 'understaffed';
+}
+
+interface RosterSuggestion {
+  type: 'shift-start' | 'shift-end' | 'add-staff';
+  staffName: string;
+  fromTime: string;
+  toTime: string;
+  coversStart: string;
+  coversEnd: string;
+  shortfallFte: number;
+  text: string;
+}
+
+interface RosterSlotAfter {
+  slot: string;
+  beforeAvailable: number;
+  afterAvailable: number;
+  beforeSurplus: number;
+  afterSurplus: number;
+  totalDays: number;
+}
+
+interface RosterSuggestionResult {
+  centre: string;
+  date: string;
+  optimal: boolean;
+  suggestions: RosterSuggestion[];
+  beforeShortfallSlots: string[];
+  afterShortfallSlots: string[];
+  slotBySlot: RosterSlotAfter[];
 }
 
 interface StaffingAnalysisRow {
@@ -118,6 +162,10 @@ interface StaffingAnalysisRow {
   totalFloatersNeeded: number;       // buffer + net shortage
   floatSurplus:        number;       // floatCount + adAvailable - totalFloatersNeeded
   status:              'green' | 'amber' | 'red' | 'unknown';
+  internalCasualHours: number;        // internal casual hours for the day
+  externalCasualHours: number;        // external (Z) casual hours for the day
+  internalCasualCount: number;        // internal casual shifts for the day
+  externalCasualCount: number;        // external casual shifts for the day
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -139,6 +187,8 @@ async function fetchAttendance(campus: string, date: string) {
   );
   return r.ok ? r.json() : [];
 }
+
+
 /** Convert HH:MM string to minutes since midnight. Returns null if invalid. */
 function hhmm(t: string | null | undefined): number | null {
   if (!t) return null;
@@ -161,8 +211,254 @@ async function fetchRostersForDate(unitIds: number[], date: string) {
   return r.ok ? r.json() : [];
 }
 
+function slotToMinutes(slot: string) {
+  const [h, m] = slot.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function minsToHhmm(mins: number) {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function getLatestWeekdayInRange(fromDate: string, toDate: string): string {
+  let cur = toDate;
+  while (cur >= fromDate) {
+    const [y, m, d] = cur.split('-').map(Number);
+    const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    if (dow !== 0 && dow !== 6) return cur;
+    cur = new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
+  }
+  return toDate;
+}
+
+async function buildRosterSuggestionsForCentre(centre: any, avgSlots: RosterSlotData[], fromDate: string, toDate: string): Promise<RosterSuggestionResult> {
+  const campus = centre.ownaName ?? centre.name;
+  const SLOT_MINS = 30;
+  const MIN_OPEN_CLOSE_STAFF = 2;
+
+  const slotCoverage = avgSlots.map(s => {
+    const available = s.sumStaff + s.sumOffFloorExclDirector;
+    const required = s.sumRequired;
+    return {
+      slot: s.time,
+      sm: slotToMinutes(s.time),
+      available,
+      required,
+      totalDays: s.totalDays,
+      surplus: s.totalDays > 0 ? (available - required) / s.totalDays : 0,
+    };
+  });
+
+  const shortfallSlots = slotCoverage.filter(s => s.surplus < 0);
+  if (shortfallSlots.length === 0) {
+    return {
+      centre: campus,
+      date: 'selected period',
+      optimal: true,
+      suggestions: [],
+      beforeShortfallSlots: [],
+      afterShortfallSlots: [],
+      slotBySlot: [],
+    };
+  }
+
+  // Use the latest weekday in the selected range as the representative roster
+  // so suggestions are based on actual staff names and real shift times.
+  const repDate = getLatestWeekdayInRange(fromDate, toDate);
+  const roomUnitIds: number[] = centre.rooms.map((r: any) => r.deputyUnitId);
+  const floatUnitIds: number[] = centre.floatUnitIds ?? [];
+  const coverUnitIds = new Set<number>([...roomUnitIds, ...floatUnitIds]);
+  const rosters = await fetchRostersForDate([...coverUnitIds], repDate);
+
+  // Build a unique list of ratio-covering staff from the representative roster.
+  // If someone has multiple entries, keep the earliest start.
+  const staffMap = new Map<number, { employeeId: number; name: string; startM: number; endM: number }>();
+  for (const r of rosters) {
+    if (!r.Employee || r.Employee === 0) continue;
+    if (!coverUnitIds.has(r.OperationalUnit)) continue;
+    const startM = hhmm(fmtTime(r.StartTime));
+    const endM = hhmm(fmtTime(r.EndTime));
+    if (startM === null || endM === null || startM >= endM) continue;
+    const name = r._DPMetaData?.EmployeeInfo?.DisplayName || `Staff ${r.Employee}`;
+    const existing = staffMap.get(r.Employee);
+    if (!existing || startM < existing.startM) {
+      staffMap.set(r.Employee, { employeeId: r.Employee, name, startM, endM });
+    }
+  }
+  let staffList = Array.from(staffMap.values()).sort((a, b) => a.startM - b.startM);
+
+  // Group consecutive shortfall slots into windows
+  const windows: { startIdx: number; endIdx: number; startSlot: string; endSlot: string; peakShortfall: number; durationSlots: number }[] = [];
+  let current: typeof windows[0] | null = null;
+  for (let i = 0; i < slotCoverage.length; i++) {
+    const s = slotCoverage[i];
+    if (s.surplus < 0) {
+      if (!current) {
+        current = { startIdx: i, endIdx: i, startSlot: s.slot, endSlot: s.slot, peakShortfall: Math.abs(s.surplus), durationSlots: 1 };
+      } else {
+        current.endIdx = i;
+        current.endSlot = s.slot;
+        current.peakShortfall = Math.max(current.peakShortfall, Math.abs(s.surplus));
+        current.durationSlots++;
+      }
+    } else {
+      if (current) { windows.push(current); current = null; }
+    }
+  }
+  if (current) windows.push(current);
+
+  const suggestions: RosterSuggestion[] = [];
+  const simulatedCoverage = slotCoverage.map(s => ({ ...s }));
+  const middayMins = 12 * 60;
+
+  const staffMeetsMin = (slot: typeof simulatedCoverage[0]) => {
+    if (slot.totalDays <= 0) return true;
+    return slot.available >= MIN_OPEN_CLOSE_STAFF * slot.totalDays;
+  };
+
+  const recomputeSurplus = () => {
+    for (const s of simulatedCoverage) {
+      s.surplus = (s.available - s.required) / Math.max(s.totalDays, 1);
+    }
+  };
+
+  const findCandidate = (w: typeof windows[0], shiftEarlier: boolean, skipIds: Set<number>) => {
+    const windowStartM = slotToMinutes(w.startSlot);
+    const windowEndM = slotToMinutes(w.endSlot) + SLOT_MINS;
+    if (shiftEarlier) {
+      // Need someone who starts at or after the window ends so they can be moved earlier.
+      // Prefer the closest start time to the end of the window (smallest move).
+      const candidates = staffList.filter(s => !skipIds.has(s.employeeId) && s.startM >= windowEndM && s.startM < windowEndM + 60);
+      candidates.sort((a, b) => a.startM - b.startM);
+      return candidates[0] ?? null;
+    } else {
+      // Need someone who starts after opening and whose shift ends at or before the
+      // window end (but close enough that moving later reaches the window).
+      const candidates = staffList.filter(s => !skipIds.has(s.employeeId) && s.startM > 7 * 60 && s.endM <= windowEndM && s.endM > windowStartM - 60);
+      // Prefer morning starters first (their loss falls in the morning surplus),
+      // then the candidate whose end time is closest to the end of the window.
+      candidates.sort((a, b) => a.startM - b.startM || b.endM - a.endM);
+      return candidates[0] ?? null;
+    }
+  };
+
+  const applyMove = (candidate: typeof staffList[0], shiftEarlier: boolean, moveMins: number, revert = false) => {
+    const newStartM = shiftEarlier ? candidate.startM - moveMins : candidate.startM + moveMins;
+    const newEndM = shiftEarlier ? candidate.endM - moveMins : candidate.endM + moveMins;
+    const sign = revert ? -1 : 1;
+    for (let i = 0; i < simulatedCoverage.length; i++) {
+      const slot = simulatedCoverage[i];
+      const slotStart = slot.sm;
+      const slotEnd = slot.sm + SLOT_MINS;
+      let delta = 0;
+      if (shiftEarlier) {
+        // Gains coverage between new start and old start
+        const gain = Math.min(slotEnd, candidate.startM) - Math.max(slotStart, newStartM);
+        if (gain > 0) delta += gain / SLOT_MINS;
+        // Loses coverage between new end and old end
+        const loss = Math.min(slotEnd, candidate.endM) - Math.max(slotStart, newEndM);
+        if (loss > 0) delta -= loss / SLOT_MINS;
+      } else {
+        // Loses coverage between old start and new start
+        const loss = Math.min(slotEnd, newStartM) - Math.max(slotStart, candidate.startM);
+        if (loss > 0) delta -= loss / SLOT_MINS;
+        // Gains coverage between old end and new end
+        const gain = Math.min(slotEnd, newEndM) - Math.max(slotStart, candidate.endM);
+        if (gain > 0) delta += gain / SLOT_MINS;
+      }
+      slot.available += sign * delta * Math.max(slot.totalDays, 1);
+    }
+  };
+
+  for (const w of windows) {
+    const windowStartM = slotToMinutes(w.startSlot);
+    const windowEndM = slotToMinutes(w.endSlot) + SLOT_MINS;
+    const windowMidMins = (windowStartM + windowEndM) / 2;
+    const shiftEarlier = windowMidMins <= middayMins;
+
+    let windowResolved = false;
+    let attempts = 0;
+    const skipIds = new Set<number>();
+
+    while (!windowResolved && attempts < 5) {
+      attempts++;
+      const candidate = findCandidate(w, shiftEarlier, skipIds);
+      if (!candidate) break;
+      skipIds.add(candidate.employeeId);
+
+      const windowSurplusBeforeMove = simulatedCoverage.slice(w.startIdx, w.endIdx + 1).map(s => s.surplus);
+
+      // Move just enough to cover the window, capped at 60 min and rounded to 15-min increments
+      let moveMins = shiftEarlier
+        ? Math.ceil((candidate.startM - windowStartM) / 15) * 15
+        : Math.ceil((windowEndM - candidate.endM) / 15) * 15;
+      moveMins = Math.min(Math.max(moveMins, 15), 60);
+
+      applyMove(candidate, shiftEarlier, moveMins);
+      recomputeSurplus();
+
+      const openOk = staffMeetsMin(simulatedCoverage[0]);
+      const closeOk = staffMeetsMin(simulatedCoverage[simulatedCoverage.length - 1]);
+      const createdNewShortfall = simulatedCoverage.some((s, i) => s.surplus < -0.001 && slotCoverage[i].surplus >= -0.001);
+      const windowSurplusAfterMove = simulatedCoverage.slice(w.startIdx, w.endIdx + 1).map(s => s.surplus);
+      const improvesWindow = windowSurplusAfterMove.some((s, i) => s > windowSurplusBeforeMove[i] + 0.001);
+      const moveIsValid = openOk && closeOk && !createdNewShortfall && improvesWindow;
+
+      if (moveIsValid) {
+        const newStartM = shiftEarlier ? candidate.startM - moveMins : candidate.startM + moveMins;
+        const newEndM = shiftEarlier ? candidate.endM - moveMins : candidate.endM + moveMins;
+        const text = `Move ${candidate.name}'s shift from ${minsToHhmm(candidate.startM)}–${minsToHhmm(candidate.endM)} to ${minsToHhmm(newStartM)}–${minsToHhmm(newEndM)} to cover the ${w.startSlot}–${minsToHhmm(windowEndM)} shortfall in ${campus}.`;
+        suggestions.push({
+          type: shiftEarlier ? 'shift-start' : 'shift-end',
+          staffName: candidate.name,
+          fromTime: minsToHhmm(candidate.startM),
+          toTime: minsToHhmm(newStartM),
+          coversStart: w.startSlot,
+          coversEnd: minsToHhmm(windowEndM),
+          shortfallFte: w.peakShortfall,
+          text,
+        });
+        // Remove this candidate from the pool so each staff member is moved at most once
+        staffList = staffList.filter(s => s.employeeId !== candidate.employeeId);
+        windowResolved = simulatedCoverage.slice(w.startIdx, w.endIdx + 1).every(s => s.surplus >= -0.001);
+      } else {
+        applyMove(candidate, shiftEarlier, moveMins, true);
+        recomputeSurplus();
+      }
+    }
+  }
+
+  recomputeSurplus();
+
+  const slotBySlot: RosterSlotAfter[] = slotCoverage.map((before, i) => ({
+    slot: before.slot,
+    beforeAvailable: before.totalDays > 0 ? before.available / before.totalDays : 0,
+    afterAvailable: simulatedCoverage[i].totalDays > 0 ? simulatedCoverage[i].available / simulatedCoverage[i].totalDays : 0,
+    beforeSurplus: before.surplus,
+    afterSurplus: simulatedCoverage[i].surplus,
+    totalDays: before.totalDays,
+  }));
+
+  return {
+    centre: campus,
+    date: repDate,
+    optimal: false,
+    suggestions,
+    beforeShortfallSlots: shortfallSlots.map(s => s.slot),
+    afterShortfallSlots: simulatedCoverage.filter(s => s.surplus < 0).map(s => s.slot),
+    slotBySlot,
+  };
+}
+
 async function fetchZCasualsForDate(centreName: string, date: string) {
-  const r = await fetch(`/api/z-casuals?centre=${encodeURIComponent(centreName)}&date=${date}`);
+  // Strip common prefix so it matches TGA_WORKSPACE_MAP keys in the API
+  const normalized = centreName
+    .replace(/^The Grove Academy\s*[-–]?\s*/i, '')
+    .replace(/^The Grove Academy$/i, 'Wollongong')
+    .trim();
+  const r = await fetch(`/api/z-casuals?centre=${encodeURIComponent(normalized)}&date=${date}`);
   if (!r.ok) return [];
   const records: {
     zJobId: string; name: string; start: string; end: string;
@@ -183,6 +479,13 @@ async function fetchZCasualsForDate(centreName: string, date: string) {
     StartTime: r.start,
     EndTime: r.end,
     isExternalCasual: true,
+    externalCasualMeta: {
+      zJobId: r.zJobId,
+      certLevel: r.certLevel,
+      costCents: r.costCents,
+      status: r.status,
+      workspaceId: r.workspaceId,
+    } as ExternalCasualMeta,
   }));
 }
 
@@ -223,8 +526,18 @@ export default function ReportingPage() {
   const [occupancyRows, setOccupancyRows]   = useState<OccupancyRow[]>([]);
   const [rosterOptData, setRosterOptData]   = useState<RosterOptResult[]>([]);
   const [rosterRecs, setRosterRecs]         = useState<RosterRec[]>([]);
+  const [rosterSuggestions, setRosterSuggestions] = useState<RosterSuggestionResult[] | null>(null);
+  const [rosterSuggestionsLoading, setRosterSuggestionsLoading] = useState(false);
   const [staffingAnalysisRows, setStaffingAnalysisRows] = useState<StaffingAnalysisRow[]>([]);
+  const [casualRows, setCasualRows] = useState<CasualDayRow[]>([]);
+  const [casualTrendData, setCasualTrendData] = useState<{ weekStart: string; weekStartLabel: string; totalCents: number; totalDollars: number }[]>([]);
+  const [casualCompareData, setCasualCompareData] = useState<{
+    current:  { centre: string; totalCents: number; totalDollars: number }[];
+    previous: { centre: string; totalCents: number; totalDollars: number }[];
+  }>({ current: [], previous: [] });
+  const [casualTrendLoading, setCasualTrendLoading] = useState(false);
   type WwccRec = { wwcc_number: string | null; wwcc_expiry: string | null; under_18: boolean; is_internal_casual?: boolean };
+
   // WWCC lookup function - tries multiple strategies to handle name mismatches
   const [wwccLookup, setWwccLookup] = useState<(name: string) => WwccRec | null>(() => () => null);
   const printRef = useRef<HTMLDivElement>(null);
@@ -237,7 +550,27 @@ export default function ReportingPage() {
     { id: 'roster-opt',  icon: '🗓️', label: 'Roster Optimisation',       desc: 'Compare child attendance curves against the roster to find over/understaffed windows and get recommendations.' },
     { id: 'wwcc-expiry',        icon: '🛡️', label: 'WWCC Expiries',             desc: 'Working With Children Check expiry dates for all active staff. Sorted by soonest expiring.' },
     { id: 'staffing-analysis', icon: '📊', label: 'Staffing Analysis',          desc: 'Float pool surplus/deficit per centre per day — mirrors the staffing analysis Float Pool panel. Shows buffer required (1:6 floor staff), floats available, AD coverage for small centres (<100 children).' },
+    { id: 'casual', icon: '👷', label: 'Casual Report', desc: 'Internal and external casuals used per day, including external casual cost and total hours for the period.' },
   ];
+
+  const handleGenerateRosterSuggestions = async () => {
+    setRosterSuggestionsLoading(true);
+    setRosterSuggestions(null);
+    try {
+      const results: RosterSuggestionResult[] = [];
+      for (const centre of selectedCentres) {
+        const campus = centre.ownaName ?? centre.name;
+        const avgSlots = rosterOptData.find(r => r.campus === campus)?.slots ?? [];
+        results.push(await buildRosterSuggestionsForCentre(centre, avgSlots, fromDate, toDate));
+      }
+      setRosterSuggestions(results);
+    } catch (err: any) {
+      console.error('Failed to generate roster suggestions:', err);
+      alert('Failed to generate roster suggestions: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setRosterSuggestionsLoading(false);
+    }
+  };
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=1100,height=800');
@@ -301,7 +634,7 @@ export default function ReportingPage() {
               <td><strong>${e.inTime}</strong></td>
               <td>${e.outTime || (isLunch ? '…' : '-')}</td>
               <td><span style="font-size:9px">${typeLabel}</span></td>
-              <td>${(() => { const r2 = wwccLookup(e.name); const noData = !r2||(!r2.wwcc_number&&!r2.under_18); const rl = e.room.toLowerCase(); if (isLunch) return ''; if (noData && ['chef','kitchen','cook'].some(kw => rl.includes(kw))) return '<span style="color:#854d0e;font-size:10px">Kitchen Staff</span>'; if (noData) return '<em>-</em>'; if (r2&&r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2&&r2.wwcc_number ? r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : '') : '<em>-</em>'; })()}</td>
+              <td>${(() => { const r2 = wwccLookup(e.name); const noData = !r2||(!r2.wwcc_number&&!r2.under_18); const rl = e.room.toLowerCase(); if (isLunch) return ''; if (isExternal && noData) return '<span style="color:#9a3412;font-size:10px">Refer to Z Staffing Documentation</span>'; if (noData && ['chef','kitchen','cook'].some(kw => rl.includes(kw))) return '<span style="color:#854d0e;font-size:10px">Kitchen Staff</span>'; if (noData) return '<em>-</em>'; if (r2&&r2.under_18) return '<span style="color:#1d4ed8;font-size:10px">Under 18</span>'; return r2&&r2.wwcc_number ? r2.wwcc_number + (r2.wwcc_expiry ? '<br><small>Exp: ' + new Date(r2.wwcc_expiry).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) + '</small>' : '') : '<em>-</em>'; })()}</td>
               <td>${e.note ?? '-'}</td>
             </tr>`;
           }).join('');
@@ -345,6 +678,7 @@ export default function ReportingPage() {
       : viewingReport === 'occupancy'   ? 'Attendance Trends Report'
       : viewingReport === 'roster-opt'  ? 'Roster Optimisation Report'
       : viewingReport === 'wwcc-expiry' ? 'WWCC Expiry Monitor'
+      : viewingReport === 'casual'      ? 'Casual Report'
       : 'Report';
 
     // ── Build occupancy HTML ──────────────────────────────────────────────────
@@ -387,6 +721,107 @@ export default function ReportingPage() {
         </table>`
       : '';
 
+    // Capture the on-screen Recharts bar chart so it can be embedded in the PDF.
+    function captureChartSvg(): string | null {
+      const svg = document.querySelector('.recharts-wrapper svg') as SVGSVGElement | null;
+      if (!svg) return null;
+      const clone = svg.cloneNode(true) as SVGSVGElement;
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      const rect = svg.getBoundingClientRect();
+      clone.setAttribute('width', String(Math.round(rect.width || 800)));
+      clone.setAttribute('height', String(Math.round(rect.height || 280)));
+      return clone.outerHTML;
+    }
+
+    // ── Build casual HTML ─────────────────────────────────────────────────────
+    // ── Build casual HTML ─────────────────────────────────────────────────────
+    const chartSvg = viewingReport === 'casual' ? captureChartSvg() : null;
+    const casualHtml = viewingReport === 'casual' && (casualRows.length > 0 || casualCompareData.current.length > 0)
+      ? (() => {
+          const byDate: Record<string, CasualDayRow[]> = {};
+          for (const row of casualRows) (byDate[row.date] ??= []).push(row);
+          const dates = Object.keys(byDate).sort();
+          const chartImage = chartSvg
+            ? `<div class="chart-wrap" style="margin-bottom:20px;page-break-inside:avoid;"><div style="font-size:12px;font-weight:700;color:#2d5c18;margin-bottom:8px;">External Casual Spend - Last 3 Months</div>${chartSvg}</div>`
+            : '';
+          const currentMap = new Map(casualCompareData.current.map(r => [r.centre, r]));
+          const previousMap = new Map(casualCompareData.previous.map(r => [r.centre, r]));
+          const allCentres = Array.from(new Set([...currentMap.keys(), ...previousMap.keys()])).sort();
+          const currentTotal = casualCompareData.current.reduce((s, r) => s + r.totalCents, 0);
+          const previousTotal = casualCompareData.previous.reduce((s, r) => s + r.totalCents, 0);
+          const totalChangeCents = currentTotal - previousTotal;
+          const totalChangePct = previousTotal > 0 ? (totalChangeCents / previousTotal) * 100 : 0;
+          const dateRangeLabel = fromDate === toDate ? safeFormat(new Date(fromDate), 'd MMM yyyy') : `${safeFormat(new Date(fromDate), 'd MMM')} - ${safeFormat(new Date(toDate), 'd MMM yyyy')}`;
+          const prevRangeLabel = (() => {
+            const prevTo = new Date(fromDate + 'T00:00:00+10:00');
+            prevTo.setDate(prevTo.getDate() - 1);
+            const days = Math.max(0, Math.round((new Date(toDate + 'T00:00:00+10:00').getTime() - new Date(fromDate + 'T00:00:00+10:00').getTime()) / (1000 * 60 * 60 * 24)));
+            const prevFrom = new Date(prevTo);
+            prevFrom.setDate(prevFrom.getDate() - days);
+            return days === 0 ? safeFormat(prevTo, 'd MMM yyyy') : `${safeFormat(prevFrom, 'd MMM')} - ${safeFormat(prevTo, 'd MMM yyyy')}`;
+          })();
+          const breakdown = allCentres.length > 0
+            ? `<div class="day-block" style="page-break-inside:avoid;">
+                <div class="day-header"><span class="campus">External Casual Spend by Centre - ${dateRangeLabel} vs ${prevRangeLabel}</span></div>
+                <table>
+                  <thead><tr><th>Centre</th><th style="text-align:right">Current</th><th style="text-align:right">Previous</th><th style="text-align:right">Change</th><th style="text-align:right">%</th></tr></thead>
+                  <tbody>
+                    ${allCentres.map(centre => {
+                      const cur = currentMap.get(centre);
+                      const prev = previousMap.get(centre);
+                      const curCents = cur?.totalCents ?? 0;
+                      const prevCents = prev?.totalCents ?? 0;
+                      const changeCents = curCents - prevCents;
+                      const changePct = prevCents > 0 ? (changeCents / prevCents) * 100 : 0;
+                      const name = CENTRES.find(c => c.name.toLowerCase() === centre.toLowerCase() || (c.ownaName && c.ownaName.toLowerCase() === centre.toLowerCase()))?.name ?? centre;
+                      return `<tr><td>${name}</td><td style="text-align:right;font-weight:600;color:#c2410c">$${(curCents / 100).toFixed(2)}</td><td style="text-align:right">$${(prevCents / 100).toFixed(2)}</td><td style="text-align:right;font-weight:600;${changeCents >= 0 ? 'color:#c2410c' : 'color:#15803d'}">${changeCents >= 0 ? '+' : ''}$${(changeCents / 100).toFixed(2)}</td><td style="text-align:right">${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%</td></tr>`;
+                    }).join('')}
+                    <tr style="background:#fef3c7;font-weight:700"><td>Total</td><td style="text-align:right;color:#c2410c">$${(currentTotal / 100).toFixed(2)}</td><td style="text-align:right">$${(previousTotal / 100).toFixed(2)}</td><td style="text-align:right;${totalChangeCents >= 0 ? 'color:#c2410c' : 'color:#15803d'}">${totalChangeCents >= 0 ? '+' : ''}$${(totalChangeCents / 100).toFixed(2)}</td><td style="text-align:right">${totalChangePct >= 0 ? '+' : ''}${totalChangePct.toFixed(1)}%</td></tr>
+                  </tbody>
+                </table>
+              </div>`
+            : '';
+          return chartImage + breakdown + dates.map(date => {
+            const dateRows = byDate[date].sort((a, b) => a.campus.localeCompare(b.campus));
+            const dateInternalHours = dateRows.reduce((s, r) => s + r.internalHours, 0);
+            const dateExternalHours = dateRows.reduce((s, r) => s + r.externalHours, 0);
+            const dateExternalCostCents = dateRows.reduce((s, r) => s + r.externalCostCents, 0);
+            return `
+              <div class="day-block">
+                <div class="day-header">
+                  <span class="campus">${safeFormat(new Date(date), 'EEEE, d MMMM yyyy')}</span>
+                  <span class="date">${dateRows.length} centre${dateRows.length !== 1 ? 's' : ''}</span>
+                  <span class="count">${dateInternalHours.toFixed(1)}h internal &middot; ${dateExternalHours.toFixed(1)}h external${dateExternalCostCents > 0 ? ' &middot; $' + (dateExternalCostCents / 100).toFixed(2) : ''}</span>
+                </div>
+                <table>
+                  <thead><tr><th>Centre</th><th>Internal Shifts</th><th>Internal Hours</th><th>External Shifts</th><th>External Hours</th><th>External Cost</th></tr></thead>
+                  <tbody>
+                    ${dateRows.map(day => `
+                      <tr>
+                        <td>${day.campus}</td>
+                        <td>${day.internalCount}</td>
+                        <td>${day.internalHours.toFixed(2)}</td>
+                        <td>${day.externalCount}</td>
+                        <td>${day.externalHours.toFixed(2)}</td>
+                        <td>$${(day.externalCostCents / 100).toFixed(2)}</td>
+                      </tr>
+                    `).join('')}
+                    <tr style="background:#fef3c7;font-weight:700">
+                      <td>Day total</td>
+                      <td>${dateRows.reduce((s, r) => s + r.internalCount, 0)}</td>
+                      <td>${dateInternalHours.toFixed(2)}</td>
+                      <td>${dateRows.reduce((s, r) => s + r.externalCount, 0)}</td>
+                      <td>${dateExternalHours.toFixed(2)}</td>
+                      <td>$${(dateExternalCostCents / 100).toFixed(2)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            `;
+          }).join('');
+        })()
+      : '';
+
     win.document.write(`<!DOCTYPE html>
 <html><head>
   <title>TGA - ${reportTitle}</title>
@@ -418,9 +853,11 @@ export default function ReportingPage() {
     .badge.grouping{ background: #d1fae5; color: #065f46; }
     .badge.external { background: #fed7aa; color: #c2410c; }
     .footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid #e5f0e5; font-size: 9px; color: #aaa; text-align: center; }
+    .chart-wrap svg { width: 100%; height: auto; max-height: 320px; }
     @media print {
       body { padding: 10px; font-size: 10px; }
       .day-block { page-break-inside: avoid; }
+      .chart-wrap { page-break-inside: avoid; }
       .no-print { display: none; }
       @page { margin: 15mm; size: A4 landscape; }
     }
@@ -437,7 +874,7 @@ export default function ReportingPage() {
     </div>
   </div>
   ${viewingReport === 'educator' ? '<div class="reg-notice"><strong>Regulation 151 Record</strong> - Documents which educators were working directly with children, which room/group they were allocated to, and the times of allocation including scheduled meal breaks. WWCC numbers are held in the staff compliance register.</div>' : ''}
-  ${educatorHtml}${ratioHtml}${occupancyHtml}${wwccHtml}
+  ${educatorHtml}${ratioHtml}${occupancyHtml}${wwccHtml}${casualHtml}
   <div class="footer">The Grove Academy Plan of Day System - Confidential - For regulatory compliance purposes only</div>
 </body></html>`);
     win.document.close();
@@ -445,12 +882,44 @@ export default function ReportingPage() {
     setTimeout(() => win.print(), 500);
   };
 
-  // Get selected centre objects
-  const selectedCentres = scopeType === 'all'
-    ? allowed
-    : scopeType === 'cluster'
-    ? allowed.filter(c => CLUSTERS[cluster]?.includes(c.id))
-    : allowed.filter(c => c.id === centreId);
+  // Get selected centre objects (memoised so the casual chart effect doesn't loop)
+  const selectedCentres = useMemo(() => {
+    return scopeType === 'all'
+      ? allowed
+      : scopeType === 'cluster'
+      ? allowed.filter(c => CLUSTERS[cluster]?.includes(c.id))
+      : allowed.filter(c => c.id === centreId);
+  }, [scopeType, cluster, centreId, allowed]);
+
+  // Fetch 3-month external casual spend trend + period comparison when the casual report is open.
+  // The trend chart always shows the last 13 weeks; the comparison table uses the selected from/to range.
+  useEffect(() => {
+    if (viewingReport !== 'casual') return;
+    let cancelled = false;
+    setCasualTrendLoading(true);
+    const centreNames = selectedCentres.map(c => c.name).join(',');
+    const trendQs = centreNames ? `weeks=13&centres=${encodeURIComponent(centreNames)}` : 'weeks=13';
+    const compareQs = `from=${fromDate}&to=${toDate}${centreNames ? `&centres=${encodeURIComponent(centreNames)}` : ''}`;
+    Promise.all([
+      fetch(`/api/casual-spend-trend?${trendQs}`).then(r => r.ok ? r.json() : []),
+      fetch(`/api/casual-spend-compare?${compareQs}`).then(r => r.ok ? r.json() : { current: [], previous: [] }),
+    ])
+      .then(([weekly, compare]: [any[], any]) => {
+        if (cancelled) return;
+        setCasualTrendData(Array.isArray(weekly) ? weekly : []);
+        setCasualCompareData(
+          compare && typeof compare === 'object' && Array.isArray(compare.current) && Array.isArray(compare.previous)
+            ? compare
+            : { current: [], previous: [] }
+        );
+      })
+      .catch(() => {
+        setCasualTrendData([]);
+        setCasualCompareData({ current: [], previous: [] });
+      })
+      .finally(() => setCasualTrendLoading(false));
+    return () => { cancelled = true; };
+  }, [viewingReport, selectedCentres, fromDate, toDate]);
 
   const generate = useCallback(async () => {
     setLoading(true);
@@ -462,14 +931,17 @@ export default function ReportingPage() {
     const needsRosterOpt       = selectedReports.has('roster-opt');
     const needsWwccExpiry      = selectedReports.has('wwcc-expiry');
     const needsStaffingAnalysis = selectedReports.has('staffing-analysis');
-    const needsDateLoop        = needsEducator || needsOccupancy || needsRosterOpt || needsStaffingAnalysis;
+    const needsCasual          = selectedReports.has('casual');
+    const needsDateLoop        = needsEducator || needsOccupancy || needsRosterOpt || needsStaffingAnalysis || needsCasual;
+    const today                = todayStr();
 
     const rows: typeof educatorRows = [];
     const snaps: RatioSnap[] = [];
     const groupingTrendRows: { date: string; campus: string; sessions: any[] }[] = [];
     const occRows: OccupancyRow[] = [];
     const staffingRowsAccum: StaffingAnalysisRow[] = [];
-    const rosterAccum: Record<string, Record<string, { sumChildren: number; sumStaff: number; sumOffFloor: number; sumISS: number; sumRequired: number; days: number }>> = {};
+    const rosterAccum: Record<string, Record<string, { sumChildren: number; sumStaff: number; sumOffFloor: number; sumOffFloorExclDirector: number; sumISS: number; sumRequired: number; days: number }>> = {};
+    const casualAccum: CasualDayRow[] = [];
     const ROSTER_SLOTS_30: string[] = [];
     for (let rmi = 7 * 60; rmi < 18 * 60; rmi += 30) {
       ROSTER_SLOTS_30.push(`${String(Math.floor(rmi/60)).padStart(2,'0')}:${String(rmi%60).padStart(2,'0')}`);
@@ -485,6 +957,35 @@ export default function ReportingPage() {
       cur = new Date(Date.UTC(y, m - 1, dy + 1)).toISOString().slice(0, 10);
     }
 
+    // Normalise names the same way the WWCC lookup does.
+    function normName(n: string) {
+      return n.toLowerCase().replace(/\s+/g, ' ').trim();
+    }
+
+    // Build a set of internal-casual names once for the report.
+    const internalCasualNames = new Set<string>();
+    if (needsCasual || needsStaffingAnalysis) {
+      try {
+        const wwccAll: any[] = await fetch('/api/staff-wwcc').then(r => r.ok ? r.json() : []).catch(() => []);
+        for (const rec of wwccAll) {
+          if (rec.is_internal_casual === true) {
+            internalCasualNames.add(normName(rec.full_name_norm ?? rec.full_name));
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
+    // Only fetch the data each selected report actually needs.
+    const needAttendance      = needsOccupancy || needsRosterOpt || needsEducator || needsStaffingAnalysis;
+    const needZCasuals        = needsCasual || needsEducator || needsStaffingAnalysis;
+    const needAllocations     = needsEducator;
+    const needFloatScheds     = needsEducator;
+    const needGroupingSessions = needsEducator;
+    const needRatioCheck      = needsEducator || needsStaffingAnalysis;
+    const needDeputyActuals   = needsEducator;
+    const needLunchScheds     = needsEducator;
+
+
     if (needsDateLoop) for (const centre of selectedCentres) {
       const campus = centre.ownaName ?? centre.name;
       const allUnitIds = [
@@ -496,27 +997,66 @@ export default function ReportingPage() {
       ];
 
       for (const date of dates) {
-        // Fetch in parallel
-        const [att, rosters, zCasuals, allocations, floatScheds, groupingSessionRows, ratioCheckRows, deputyActuals] = await Promise.all([
-          fetchAttendance(campus, date),
+        // Fetch only the endpoints the selected reports need.
+        const [att, rosters, zCasuals, allocations, floatScheds, groupingSessionRows, ratioCheckRows, deputyActuals, lunchScheds] = await Promise.all([
+          needAttendance ? fetchAttendance(campus, date) : Promise.resolve([]),
           fetchRostersForDate(allUnitIds, date),
-          fetchZCasualsForDate(centre.name, date),
-          fetch(`/api/staff-allocations?centre=${encodeURIComponent(centre.id)}&date=${date}`)
-            .then(r => r.ok ? r.json() : []).catch(() => []),
-          fetch(`/api/float-schedules?centre=${encodeURIComponent(centre.id)}&date=${date}`)
-            .then(r => r.ok ? r.json() : []).catch(() => []),
-          fetch(`/api/grouping-sessions?centre=${encodeURIComponent(centre.id)}&date=${date}`)
-            .then(r => r.ok ? r.json() : []).catch(() => []),
-          fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centre.id)}&date=${date}`)
-            .then(r => r.ok ? r.json() : []).catch(() => []),
-          // Fetch actual Deputy timesheet times scoped to this centre's unit IDs
-          fetch(`/api/deputy-timesheets-actual?unitIds=${allUnitIds.join(',')}&date=${date}`)
-            .then(r => r.ok ? r.json() : []).catch(() => []),
+          needZCasuals ? fetchZCasualsForDate(centre.name, date) : Promise.resolve([]),
+          needAllocations ? fetch(`/api/staff-allocations?centre=${encodeURIComponent(centre.id)}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+          needFloatScheds ? fetch(`/api/float-schedules?centre=${encodeURIComponent(centre.id)}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+          needGroupingSessions ? fetch(`/api/grouping-sessions?centre=${encodeURIComponent(centre.id)}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+          needRatioCheck ? fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centre.id)}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+          needDeputyActuals ? fetch(`/api/${date < today ? 'deputy-actual-timesheets-read' : 'deputy-timesheets-actual'}?unitIds=${allUnitIds.join(',')}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+          needLunchScheds ? fetch(`/api/lunch-schedules?centre=${encodeURIComponent(centre.id)}&date=${date}`)
+            .then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
         ]);
 
-        // Merge external casuals into rosters so they're included in the educator report
-        const rostersWithExternal = [...(rosters as any[]), ...(zCasuals as any[])];
+        // Include external casuals in the roster loop so their room allocation
+        // follows the same ratio-check logic as every other staff member.
+        const rostersWithExternal = needsEducator ? [...(rosters as any[]), ...(zCasuals as any[])] : (rosters as any[]);
         if (needsEducator) groupingTrendRows.push({ date, campus, sessions: groupingSessionRows as any[] });
+
+        // ── Casuals ──────────────────────────────────────────────────────
+        if (needsCasual) {
+          let internalHours = 0;
+          let internalCount = 0;
+          for (const r of rosters as any[]) {
+            if (!r.Employee || r.Employee === 0) continue;
+            const name = r._DPMetaData?.EmployeeInfo?.DisplayName || `Staff ${r.Employee}`;
+            if (!internalCasualNames.has(normName(name))) continue;
+            const startM = hhmm(fmtTime(r.StartTime));
+            const endM = hhmm(fmtTime(r.EndTime));
+            if (startM === null || endM === null) continue;
+            let durM = endM - startM;
+            if (durM < 0) durM += 24 * 60; // overnight shift
+            internalHours += durM / 60;
+            internalCount += 1;
+          }
+
+          let externalHours = 0;
+          let externalCostCents = 0;
+          let externalCount = 0;
+          for (const r of zCasuals as any[]) {
+            const startM = hhmm(fmtTime(r.StartTime));
+            const endM = hhmm(fmtTime(r.EndTime));
+            if (startM === null || endM === null) continue;
+            let durM = endM - startM;
+            if (durM < 0) durM += 24 * 60;
+            externalHours += durM / 60;
+            externalCount += 1;
+            const meta = (r.externalCasualMeta ?? {}) as ExternalCasualMeta;
+            externalCostCents += meta.costCents ?? 0;
+          }
+
+          if (internalHours > 0 || externalHours > 0 || externalCostCents > 0) {
+            casualAccum.push({ date, campus, centreId: centre.id, internalCount, internalHours, externalCount, externalHours, externalCostCents });
+          }
+        }
 
         // ── Occupancy ────────────────────────────────────────────────────
         if (needsOccupancy) {
@@ -568,7 +1108,7 @@ export default function ReportingPage() {
           if (!rosterAccum[campus]) {
             rosterAccum[campus] = {};
             for (const rslot of ROSTER_SLOTS_30) {
-              rosterAccum[campus][rslot] = { sumChildren: 0, sumStaff: 0, sumOffFloor: 0, sumISS: 0, sumRequired: 0, days: 0 };
+              rosterAccum[campus][rslot] = { sumChildren: 0, sumStaff: 0, sumOffFloor: 0, sumOffFloorExclDirector: 0, sumISS: 0, sumRequired: 0, days: 0 };
             }
           }
           for (const rslot of ROSTER_SLOTS_30) {
@@ -614,13 +1154,24 @@ export default function ReportingPage() {
             const floatOnShift     = new Set(floatRostersFiltered.filter(shiftCheck).map((r: any) => r.Employee)).size;
             const staffOnShift     = roomStaffOnShift + floatOnShift;
             // Off floor = unique non-ratio employees (directors, chefs, admin), not leave
-            const offFloorOnShift = new Set(
-              (rosters as any[]).filter((r: any) =>
-                r.Employee && r.Employee !== 0 &&
-                nonRatioIdsSet.has(r.OperationalUnit) &&
-                !leaveIdsSet2.has(r.OperationalUnit) &&
-                shiftCheck(r)
-              ).map((r: any) => r.Employee)
+            const offFloorRosters = (rosters as any[]).filter((r: any) =>
+              r.Employee && r.Employee !== 0 &&
+              nonRatioIdsSet.has(r.OperationalUnit) &&
+              !leaveIdsSet2.has(r.OperationalUnit) &&
+              shiftCheck(r)
+            );
+            const offFloorOnShift = new Set(offFloorRosters.map((r: any) => r.Employee)).size;
+            // Off-floor staff who can actually step onto the floor as ratio cover.
+            // Exclude director, chef/cook, and trainee/study-time units.
+            const isOffFloorCover = (r: any) => {
+              const uName = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
+              if (uName.includes('director') && !uName.includes('assistant') && !uName.includes('asst')) return false;
+              if (uName.includes('chef') || uName.includes('cook')) return false;
+              if (uName.includes('study') || uName.includes('trainee') || uName.includes('traineeship')) return false;
+              return true;
+            };
+            const offFloorCoverOnShift = new Set(
+              offFloorRosters.filter((r: any) => isOffFloorCover(r)).map((r: any) => r.Employee)
             ).size;
             // ISS = unique ISS employees
             const issOnShift = new Set(
@@ -630,25 +1181,43 @@ export default function ReportingPage() {
                 shiftCheck(r)
               ).map((r: any) => r.Employee)
             ).size;
-            rosterAccum[campus][rslot].sumChildren  += childrenPresent;
-            rosterAccum[campus][rslot].sumStaff     += staffOnShift;
-            rosterAccum[campus][rslot].sumOffFloor  += offFloorOnShift;
-            rosterAccum[campus][rslot].sumISS       += issOnShift;
-            rosterAccum[campus][rslot].sumRequired  += reqStaff;
+            rosterAccum[campus][rslot].sumChildren             += childrenPresent;
+            rosterAccum[campus][rslot].sumStaff                  += staffOnShift;
+            rosterAccum[campus][rslot].sumOffFloor               += offFloorOnShift;
+            rosterAccum[campus][rslot].sumOffFloorExclDirector   += offFloorCoverOnShift;
+            rosterAccum[campus][rslot].sumISS                    += issOnShift;
+            rosterAccum[campus][rslot].sumRequired               += reqStaff;
             rosterAccum[campus][rslot].days++;
           }
         }
 
-        // Build combined staffMoves + FG configs + time overrides from all ratio-check sessions
+        // Build combined staffMoves + FG configs + time overrides + notes from all ratio-check sessions
         const ratioStaffMoves: Record<string, string> = {};
-        const ratioFGConfigs: Array<{ id: string; label: string; roomIds: string[]; slots: string[]; heldInRoom?: string }> = [];
-        const ratioTimeOverrides: Record<string, { start: string; end: string; lunchStart?: string; lunchEnd?: string; source?: string }> = {};
+        const ratioStaffNotes: Record<string, string> = {};
+        const ratioFGConfigs: Array<{ id: string; label: string; roomIds: string[]; slots: string[]; heldInRoom?: string; staffIdsBySlot?: Record<string, number[]>; staffIds?: number[] }> = [];
+        const ratioTimeOverrides: Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: string }> = {};
+        const ratioVisitors: Array<{ id: string; name: string; wwccNumber?: string; roomId: string; enteredAt: string; exitedAt?: string }> = [];
 
         for (const row of (ratioCheckRows as any[])) {
           const moves = (row.data?.staffMoves ?? {}) as Record<string, string>;
           Object.assign(ratioStaffMoves, moves);
+          const notes = (row.data?.staffNotes ?? {}) as Record<string, string>;
+          Object.assign(ratioStaffNotes, notes);
           for (const fg of (row.data?.familyGroupings ?? [])) {
             if (!ratioFGConfigs.find(f => f.id === fg.id)) ratioFGConfigs.push(fg);
+          }
+          // Collect visitor entries from all sessions for the Reg 151 report.
+          // Visitors may be stored under any slot bucket, so de-duplicate by id.
+          // Key format is `${slot}:${roomId}`; slot itself contains a colon (HH:MM),
+          // so the roomId is everything after the final colon.
+          const visitors = (row.data?.roomVisitors ?? {}) as Record<string, Array<{ id: string; name: string; wwccNumber?: string; enteredAt: string; exitedAt?: string }>>;
+          for (const [key, list] of Object.entries(visitors)) {
+            const roomId = key.slice(key.lastIndexOf(':') + 1);
+            for (const v of (list ?? [])) {
+              if (!ratioVisitors.find(rv => rv.id === v.id)) {
+                ratioVisitors.push({ ...v, roomId });
+              }
+            }
           }
           // Merge Supabase overrides — these come from the Ratio Check browser 5-min Deputy poll
           // and are the most complete/accurate source (contain all staff clocked in that day)
@@ -757,16 +1326,17 @@ export default function ReportingPage() {
         function posAt(empId: number, slot: string): { room: string; blockType: EducatorEntry['blockType']; note?: string; exactIn?: string; exactOut?: string } {
           const key = `${empId}:${slot}`;
           const move = ratioStaffMoves[key];
+          const staffNote = ratioStaffNotes[key];
           if (move !== undefined) {
-            if (move === '__programming__') return { room: 'Programming', blockType: 'shift', note: 'Programming' };
-            if (move === '__cleaning__')    return { room: 'Cleaning',    blockType: 'shift', note: 'Cleaning' };
-            if (move === '__lunch__')       return { room: 'Lunch Break', blockType: 'lunch_break' };
-            if (move === '__additional__')  return { room: 'Additional Duties', blockType: 'shift' };
-            if (move === '__removed__')     return { room: 'Off Roster', blockType: 'shift' };
+            if (move === '__programming__') return { room: 'Programming', blockType: 'shift', note: staffNote || 'Programming' };
+            if (move === '__cleaning__')    return { room: 'Cleaning',    blockType: 'shift', note: staffNote || 'Cleaning' };
+            if (move === '__lunch__')       return { room: 'Lunch Break', blockType: 'lunch_break', note: staffNote };
+            if (move === '__additional__')  return { room: 'Additional Duties', blockType: 'shift', note: staffNote };
+            if (move === '__removed__')     return { room: 'Off Roster', blockType: 'shift', note: staffNote };
             const r = centre.rooms.find(r => r.id === move);
-            if (r) return { room: r.name, blockType: 'shift' };
+            if (r) return { room: r.name, blockType: 'shift', note: staffNote };
             // move is a pool sentinel ('float', 'iss') — not a real room, treat as unassigned
-            if (move === 'float' || move === 'iss') return { room: '', blockType: 'shift' };
+            if (move === 'float' || move === 'iss') return { room: '', blockType: 'shift', note: staffNote };
           }
           // Float schedule off-floor
           const off = offFloor151[slot] ?? new Set<number>();
@@ -861,9 +1431,26 @@ export default function ReportingPage() {
           // Study Time units are secondary blocks (not the person's main shift) — skip override
           const isStudyTime = rawUnit.includes('study time');
           const actualOverride = (!isLeaveUnit && !isStudyTime) ? ratioTimeOverrides[String(empId)] : undefined;
-          const shiftIn  = actualOverride?.start || fmtTime(r.StartTime);
-          // If Deputy hasn't clocked them out yet, fall back to rostered end time
-          const shiftOut = (actualOverride?.end || '') || fmtTime(r.EndTime);
+
+          // For split shifts, the override may contain multiple segments. Pick the one
+          // matching this roster entry's start time so morning/afternoon entries keep
+          // their correct actual start/end in the report.
+          const rosterStart = fmtTime(r.StartTime);
+          const rosterEnd   = fmtTime(r.EndTime);
+          let shiftIn  = rosterStart;
+          let shiftOut = rosterEnd;
+          if (actualOverride) {
+            const matchingSegment = actualOverride.segments?.find(seg =>
+              seg.start <= rosterStart && seg.end >= rosterStart
+            );
+            if (matchingSegment) {
+              shiftIn = matchingSegment.start;
+              shiftOut = matchingSegment.end;
+            } else {
+              shiftIn = actualOverride.start || shiftIn;
+              shiftOut = actualOverride.end || shiftOut;
+            }
+          }
           if (shiftIn === '-' || shiftOut === '-') continue;
 
           const staffType: EducatorEntry['staffType'] =
@@ -895,7 +1482,8 @@ export default function ReportingPage() {
           // Support (AD, Directors, etc.): fall back to their Deputy unit name so they
           //   always appear in the report; ratio check moves override specific slots.
           const naturalRoomName = naturalRoom?.name ?? (
-            staffType === 'float' || staffType === 'external' ? ''
+            staffType === 'float' ? ''
+            : staffType === 'external' ? 'Off Floor'
             : staffType === 'iss'   ? ''
             : deputyUnitName || 'Support'
           );
@@ -912,24 +1500,41 @@ export default function ReportingPage() {
           // Position at each slot (including FG override)
           const positions: Array<{ slot: string; room: string; blockType: EducatorEntry['blockType']; note?: string; exactIn?: string; exactOut?: string }> = [];
           for (const slot of shiftSlots) {
-            // Check if a confirmed FG covers this employee at this slot
+            const pos = posAt(empId, slot);
+            const room = pos.room || naturalRoomName;
+            const roomObj = room ? centre.rooms.find(r => r.name === room) : undefined;
+
+            // Check if the resolved room (natural, moved, or float-cover) is part
+            // of a family grouping at this slot, or if the employee has been explicitly
+            // added to the grouping via drag-and-drop. If so, report as grouping.
             let fgPos: { room: string; blockType: EducatorEntry['blockType']; note?: string } | null = null;
-            if (naturalRoom && !ratioStaffMoves[`${empId}:${slot}`]) {
+            if (roomObj) {
               for (const fg of ratioFGConfigs) {
                 if (!fg.slots.includes(slot)) continue;
                 const fgRoomIds = fg.roomIds.length === 0 ? centre.rooms.map(r => r.id) : fg.roomIds;
-                if (fgRoomIds.includes(naturalRoom.id)) {
+                if (fgRoomIds.includes(roomObj.id)) {
                   const heldIn = fg.heldInRoom ? (centre.rooms.find(r => r.id === fg.heldInRoom)?.name ?? fg.heldInRoom) : fg.label;
                   fgPos = { room: heldIn, blockType: 'grouping' as EducatorEntry['blockType'], note: `${fg.label} - held in ${heldIn}` };
                   break;
                 }
               }
             }
+            if (!fgPos) {
+              for (const fg of ratioFGConfigs) {
+                if (!fg.slots.includes(slot)) continue;
+                const slotIds = fg.staffIdsBySlot?.[slot] ?? [];
+                const legacyIds = fg.staffIds ?? [];
+                if (slotIds.includes(empId) || legacyIds.includes(empId)) {
+                  const heldIn = fg.heldInRoom ? (centre.rooms.find(r => r.id === fg.heldInRoom)?.name ?? fg.heldInRoom) : fg.label;
+                  fgPos = { room: heldIn, blockType: 'grouping' as EducatorEntry['blockType'], note: `${fg.label} - held in ${heldIn}` };
+                  break;
+                }
+              }
+            }
+
             if (fgPos) {
-              positions.push({ slot, ...fgPos });
+              positions.push({ slot, ...fgPos, exactIn: pos.exactIn, exactOut: pos.exactOut });
             } else {
-              const pos = posAt(empId, slot);
-              const room = pos.room || naturalRoomName;
               positions.push({ slot, room, blockType: pos.blockType, note: pos.note, exactIn: pos.exactIn, exactOut: pos.exactOut });
             }
           }
@@ -1048,98 +1653,79 @@ export default function ReportingPage() {
         entries.length = 0;
         entries.push(...dedupedEntries);
 
-        // Overlay confirmed family groupings (same logic as before)
-        const confirmedGroupings = (groupingSessionRows as any[]).filter(gs =>
-          ['confirmed', 'auto-confirmed', 'modified'].includes(gs.confirmation_status)
-        );
-        if (confirmedGroupings.length > 0) {
-          for (const gs of confirmedGroupings) {
-            const gStart = gs.session_start as string;
-            const gEnd   = gs.session_end   as string;
-            const gLabel = gs.group_label   as string;
-            const heldInId   = gs.held_in_room as string | undefined;
-            // heldInId is either a room ID (look up name) or an outdoor area name string (use directly)
-            const heldInRoom = centre.rooms.find(r => r.id === heldInId)?.name ?? heldInId ?? gLabel;
-            const staffIds: number[] = gs.staff_ids ?? [];
-            const staffNames: string[] = gs.staff_names ?? [];
-            const staffRoomIds: string[] = gs.staff_rooms ?? [];
-            const isAdditional = (empId: number) =>
-              ratioStaffMoves[`${empId}:${gStart}`] === '__additional__';
+        // Add visitor entries from Ratio Check visitor log (with WWCC details)
+        for (const v of ratioVisitors) {
+          const roomName = centre.rooms.find(r => r.id === v.roomId)?.name ?? v.roomId;
+          // Use a stable negative employeeId derived from the visitor id to avoid collisions
+          // with real staff and with other visitors on the same day.
+          let visitorEmpId = 0;
+          for (let i = 0; i < v.id.length; i++) visitorEmpId = (visitorEmpId * 31 + v.id.charCodeAt(i)) | 0;
+          visitorEmpId = visitorEmpId < 0 ? visitorEmpId : -visitorEmpId;
+          const noteParts = ['Visitor'];
+          if (v.wwccNumber) noteParts.push(`WWCC: ${v.wwccNumber}`);
+          entries.push({
+            employeeId: visitorEmpId,
+            name: v.name,
+            room: roomName,
+            inTime: v.enteredAt,
+            outTime: v.exitedAt || '18:00',
+            blockType: 'support',
+            staffType: 'support',
+            note: noteParts.join(' - '),
+          });
+        }
 
-            for (const entry of [...entries]) {
-              if (!staffIds.includes(entry.employeeId)) continue;
-              if (entry.outTime <= gStart || entry.inTime >= gEnd) continue;
-              if (entry.blockType === 'leave') continue;
-              const si = staffIds.indexOf(entry.employeeId);
-              const subRoomId = staffRoomIds[si];
-              const subRoom = centre.rooms.find(r => r.id === subRoomId)?.name ?? heldInRoom;
-              const roomLabel = isAdditional(entry.employeeId)
-                ? 'Additional Duties'
-                : gLabel + (subRoom && subRoom !== gLabel ? ` - ${subRoom}` : '');
-              const bType = isAdditional(entry.employeeId) ? 'shift' : 'grouping';
-              // Split entry around grouping window
-              const origIn = entry.inTime, origOut = entry.outTime;
-              entry.inTime = 'REMOVE';
-              if (origIn < gStart) {
-                entries.push({ ...entry, inTime: origIn, outTime: gStart, blockType: 'shift', room: entry.room });
-              }
-              const gEffIn  = origIn  < gStart ? gStart : origIn;
-              const gEffOut = origOut > gEnd   ? gEnd   : origOut;
-              entries.push({ ...entry, inTime: gEffIn, outTime: gEffOut, room: roomLabel, blockType: bType, note: `Held in ${heldInRoom}` });
-              if (origOut > gEnd) {
-                entries.push({ ...entry, inTime: gEnd, outTime: origOut, blockType: 'shift', room: entry.room });
-              }
-            }
-            // Remove entries marked for removal
-            for (let i = entries.length - 1; i >= 0; i--) {
-              if (entries[i].inTime === 'REMOVE') entries.splice(i, 1);
-            }
-            // Synthetic entries for grouping staff not in roster
-            const addedIds = new Set(entries.filter(e => staffIds.includes(e.employeeId) && e.blockType === 'grouping').map(e => e.employeeId));
-            for (let si = 0; si < staffIds.length; si++) {
-              const empId = staffIds[si];
-              if (addedIds.has(empId)) continue;
-              const empName = staffNames[si];
-              if (!empName) continue;
-              const subRoomId = staffRoomIds[si];
-              const subRoom = centre.rooms.find(r => r.id === subRoomId)?.name ?? heldInRoom;
-              const roomLabel = isAdditional(empId) ? 'Additional Duties' : gLabel + (subRoom && subRoom !== gLabel ? ` - ${subRoom}` : '');
-              entries.push({ employeeId: empId, name: empName, room: roomLabel, inTime: gStart, outTime: gEnd, blockType: isAdditional(empId) ? 'shift' : 'grouping', staffType: 'room', note: `Held in ${heldInRoom}` });
+        // Family groupings are now reflected entirely from Ratio Check data via
+        // the main slot-position loop above. The old grouping_sessions overlay
+        // has been removed so the educator report is strictly ratio-check-driven.
+
+        // Build a map of empId → planned lunch break (from lunch schedule or float own-lunch).
+        // Deputy actual lunch always wins; this is the fallback when Deputy has no lunch recorded.
+        const plannedLunchByEmpId: Record<number, { startTime: string; endTime: string; source: 'lunch-schedule' | 'float' }> = {};
+        for (const lsRow of (lunchScheds as any[])) {
+          for (const entry of (lsRow.schedule ?? [])) {
+            if (entry.lunchStart && entry.lunchEnd) {
+              plannedLunchByEmpId[entry.employeeId as number] = {
+                startTime: String(entry.lunchStart),
+                endTime:   String(entry.lunchEnd),
+                source:    'lunch-schedule',
+              };
             }
           }
         }
-
-        // Build a map of empId → own-lunch float schedule block (planned own break times)
-        const ownLunchByEmpId: Record<number, { startTime: string; endTime: string }> = {};
         for (const fsRow of (floatScheds as any[])) {
           const floatEmpId = fsRow.employee_id as number;
           for (const block of (fsRow.schedule ?? [])) {
             if (String(block.coverType ?? '').toLowerCase() === 'own-lunch') {
-              ownLunchByEmpId[floatEmpId] = { startTime: String(block.startTime ?? ''), endTime: String(block.endTime ?? '') };
+              plannedLunchByEmpId[floatEmpId] = {
+                startTime: String(block.startTime ?? ''),
+                endTime:   String(block.endTime ?? ''),
+                source:    'float',
+              };
             }
           }
         }
 
-        // Inject actual lunch break rows from Ratio Check overrides (Deputy actuals or manual)
-        // Also fall back to planned own-lunch times from the float schedule when Deputy hasn't
-        // clocked the break yet. Label clearly as "Own lunch break" for floats.
+        // Inject lunch break rows. Priority: Deputy actual > planned lunch schedule > float own-lunch.
         const lunchEntriesToAdd: typeof entries = [];
         const seenLunchEmpIds = new Set<number>();
         for (const entry of entries) {
           if (entry.blockType === 'lunch_break') continue;
           if (seenLunchEmpIds.has(entry.employeeId)) continue;
           const override = ratioTimeOverrides[String(entry.employeeId)];
-          const plannedOwnLunch = ownLunchByEmpId[entry.employeeId];
-          // Use Deputy actual times if available, fall back to planned own-lunch from float schedule
-          const lunchStart = override?.lunchStart ?? plannedOwnLunch?.startTime;
-          const lunchEnd   = override?.lunchEnd   ?? plannedOwnLunch?.endTime;
+          const planned = plannedLunchByEmpId[entry.employeeId];
+          const lunchStart = override?.lunchStart ?? planned?.startTime;
+          const lunchEnd   = override?.lunchEnd   ?? planned?.endTime;
           if (!lunchStart) continue;
           seenLunchEmpIds.add(entry.employeeId);
-          const isOwnLunchFloat = !!plannedOwnLunch;
           const hasActual = !!override?.lunchStart;
-          const noteText = isOwnLunchFloat
-            ? (hasActual ? 'Own lunch break' : 'Own lunch break (planned)')
-            : (lunchEnd ? 'Deputy actual' : 'In progress');
+          const noteText = hasActual
+            ? 'Deputy actual'
+            : planned?.source === 'float'
+              ? 'Own lunch break (planned)'
+              : planned?.source === 'lunch-schedule'
+                ? 'Planned lunch break'
+                : (lunchEnd ? 'Deputy actual' : 'In progress');
           // Remove any existing positional lunch_break entry for this employee (will be replaced)
           // Add a clean lunch row with actual or planned times
           lunchEntriesToAdd.push({
@@ -1161,6 +1747,7 @@ export default function ReportingPage() {
         filteredEntries.forEach(e => entries.push(e));
         lunchEntriesToAdd.forEach(e => entries.push(e));
 
+
         if (entries.length > 0) {
           // Sort by staff name, then by inTime within each person
           entries.sort((a, b) => {
@@ -1168,7 +1755,7 @@ export default function ReportingPage() {
             return nameDiff !== 0 ? nameDiff : a.inTime.localeCompare(b.inTime);
           });
           // Collect all unique rooms for the filter dropdown
-          const allRooms = [...new Set(entries.map(e => e.room).filter(r => r !== 'Lunch Break'))].sort();
+          const allRooms = [...new Set(entries.map(e => e.room).filter(r => r !== 'Lunch Break' && r !== 'External Casual'))].sort();
           rows.push({ date, campus, entries, allRooms });
         }
 
@@ -1218,7 +1805,17 @@ export default function ReportingPage() {
           const saBufferRequired     = saTotalFloorStaff > 0 ? saTotalFloorStaff / 6 : 0;
           const saFloatUnitIds    = new Set(centre.floatUnitIds ?? []);
           const saNonRatioUnitIds = new Set(centre.nonRatioUnitIds ?? []);
-          const saFloatCount      = (rosters as any[]).filter(r => saFloatUnitIds.has(r.OperationalUnit)).length;
+          // Match the Morning Briefing / Float Pool panel: count only floats that overlap
+          // the 10:00–14:00 core window, and include Z casuals that overlap that window.
+          function overlapsCoreWindow(start: any, end: any) {
+            const sM = hhmm(fmtTime(start));
+            const eM = hhmm(fmtTime(end));
+            if (sM === null || eM === null) return false;
+            return sM < 14 * 60 && eM > 10 * 60;
+          }
+          const saFloatCount =
+            (rosters as any[]).filter(r => saFloatUnitIds.has(r.OperationalUnit) && overlapsCoreWindow(r.StartTime, r.EndTime)).length +
+            (zCasuals as any[]).filter(z => overlapsCoreWindow(z.StartTime, z.EndTime)).length;
           const saAdCount         = (rosters as any[]).filter(r => {
             if (!saNonRatioUnitIds.has(r.OperationalUnit)) return false;
             const un = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '').toLowerCase();
@@ -1237,6 +1834,34 @@ export default function ReportingPage() {
             : saFloatSurplus < 0 ? 'red'
             : saFloatSurplus === 0 ? 'amber'
             : 'green';
+
+          // Casual hours used on this day (for the staffing-analysis casuals column)
+          let saInternalCasualHours = 0;
+          let saInternalCasualCount = 0;
+          for (const r of rosters as any[]) {
+            if (!r.Employee || r.Employee === 0) continue;
+            const name = r._DPMetaData?.EmployeeInfo?.DisplayName || `Staff ${r.Employee}`;
+            if (!internalCasualNames.has(normName(name))) continue;
+            const startM = hhmm(fmtTime(r.StartTime));
+            const endM = hhmm(fmtTime(r.EndTime));
+            if (startM === null || endM === null) continue;
+            let durM = endM - startM;
+            if (durM < 0) durM += 24 * 60;
+            saInternalCasualHours += durM / 60;
+            saInternalCasualCount += 1;
+          }
+          let saExternalCasualHours = 0;
+          let saExternalCasualCount = 0;
+          for (const r of zCasuals as any[]) {
+            const startM = hhmm(fmtTime(r.StartTime));
+            const endM = hhmm(fmtTime(r.EndTime));
+            if (startM === null || endM === null) continue;
+            let durM = endM - startM;
+            if (durM < 0) durM += 24 * 60;
+            saExternalCasualHours += durM / 60;
+            saExternalCasualCount += 1;
+          }
+
           staffingRowsAccum.push({
             date, campus,
             children:            saChildren,
@@ -1249,6 +1874,10 @@ export default function ReportingPage() {
             totalFloatersNeeded: saTotalFloatersNeeded,
             floatSurplus:        saFloatSurplus,
             status:              saStatus,
+            internalCasualHours: saInternalCasualHours,
+            externalCasualHours: saExternalCasualHours,
+            internalCasualCount: saInternalCasualCount,
+            externalCasualCount: saExternalCasualCount,
           });
         }
       }
@@ -1259,6 +1888,7 @@ export default function ReportingPage() {
     setGroupingTrends(groupingTrendRows);
     setOccupancyRows(occRows);
     setStaffingAnalysisRows(staffingRowsAccum);
+    setCasualRows(casualAccum);
 
     // ── Process roster-opt results ─────────────────────────────────────────────────
     {
@@ -1267,12 +1897,13 @@ export default function ReportingPage() {
       for (const [campusKey, slotMap] of Object.entries(rosterAccum)) {
         const slots: RosterSlotData[] = ROSTER_SLOTS_30.map(time => ({
           time,
-          totalDays:   slotMap[time].days,
-          sumChildren: slotMap[time].sumChildren,
-          sumStaff:    slotMap[time].sumStaff,
-          sumOffFloor: slotMap[time].sumOffFloor,
-          sumISS:      slotMap[time].sumISS,
-          sumRequired: slotMap[time].sumRequired,
+          totalDays:               slotMap[time].days,
+          sumChildren:             slotMap[time].sumChildren,
+          sumStaff:                slotMap[time].sumStaff,
+          sumOffFloor:             slotMap[time].sumOffFloor,
+          sumOffFloorExclDirector: slotMap[time].sumOffFloorExclDirector,
+          sumISS:                  slotMap[time].sumISS,
+          sumRequired:             slotMap[time].sumRequired,
         }));
         rosterResults.push({ campus: campusKey, slots });
         const overSlots  = slots.filter(s => s.totalDays > 0 && (s.sumStaff - s.sumRequired) / s.totalDays > 1);
@@ -1888,6 +2519,9 @@ export default function ReportingPage() {
                                     if (isKitchen) return (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>Kitchen Staff</span>
                                     );
+                                    if (isExternal && noUsefulData) return (
+                                      <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#ffedd5', color: '#9a3412' }}>Refer to Z Staffing Documentation</span>
+                                    );
                                     if (noUsefulData) return <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>No WWCC on file</span>;
                                     if (rec!.under_18) return (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>Under 18</span>
@@ -2226,8 +2860,111 @@ export default function ReportingPage() {
             {viewingReport === 'roster-opt' && (
               <div className="space-y-6">
                 <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
-                  <strong>Roster Optimisation</strong> - Average staffing vs. required per 30-min slot. Required staff calculated using real NSW age-based ratios (1:4 under 2, 1:5 aged 2-3, 1:10 aged 3+) from actual child ages in Owna. Surplus = Floor Staff (ratio) minus Required. Off Floor staff (directors, chefs, admin) shown separately.
+                  <strong>Roster Optimisation</strong> - Average staffing vs. required per 30-min slot. Required staff calculated using real NSW age-based ratios (1:4 under 2, 1:5 aged 2-3, 1:10 aged 3+) from actual child ages in Owna. Surplus = Floor Staff (ratio) minus Required. Surplus (incl Off Floor) adds off-floor staff who can step onto the floor, excluding the centre director, chefs/cooks, and trainees on study time.
                 </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleGenerateRosterSuggestions}
+                    disabled={rosterSuggestionsLoading}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-60"
+                    style={{ backgroundColor: '#2d5c18' }}
+                  >
+                    {rosterSuggestionsLoading ? 'Analysing…' : 'Generate roster suggestions'}
+                  </button>
+                  {rosterSuggestions !== null && !rosterSuggestionsLoading && (
+                    <span className="text-sm" style={{ color: '#596570' }}>
+                      {rosterSuggestions.every(r => r.optimal)
+                        ? 'All rosters are optimal'
+                        : `${rosterSuggestions.filter(r => !r.optimal).length} centre/date(s) need changes`}
+                    </span>
+                  )}
+                </div>
+
+                {rosterSuggestions !== null && (
+                  <div className="space-y-4">
+                    {rosterSuggestions.map((result, ri) => (
+                      <div key={ri} className="rounded-xl border p-4" style={{ borderColor: '#E2F1DA', backgroundColor: '#fafffe' }}>
+                        <div className="font-bold text-sm mb-2" style={{ color: '#2d5c18' }}>
+                          {result.centre} · {result.date}
+                        </div>
+                        {result.optimal ? (
+                          <div className="rounded-lg p-3 text-sm font-medium" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>
+                            Roster is already optimal
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            <div className="space-y-2">
+                              {result.suggestions.map((s, si) => (
+                                <div key={si} className="rounded-lg p-3 text-sm" style={{ backgroundColor: '#fef9c3', color: '#854d0e', border: '1px solid #fde68a' }}>
+                                  <strong>Suggestion {si + 1}:</strong> {s.text}
+                                  <div className="text-xs mt-1" style={{ color: '#a16207' }}>
+                                    Peak shortfall: {s.shortfallFte.toFixed(1)} FTE · Covers {s.coversStart}–{s.coversEnd}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="rounded-lg p-3 text-xs" style={{ backgroundColor: '#f0f0f0', color: '#555' }}>
+                              <strong>Before → After:</strong>{' '}
+                              {result.beforeShortfallSlots.length} shortfall slot{result.beforeShortfallSlots.length === 1 ? '' : 's'} ({result.beforeShortfallSlots.join(', ')}){' '}
+                              → {result.afterShortfallSlots.length === 0 ? '0 shortfall slots' : `${result.afterShortfallSlots.length} remaining (${result.afterShortfallSlots.join(', ')})`}
+                              {result.afterShortfallSlots.length > 0 && (
+                                <span style={{ color: '#991b1b' }}> · Warning: suggestions create or leave shortfalls elsewhere.</span>
+                              )}
+                              {(() => {
+                                const openSlot = result.slotBySlot[0];
+                                const closeSlot = result.slotBySlot[result.slotBySlot.length - 1];
+                                const openStaff = openSlot?.afterAvailable ?? 0;
+                                const closeStaff = closeSlot?.afterAvailable ?? 0;
+                                const openLow = openStaff < 2;
+                                const closeLow = closeStaff < 2;
+                                if (!openLow && !closeLow) return null;
+                                return (
+                                  <span style={{ color: '#991b1b' }}>
+                                    {' '}· Opening/closing minimum 2 staff not met ({openLow ? `opening ${openStaff.toFixed(1)}` : ''}{openLow && closeLow ? ', ' : ''}{closeLow ? `closing ${closeStaff.toFixed(1)}` : ''}).
+                                  </span>
+                                );
+                              })()}
+                            </div>
+
+                            {result.slotBySlot.length > 0 && (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-xs mt-2">
+                                  <thead>
+                                    <tr style={{ backgroundColor: '#F5FAF3' }}>
+                                      <th className="py-1 px-2 text-left font-semibold" style={{ color: '#5a9228' }}>Time</th>
+                                      <th className="py-1 px-2 text-center font-semibold" style={{ color: '#5a9228' }}>Staff Before</th>
+                                      <th className="py-1 px-2 text-center font-semibold" style={{ color: '#5a9228' }}>Staff After</th>
+                                      <th className="py-1 px-2 text-center font-semibold" style={{ color: '#5a9228' }}>Surplus Before</th>
+                                      <th className="py-1 px-2 text-center font-semibold" style={{ color: '#5a9228' }}>Surplus After</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {result.slotBySlot.map((row, ridx) => {
+                                      const changed = row.beforeAvailable !== row.afterAvailable || row.beforeSurplus !== row.afterSurplus;
+                                      const isShortBefore = row.beforeSurplus < 0;
+                                      const isShortAfter = row.afterSurplus < 0;
+                                      if (!changed && !isShortBefore && !isShortAfter) return null;
+                                      return (
+                                        <tr key={ridx} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: isShortAfter ? '#fef2f2' : 'white' }}>
+                                          <td className="py-1 px-2 font-mono font-medium" style={{ color: '#2d5c18' }}>{row.slot}</td>
+                                          <td className="py-1 px-2 text-center" style={{ color: '#596570' }}>{row.totalDays > 0 ? row.beforeAvailable.toFixed(1) : '—'}</td>
+                                          <td className="py-1 px-2 text-center font-medium" style={{ color: row.afterAvailable !== row.beforeAvailable ? '#2d5c18' : '#596570' }}>{row.totalDays > 0 ? row.afterAvailable.toFixed(1) : '—'}</td>
+                                          <td className="py-1 px-2 text-center" style={{ color: isShortBefore ? '#dc2626' : row.beforeSurplus > 1 ? '#d97706' : '#166534' }}>{row.totalDays > 0 ? (row.beforeSurplus >= 0 ? '+' : '') + row.beforeSurplus.toFixed(1) : '—'}</td>
+                                          <td className="py-1 px-2 text-center font-semibold" style={{ color: isShortAfter ? '#dc2626' : row.afterSurplus > 1 ? '#d97706' : '#166534' }}>{row.totalDays > 0 ? (row.afterSurplus >= 0 ? '+' : '') + row.afterSurplus.toFixed(1) : '—'}</td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {rosterRecs.length > 0 && (
                   <div className="space-y-2">
@@ -2255,8 +2992,8 @@ export default function ReportingPage() {
                       {(() => {
                         const singleDay = fromDate === toDate;
                         const colHeaders = singleDay
-                          ? ['Time','Children','Staff (Floor)','Required','Surplus','Status','Off Floor','ISS']
-                          : ['Time','Avg Children','Avg Staff (Floor)','Required','Surplus','Status','Off Floor','ISS'];
+                          ? ['Time','Children','Staff (Floor)','Required','Surplus','Off Floor','Surplus (incl Off Floor)','Status','ISS']
+                          : ['Time','Avg Children','Avg Staff (Floor)','Required','Surplus','Off Floor','Surplus (incl Off Floor)','Status','ISS'];
                         return (
                       <table className="w-full text-sm">
                         <thead>
@@ -2272,10 +3009,11 @@ export default function ReportingPage() {
                             const fmt1 = (n: number) => singleDay ? String(Math.round(n)) : n.toFixed(1);
                             const avgCh   = s.totalDays > 0 ? fmt1(s.sumChildren  / s.totalDays) : '—';
                             const avgSt   = s.totalDays > 0 ? fmt1(s.sumStaff     / s.totalDays) : '—';
-                            const avgOff  = s.totalDays > 0 ? fmt1(s.sumOffFloor / s.totalDays) : '—';
-                            const avgISS  = s.totalDays > 0 ? fmt1(s.sumISS      / s.totalDays) : '—';
-                            const avgReq  = s.totalDays > 0 ? fmt1(s.sumRequired  / s.totalDays) : '—';
-                            const surplus = s.totalDays > 0 ? (s.sumStaff - s.sumRequired) / s.totalDays : 0;
+                            const avgOff         = s.totalDays > 0 ? fmt1(s.sumOffFloor / s.totalDays) : '—';
+                            const avgISS         = s.totalDays > 0 ? fmt1(s.sumISS      / s.totalDays) : '—';
+                            const avgReq         = s.totalDays > 0 ? fmt1(s.sumRequired  / s.totalDays) : '—';
+                            const surplus        = s.totalDays > 0 ? (s.sumStaff - s.sumRequired) / s.totalDays : 0;
+                            const surplusInclOff = s.totalDays > 0 ? (s.sumStaff + s.sumOffFloorExclDirector - s.sumRequired) / s.totalDays : 0;
                             const rowBg2 = surplus < -0.5 ? '#fef2f2' : surplus < 0 ? '#fffbeb' : si % 2 === 0 ? 'white' : '#fafffe';
                             const badge = surplus < -0.5
                               ? { bg: '#fee2e2', color: '#991b1b', label: '⚠️ Short' }
@@ -2294,13 +3032,17 @@ export default function ReportingPage() {
                                   style={{ color: surplus < 0 ? '#dc2626' : surplus > 1 ? '#d97706' : '#166534' }}>
                                   {s.totalDays > 0 ? (surplus >= 0 ? '+' : '') + surplus.toFixed(1) : '—'}
                                 </td>
+                                <td className="py-1.5 px-3 text-xs" style={{ color: '#7c3aed' }}>{avgOff}</td>
+                                <td className="py-1.5 px-3 text-xs font-semibold"
+                                  style={{ color: surplusInclOff < 0 ? '#dc2626' : surplusInclOff > 1 ? '#d97706' : '#166534' }}>
+                                  {s.totalDays > 0 ? (surplusInclOff >= 0 ? '+' : '') + surplusInclOff.toFixed(1) : '—'}
+                                </td>
                                 <td className="py-1.5 px-3">
                                   <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
                                     style={{ backgroundColor: badge.bg, color: badge.color }}>
                                     {badge.label}
                                   </span>
                                 </td>
-                                <td className="py-1.5 px-3 text-xs" style={{ color: '#7c3aed' }}>{avgOff}</td>
                                 <td className="py-1.5 px-3 text-xs" style={{ color: '#0891b2' }}>{avgISS}</td>
                               </tr>
                             );
@@ -2518,6 +3260,91 @@ export default function ReportingPage() {
                     </div>
                   )}
 
+                  {/* Centre summary table (only useful when more than one centre is selected) */}
+                  {campuses.length > 1 && (() => {
+                    const dates = [...new Set(staffingAnalysisRows.map(r => r.date))].sort();
+                    const byDate: Record<string, Record<string, StaffingAnalysisRow>> = {};
+                    for (const row of staffingAnalysisRows) {
+                      (byDate[row.date] ??= {})[row.campus] = row;
+                    }
+                    return (
+                      <div className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                        <div className="px-5 py-3" style={{ backgroundColor: '#2d5c18' }}>
+                          <div className="font-bold text-sm text-white">Centre Summary</div>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm min-w-[600px]">
+                            <thead>
+                              <tr style={{ backgroundColor: '#F5FAF3' }}>
+                                <th className="py-2 px-3 text-xs font-semibold text-left sticky left-0" style={{ color: '#5a9228', backgroundColor: '#F5FAF3' }}>Centre</th>
+                                {dates.map(date => (
+                                  <th key={date} className="py-2 px-3 text-xs font-semibold text-center" style={{ color: '#5a9228', minWidth: 100 }}>{safeFormat(date, 'EEE d MMM')}</th>
+                                ))}
+                                <th className="py-2 px-3 text-xs font-semibold text-center" style={{ color: '#5a9228', minWidth: 120 }}>Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {campuses.sort().map((campus, i) => {
+                                const campusRowsForTotals = staffingAnalysisRows.filter(r => r.campus === campus);
+                                const totalFloatSurplus = campusRowsForTotals.reduce((s, r) => s + r.floatSurplus, 0);
+                                const totalInternalCasualHours = campusRowsForTotals.reduce((s, r) => s + r.internalCasualHours, 0);
+                                const totalExternalCasualHours = campusRowsForTotals.reduce((s, r) => s + r.externalCasualHours, 0);
+                                const totalCasualHours = totalInternalCasualHours + totalExternalCasualHours;
+                                return (
+                                  <tr key={campus} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
+                                    <td className="py-2 px-3 font-medium text-xs sticky left-0" style={{ color: '#050505', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>{campus}</td>
+                                    {dates.map(date => {
+                                      const row = byDate[date]?.[campus];
+                                      if (!row) {
+                                        return <td key={date} className="py-2 px-3 text-xs text-center" style={{ color: '#94a3b8' }}>—</td>;
+                                      }
+                                      const flagged = row.floatSurplus > 0 && (row.internalCasualHours + row.externalCasualHours) > 0;
+                                      return (
+                                        <td key={date} className="py-2 px-3 text-xs text-center align-top">
+                                          <div className="flex flex-col gap-0.5">
+                                            <span style={{ color: row.floatSurplus < 0 ? '#dc2626' : row.floatSurplus > 0 ? '#166534' : '#596570', fontWeight: 700 }}>
+                                              {row.floatSurplus >= 0 ? '+' : ''}{row.floatSurplus.toFixed(1)}
+                                            </span>
+                                            {row.internalCasualHours > 0 && (
+                                              <span style={{ color: '#92400e' }}>{row.internalCasualHours.toFixed(1)}h int</span>
+                                            )}
+                                            {row.externalCasualHours > 0 && (
+                                              <span style={{ color: '#c2410c' }}>{row.externalCasualHours.toFixed(1)}h ext</span>
+                                            )}
+                                            {row.internalCasualHours === 0 && row.externalCasualHours === 0 && (
+                                              <span style={{ color: '#9ca3af' }}>0h casuals</span>
+                                            )}
+                                            {flagged && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️</span>}
+                                          </div>
+                                        </td>
+                                      );
+                                    })}
+                                    <td className="py-2 px-3 text-xs text-center align-top" style={{ backgroundColor: i % 2 === 0 ? '#f9fafb' : '#f3f4f6' }}>
+                                      <div className="flex flex-col gap-0.5">
+                                        <span style={{ color: totalFloatSurplus < 0 ? '#dc2626' : totalFloatSurplus > 0 ? '#166534' : '#596570', fontWeight: 700 }}>
+                                          {totalFloatSurplus >= 0 ? '+' : ''}{totalFloatSurplus.toFixed(1)} surplus
+                                        </span>
+                                        {totalInternalCasualHours > 0 && (
+                                          <span style={{ color: '#92400e' }}>{totalInternalCasualHours.toFixed(1)}h internal</span>
+                                        )}
+                                        {totalExternalCasualHours > 0 && (
+                                          <span style={{ color: '#c2410c' }}>{totalExternalCasualHours.toFixed(1)}h external</span>
+                                        )}
+                                        {totalCasualHours === 0 && (
+                                          <span style={{ color: '#9ca3af' }}>0h casuals</span>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {campuses.length === 0 ? (
                     <div className="text-sm italic" style={{ color: '#596570' }}>No staffing data for selected period.</div>
                   ) : campuses.map(campus => {
@@ -2546,7 +3373,7 @@ export default function ReportingPage() {
                           <table className="w-full text-sm">
                             <thead>
                               <tr style={{ backgroundColor: '#F5FAF3' }}>
-                                {['Date','Children','Floor Staff','Required','Room ±','Float Buffer','Floats','AD','Available','Surplus','Status'].map(h => (
+                                {['Date','Children','Floor Staff','Required','Room ±','Float Buffer','Floats','AD','Available','Surplus','Casuals','Status'].map(h => (
                                   <th key={h} className="py-2 px-3 text-xs font-semibold text-left" style={{ color: '#5a9228' }}>{h}</th>
                                 ))}
                               </tr>
@@ -2588,12 +3415,253 @@ export default function ReportingPage() {
                                     <td className="py-2 px-3 text-xs font-bold" style={{ color: surplusColor }}>
                                       {r.floatSurplus >= 0 ? `+${r.floatSurplus.toFixed(1)}` : r.floatSurplus.toFixed(1)}
                                     </td>
+                                    <td className="py-2 px-3 text-xs align-top">
+                                      {r.internalCasualHours === 0 && r.externalCasualHours === 0 ? (
+                                        <span style={{ color: '#94a3b8' }}>—</span>
+                                      ) : (
+                                        <div className="flex flex-col gap-0.5">
+                                          {r.internalCasualHours > 0 && <span style={{ color: '#92400e' }}>{r.internalCasualHours.toFixed(1)}h int</span>}
+                                          {r.externalCasualHours > 0 && <span style={{ color: '#c2410c' }}>{r.externalCasualHours.toFixed(1)}h ext</span>}
+                                          {r.floatSurplus > 0 && (r.internalCasualHours > 0 || r.externalCasualHours > 0) && (
+                                            <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️ surplus + casuals</span>
+                                          )}
+                                        </div>
+                                      )}
+                                    </td>
                                     <td className="py-2 px-3">
                                       <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
                                         style={{ backgroundColor: statusBadge.bg, color: statusBadge.color }}>
                                         {statusBadge.label}
                                       </span>
                                     </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
+            {/* ── CASUAL REPORT ── */}
+            {viewingReport === 'casual' && (() => {
+              const totalInternalHours = casualRows.reduce((s, r) => s + r.internalHours, 0);
+              const totalExternalHours = casualRows.reduce((s, r) => s + r.externalHours, 0);
+              const totalExternalCostCents = casualRows.reduce((s, r) => s + r.externalCostCents, 0);
+
+              // Build a lookup of date -> centre -> row
+              const byDateCentre: Record<string, Record<string, CasualDayRow>> = {};
+              for (const row of casualRows) {
+                (byDateCentre[row.date] ??= {})[row.campus] = row;
+              }
+
+              // Build ISO week buckets (Mon-Fri) covering the selected date range
+              const weekBuckets: { weekStart: string; weekEnd: string; dates: string[] }[] = [];
+              const start = parseISO(fromDate);
+              const end = parseISO(toDate);
+              const firstDay = startOfWeek(start, { weekStartsOn: 1 });
+              let cursor = firstDay;
+              while (!isAfter(cursor, end)) {
+                const weekDates: string[] = [];
+                for (let d = 0; d < 7; d++) {
+                  const day = add(cursor, { days: d });
+                  const dow = day.getDay();
+                  if (dow !== 0 && dow !== 6 && !isBefore(day, start) && !isAfter(day, end)) {
+                    weekDates.push(format(day, 'yyyy-MM-dd'));
+                  }
+                }
+                if (weekDates.length > 0) {
+                  weekBuckets.push({
+                    weekStart: format(cursor, 'yyyy-MM-dd'),
+                    weekEnd: format(add(cursor, { days: 4 }), 'yyyy-MM-dd'),
+                    dates: weekDates,
+                  });
+                }
+                cursor = add(cursor, { days: 7 });
+              }
+
+              const dayLabels = ['Mon','Tue','Wed','Thu','Fri'];
+
+              return (
+                <div className="space-y-4">
+                  <div className="rounded-xl p-4 text-sm flex items-center justify-between gap-3" style={{ backgroundColor: '#E2F1DA', color: '#2d5c18' }}>
+                    <div>
+                      <strong>Casual Report</strong> - Internal and external casual hours by centre and day, with total external casual cost.
+                    </div>
+                    <button
+                      onClick={handlePrint}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap"
+                      style={{ backgroundColor: '#2d5c18', color: 'white' }}
+                    >
+                      Print / PDF
+                    </button>
+                  </div>
+
+                  {casualRows.length > 0 && (
+                    <div className="flex gap-3 flex-wrap">
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
+                        <div className="text-2xl font-bold">{totalInternalHours.toFixed(1)}</div>
+                        <div className="text-xs">Internal Hours</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#fed7aa', color: '#c2410c' }}>
+                        <div className="text-2xl font-bold">{totalExternalHours.toFixed(1)}</div>
+                        <div className="text-xs">External Hours</div>
+                      </div>
+                      <div className="rounded-xl p-3 flex-1 min-w-[140px]" style={{ backgroundColor: '#f0fdf4', color: '#166534' }}>
+                        <div className="text-2xl font-bold">${(totalExternalCostCents / 100).toFixed(2)}</div>
+                        <div className="text-xs">External Cost</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {casualTrendLoading ? (
+                    <div className="text-sm italic" style={{ color: '#596570' }}>Loading 3-month casual spend trend…</div>
+                  ) : casualTrendData.length > 0 ? (
+                    <div className="rounded-xl p-4" style={{ backgroundColor: 'white', border: '1px solid #E2F1DA' }}>
+                      <div className="text-sm font-semibold mb-3" style={{ color: '#2d5c18' }}>External Casual Spend - Last 3 Months</div>
+                      <div style={{ width: '100%', height: 280 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={casualTrendData} margin={{ top: 10, right: 20, left: 0, bottom: 30 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                            <XAxis dataKey="weekStartLabel" tick={{ fontSize: 11, fill: '#596570' }} angle={-45} textAnchor="end" interval={0} />
+                            <YAxis tick={{ fontSize: 11, fill: '#596570' }} tickFormatter={(v: number) => `$${v.toLocaleString()}`} />
+                            <Tooltip
+                              formatter={(value: any) => [`$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 'Spend']}
+                              labelFormatter={(label: any) => `Week starting ${label}`}
+                            />
+                            <Bar dataKey="totalDollars" fill="#2d5c18" radius={[4, 4, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {!casualTrendLoading && (casualCompareData.current.length > 0 || casualCompareData.previous.length > 0) && (() => {
+                    const currentMap = new Map(casualCompareData.current.map(r => [r.centre, r]));
+                    const previousMap = new Map(casualCompareData.previous.map(r => [r.centre, r]));
+                    const allCentres = Array.from(new Set([...currentMap.keys(), ...previousMap.keys()])).sort();
+                    const currentTotal = casualCompareData.current.reduce((s, r) => s + r.totalCents, 0);
+                    const previousTotal = casualCompareData.previous.reduce((s, r) => s + r.totalCents, 0);
+                    const totalChangeCents = currentTotal - previousTotal;
+                    const totalChangePct = previousTotal > 0 ? (totalChangeCents / previousTotal) * 100 : 0;
+                    const dateRangeLabel = fromDate === toDate ? safeFormat(new Date(fromDate), 'd MMM yyyy')
+                      : `${safeFormat(new Date(fromDate), 'd MMM')} - ${safeFormat(new Date(toDate), 'd MMM yyyy')}`;
+                    return (
+                      <div className="rounded-xl p-4" style={{ backgroundColor: 'white', border: '1px solid #E2F1DA' }}>
+                        <div className="text-sm font-semibold mb-3" style={{ color: '#2d5c18' }}>External Casual Spend by Centre - {dateRangeLabel} vs Previous Period</div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr style={{ color: '#596570' }}>
+                                <th className="text-left py-1.5">Centre</th>
+                                <th className="text-right py-1.5">Current</th>
+                                <th className="text-right py-1.5">Previous</th>
+                                <th className="text-right py-1.5">Change</th>
+                                <th className="text-right py-1.5">%</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {allCentres.map(centre => {
+                                const cur = currentMap.get(centre);
+                                const prev = previousMap.get(centre);
+                                const curCents = cur?.totalCents ?? 0;
+                                const prevCents = prev?.totalCents ?? 0;
+                                const changeCents = curCents - prevCents;
+                                const changePct = prevCents > 0 ? (changeCents / prevCents) * 100 : 0;
+                                const displayName = CENTRES.find(c =>
+                                  c.name.toLowerCase() === centre.toLowerCase() ||
+                                  (c.ownaName && c.ownaName.toLowerCase() === centre.toLowerCase())
+                                )?.name ?? centre;
+                                return (
+                                  <tr key={centre} className="border-b" style={{ borderColor: '#E2F1DA' }}>
+                                    <td className="py-1.5 font-medium" style={{ color: '#050505' }}>{displayName}</td>
+                                    <td className="py-1.5 text-right font-semibold" style={{ color: '#c2410c' }}>${(curCents / 100).toFixed(2)}</td>
+                                    <td className="py-1.5 text-right" style={{ color: '#596570' }}>${(prevCents / 100).toFixed(2)}</td>
+                                    <td className="py-1.5 text-right font-semibold" style={{ color: changeCents >= 0 ? '#c2410c' : '#15803d' }}>{changeCents >= 0 ? '+' : ''}${(changeCents / 100).toFixed(2)}</td>
+                                    <td className="py-1.5 text-right" style={{ color: changeCents >= 0 ? '#c2410c' : '#15803d' }}>{changePct >= 0 ? '+' : ''}{changePct.toFixed(1)}%</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot>
+                              <tr className="font-bold" style={{ backgroundColor: '#fef3c7' }}>
+                                <td className="py-1.5" style={{ color: '#2d5c18' }}>Total</td>
+                                <td className="py-1.5 text-right" style={{ color: '#c2410c' }}>${(currentTotal / 100).toFixed(2)}</td>
+                                <td className="py-1.5 text-right" style={{ color: '#596570' }}>${(previousTotal / 100).toFixed(2)}</td>
+                                <td className="py-1.5 text-right" style={{ color: totalChangeCents >= 0 ? '#c2410c' : '#15803d' }}>{totalChangeCents >= 0 ? '+' : ''}${(totalChangeCents / 100).toFixed(2)}</td>
+                                <td className="py-1.5 text-right" style={{ color: totalChangeCents >= 0 ? '#c2410c' : '#15803d' }}>{totalChangePct >= 0 ? '+' : ''}{totalChangePct.toFixed(1)}%</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {casualRows.length === 0 ? (
+                    <div className="text-sm italic" style={{ color: '#596570' }}>No casual data for the selected period.</div>
+                  ) : weekBuckets.map(({ weekStart, weekEnd, dates }) => {
+                    const activeCentres = selectedCentres.length > 0
+                      ? selectedCentres.map(c => c.name).sort()
+                      : [...new Set(casualRows.filter(r => dates.includes(r.date)).map(r => r.campus))].sort();
+
+                    const weekRows = activeCentres.map(campus => {
+                      const centreTotalCostCents = dates.reduce((s, d) => s + (byDateCentre[d]?.[campus]?.externalCostCents ?? 0), 0);
+                      const centreTotalInternalHours = dates.reduce((s, d) => s + (byDateCentre[d]?.[campus]?.internalHours ?? 0), 0);
+                      return { campus, centreTotalCostCents, centreTotalInternalHours };
+                    });
+                    const weekExternalCostCents = weekRows.reduce((s, r) => s + r.centreTotalCostCents, 0);
+
+                    return (
+                      <div key={weekStart} className="rounded-2xl border overflow-hidden" style={{ borderColor: '#E2F1DA' }}>
+                        <div className="px-5 py-3 flex items-center justify-between" style={{ backgroundColor: '#2d5c18' }}>
+                          <div className="font-bold text-sm text-white">Week of {safeFormat(parseISO(weekStart), 'd MMMM yyyy')} – {safeFormat(parseISO(weekEnd), 'd MMMM yyyy')}</div>
+                          <div className="text-xs text-white">
+                            <span>{activeCentres.length} centre{activeCentres.length !== 1 ? 's' : ''}</span>
+                            {weekExternalCostCents > 0 && <span className="ml-3">· ${(weekExternalCostCents / 100).toFixed(2)} external</span>}
+                          </div>
+                        </div>
+                        <div className="p-4 overflow-x-auto">
+                          <table className="w-full text-sm min-w-[800px]">
+                            <thead>
+                              <tr style={{ backgroundColor: '#F5FAF3' }}>
+                                <th className="py-2 px-3 text-xs font-semibold text-left sticky left-0 bg-[#F5FAF33]" style={{ color: '#5a9228' }}>Centre</th>
+                                {dayLabels.map(label => (
+                                  <th key={label} className="py-2 px-2 text-xs font-semibold text-center" style={{ color: '#5a9228', minWidth: 90 }}>{label}</th>
+                                ))}
+                                <th className="py-2 px-3 text-xs font-semibold text-right" style={{ color: '#5a9228' }}>Internal Hours</th>
+                                <th className="py-2 px-3 text-xs font-semibold text-right" style={{ color: '#5a9228' }}>External Cost</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {activeCentres.map((campus, i) => {
+                                const centreTotalCostCents = weekRows.find(r => r.campus === campus)?.centreTotalCostCents ?? 0;
+                                const centreTotalInternalHours = weekRows.find(r => r.campus === campus)?.centreTotalInternalHours ?? 0;
+                                return (
+                                  <tr key={campus} className="border-t" style={{ borderColor: '#E2F1DA', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>
+                                    <td className="py-2 px-3 font-medium sticky left-0" style={{ color: '#050505', backgroundColor: i % 2 === 0 ? 'white' : '#fafffe' }}>{campus}</td>
+                                    {dayLabels.map((_, dayIndex) => {
+                                      const date = dates.find(d => (parseISO(d).getDay() + 6) % 7 === dayIndex);
+                                      const row = date ? byDateCentre[date]?.[campus] : undefined;
+                                      return (
+                                        <td key={dayIndex} className="py-2 px-2 text-center align-top" style={{ color: '#050505' }}>
+                                          {row ? (
+                                            <div className="flex flex-col gap-0.5 text-xs">
+                                              <span style={{ color: '#92400e' }}>{row.internalHours.toFixed(1)}h int</span>
+                                              <span style={{ color: '#c2410c' }}>{row.externalHours.toFixed(1)}h ext</span>
+                                            </div>
+                                          ) : (
+                                            <span className="text-xs" style={{ color: '#94a3b8' }}>—</span>
+                                          )}
+                                        </td>
+                                      );
+                                    })}
+                                    <td className="py-2 px-3 text-right font-medium" style={{ color: '#92400e' }}>{centreTotalInternalHours.toFixed(1)}h</td>
+                                    <td className="py-2 px-3 text-right font-medium" style={{ color: '#c2410c' }}>${(centreTotalCostCents / 100).toFixed(2)}</td>
                                   </tr>
                                 );
                               })}

@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
+﻿import React, { useState, useEffect, useCallback, useMemo, useContext } from 'react';
 import { format } from 'date-fns';
 function safeFormat(d: Date | string | null | undefined, fmt: string): string {
   try {
@@ -13,7 +13,7 @@ import Layout from '../components/Layout';
 import { CENTRES, WOLLONGONG_FLOAT_UNIT_IDS, WOLLONGONG_LEAVE_UNIT_IDS, WOLLONGONG_NONRATIO_UNIT_IDS } from '../config';
 import { getUser } from '../auth';
 import { fetchRosters } from '../deputy';
-import { parseAgeMonths, buildRoomStatus } from '../utils/ratioEngine';
+import { parseAgeMonths, buildRoomStatus, roomNameMatches } from '../utils/ratioEngine';
 import { withCache, bustCache } from '../utils/cache';
 import RatioTimeline from '../components/RatioTimeline';
 import FloatSchedulePanel from '../components/FloatSchedulePanel';
@@ -24,6 +24,11 @@ import PredictedCoveragePanel from '../components/PredictedCoveragePanel';
 import SummaryTab from '../components/SummaryTab';
 import type { AttendanceChild, RoomRatioStatus, RosteredStaff, FloatStaff, ExternalCasualMeta } from '../types';
 import type { FloatSchedule } from '../components/FloatSchedulePanel';
+
+// Context for Deputy actual / manual staff time overrides surfaced by RatioCheckPanel.
+// Module-level staff chips (room lists, floats, ISS, support) read this so the whole
+// page stays in sync with roster changes and actual clock-in/out times.
+const StaffTimeOverridesContext = React.createContext<Record<string, { start?: string; end?: string }>>({});
 
 // --- Helpers -----------------------------------------------------------------
 
@@ -96,15 +101,14 @@ function AgeBreakdownRow({ label, count, ratio }: { label: string; count: number
 }
 
 function StaffChip({ staff }: { staff: RosteredStaff }) {
-  const start = formatTime(staff.startTime);
-  const end   = formatTime(staff.endTime);
-  // Split shift: show each segment separately e.g. "7:00–10:00 / 14:00–18:00"
-  const timeStr = staff.isSplitShift && staff.splitSegments?.length
-    ? staff.splitSegments.map(seg => `${formatTime(seg.startTime)}–${formatTime(seg.endTime)}`).join(' / ')
-    : start && end ? `${start}–${end}` : start || end || '';
+  const overrides = useContext(StaffTimeOverridesContext);
+  const override = overrides[String(staff.employeeId)];
+  const start = formatTime(override?.start ?? staff.startTime);
+  const end   = formatTime(override?.end ?? staff.endTime);
+  // For split shifts each roster entry represents one segment, so show that
+  // segment's time. The "SPLIT" badge indicates the full shift is split.
+  const timeStr = start && end ? `${start}–${end}` : start || end || '';
   const meta = staff.externalCasualMeta;
-  // Format cost e.g. 38250 → $382.50
-  const costStr = meta?.costCents ? `$${(meta.costCents / 100).toFixed(2)}` : null;
   // Format cert e.g. CERT3 → Cert III, DIPLOMA → Diploma, ECT → ECT, NONE → ''
   const certLabel = meta?.certLevel && meta.certLevel !== 'NONE'
     ? meta.certLevel === 'CERT3' ? 'Cert III'
@@ -138,7 +142,6 @@ function StaffChip({ staff }: { staff: RosteredStaff }) {
         </div>
         <div className="text-xs" style={{ color: '#596570' }}>
           {timeStr || 'Time not set'}
-          {costStr && <span className="ml-1 font-medium" style={{ color: '#c2410c' }}>{costStr}</span>}
         </div>
       </div>
     </div>
@@ -308,8 +311,7 @@ function minsToAmPm(m: number): string {
 
 // Window when children are present in a room (earliest sign-in ? latest sign-out)
 function roomWindow(room: RoomRatioStatus, children: AttendanceChild[]): { start: number; end: number } | null {
-  const owna = (room.room.ownaRoomName ?? room.room.name).toLowerCase();
-  const rc = children.filter(c => c.sign_in && c.room.toLowerCase().includes(owna));
+  const rc = children.filter(c => c.sign_in && roomNameMatches(c.room, room.room));
   if (!rc.length) return null;
   const starts = rc.map(c => toMins(c.sign_in)).filter((t): t is number => t !== null);
   const ends   = rc.map(c => toMins(c.sign_out) ?? 18 * 60);
@@ -733,6 +735,11 @@ export default function RatioDashboardPage() {
   const navigate = useNavigate();
   const user = getUser();
 
+  // Deputy actual/manual staff time overrides surfaced from RatioCheckPanel so
+  // staff chips across the page (floats, ISS, support, room lists) reflect
+  // roster changes and actual clock-in/out times.
+  const [staffTimeOverrides, setStaffTimeOverrides] = useState<Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy' | 'scheduled'; isOvertime?: boolean; comment?: string }>>({});
+
   // Centre selection — persisted in URL (?centre=wollongong)
   // CEO can pick any; directors default to their own centre
   const availableCentres = user?.role === 'ceo' ? CENTRES : CENTRES.filter(c => c.id === user?.centreId);
@@ -774,6 +781,32 @@ export default function RatioDashboardPage() {
   const [activeView, setActiveView]   = useState<'plan-of-day' | 'ratio-check' | 'summary'>('plan-of-day');
   const [planSubView, setPlanSubView] = useState<'live' | 'plan'>('live');
 
+  // Seed staff time overrides from saved ratio-check data when the RatioCheckPanel
+  // is not mounted (e.g. default Plan of the Day view). RatioCheckPanel will take
+  // over and push live updates once the user switches to that tab.
+  useEffect(() => {
+    if (activeView === 'ratio-check') return;
+    let cancelled = false;
+    async function load() {
+      try {
+        const r = await fetch(`/api/ratio-check?centre_id=${encodeURIComponent(selectedCentreId)}&date=${date}`);
+        if (!r.ok || cancelled) return;
+        const rows: { session: string; data?: { staffTimeOverrides?: Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy' | 'scheduled'; isOvertime?: boolean; comment?: string }> } }[] = await r.json();
+        if (cancelled) return;
+        const merged: Record<string, { start: string; end: string; segments?: Array<{ start: string; end: string }>; lunchStart?: string; lunchEnd?: string; source?: 'manual' | 'deputy' | 'scheduled'; isOvertime?: boolean; comment?: string }> = {};
+        for (const row of rows) {
+          const ovs = row.data?.staffTimeOverrides ?? {};
+          for (const [empId, ov] of Object.entries(ovs)) {
+            merged[empId] = ov;
+          }
+        }
+        setStaffTimeOverrides(merged);
+      } catch { /* offline */ }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [activeView, selectedCentreId, date]);
+
   // Expected mode: use same weekday 7 days ago as attendance source for planning
   // showCurrentOnly: Live mode shows currently signed-in children; Plan uses historical all-day data.
   // For future dates the attendance data comes from last week (effectiveDate = date - 7 days),
@@ -807,8 +840,9 @@ export default function RatioDashboardPage() {
 
   // Booked / Expected forecast data per room
   type RoomForecast = { expected: number | null; weeksUsed: number; booked?: number | null };
-  type ForecastData = { booked: number | null; capacity: number | null; rooms: Record<string, RoomForecast> };
+  type ForecastData = { booked: number | null; capacity: number | null; rooms: Record<string, RoomForecast>; lastWeek?: string | null };
   const [forecast, setForecast] = useState<ForecastData | null>(null);
+  const [forecastHistoricalDate, setForecastHistoricalDate] = useState<string | null>(null);
 
   // -- Drag-and-drop: manual staff reallocation (persisted per centre+date) --------
   const movesKey = `tga_pod_moves:${selectedCentreId}:${date}`;
@@ -850,6 +884,28 @@ export default function RatioDashboardPage() {
     loadMoves();
     return () => { cancelled = true; };
   }, [movesKey, selectedCentreId, date]);
+
+  // Load existing float schedules so the main "Plan day" buttons correctly
+  // show "Day planned" for floats that already have a saved schedule.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSavedFloats() {
+      try {
+        const r = await fetch(`/api/float-schedules?centre=${encodeURIComponent(selectedCentreId)}&date=${date}`);
+        if (!r.ok || cancelled) return;
+        const rows = await r.json();
+        const ids = new Set<number>();
+        for (const row of (rows ?? [])) {
+          if (row.schedule?.length > 0 && row.employee_id) {
+            ids.add(Number(row.employee_id));
+          }
+        }
+        if (!cancelled) setSavedFloatIds(ids);
+      } catch { /* offline — buttons will update after next save */ }
+    }
+    loadSavedFloats();
+    return () => { cancelled = true; };
+  }, [selectedCentreId, date]);
 
   async function saveMoves() {
     const moves = staffMoves;
@@ -1050,13 +1106,26 @@ export default function RatioDashboardPage() {
       // rather than fetching last week's attendance (which gives wrong ages and wrong room data).
       const useFutureEnrolled = isFutureDate;
 
-      const [attendanceRes, enrolledRes, rosters, forecastRes] = await Promise.all([
+      // Fetch expected children first so we know which historical date the API used
+      // (it falls back to the most recent previous same-weekday with attendance data).
+      let enrolledRes: { children?: { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[]; historicalDate?: string } | { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[] | null = null;
+      if (useFutureEnrolled) {
+        enrolledRes = await withCache(
+          `expected:${campusName}:${date}`,
+          () => fetch(`/api/children-expected?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()),
+          900000
+        );
+      }
+      const enrolledArray = Array.isArray(enrolledRes)
+        ? (enrolledRes as { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[])
+        : (enrolledRes?.children ?? []);
+      const historicalDate = Array.isArray(enrolledRes) ? effectiveDate : (enrolledRes?.historicalDate ?? effectiveDate);
+      setForecastHistoricalDate(historicalDate);
+
+      const [attendanceRes, rosters, forecastRes] = await Promise.all([
         useFutureEnrolled
           ? Promise.resolve([])
-          : withCache(attKey, () => fetch(`/api/attendance?campus=${encodeURIComponent(campusName)}&date=${effectiveDate}`).then(r => r.json())),
-        useFutureEnrolled
-          ? withCache(`expected:${campusName}:${date}`, () => fetch(`/api/children-expected?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()), 900000)
-          : Promise.resolve([]),
+          : withCache(attKey, () => fetch(`/api/attendance?campus=${encodeURIComponent(campusName)}&date=${historicalDate}`).then(r => r.json())),
         withCache(rosterKey, () => fetchRosters(date, allUnitIds, forceRefresh)),
         withCache(forecastKey, () => fetch(`/api/room-forecast?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()).catch(() => null), 300000),
       ]);
@@ -1064,10 +1133,10 @@ export default function RatioDashboardPage() {
 
       let childRows: AttendanceChild[];
 
-      if (useFutureEnrolled && Array.isArray(enrolledRes) && enrolledRes.length > 0) {
+      if (useFutureEnrolled && enrolledArray.length > 0) {
         // children-expected API returns children expected on this specific weekday
         // based on historical attendance patterns, with age already projected to target date
-        childRows = (enrolledRes as { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[]).map(c => ({
+        childRows = enrolledArray.map(c => ({
           child_name:           c.full_name,
           room:                 c.room ?? '',
           sign_in:              '08:00',  // assumed present all day for ratio planning
@@ -1286,7 +1355,8 @@ export default function RatioDashboardPage() {
   const overallStatus  = roomsAtRisk.length > 0 ? 'red' : 'green';
 
   return (
-    <Layout>
+    <StaffTimeOverridesContext.Provider value={staffTimeOverrides}>
+      <Layout>
       <style>{`
         @media (max-width: 1024px) {
           .ratio-check-table { font-size: 11px; }
@@ -1301,12 +1371,12 @@ export default function RatioDashboardPage() {
       {/* Mode indicator */}
       {viewMode === 'expected' && (
         <div style={{ margin: '0 0 8px', padding: '6px 12px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '8px', fontSize: '12px', color: '#92400e' }}>
-          Expected view — showing predicted attendance from {effectiveDate} (same weekday last week)
+          Expected view — showing predicted attendance from {forecastHistoricalDate ?? effectiveDate} (same weekday last week)
         </div>
       )}
       {viewMode !== 'expected' && date > todayStr() && (
         <div style={{ margin: '0 0 8px', padding: '6px 12px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '8px', fontSize: '12px', color: '#92400e' }}>
-          Future date — no actual attendance yet. Using {effectiveDate} (same weekday last week) as a prediction.
+          Future date — no actual attendance yet. Using {forecastHistoricalDate ?? effectiveDate} (same weekday last week) as a prediction.
         </div>
       )}
       <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
@@ -1321,7 +1391,7 @@ export default function RatioDashboardPage() {
             {effectiveDate !== date ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
                 style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
-                {date > todayStr() ? '📅 Predicted from' : '📊 Expected mode from'} {effectiveDate}
+                {date > todayStr() ? '📅 Predicted from' : '📊 Expected mode from'} {forecastHistoricalDate ?? effectiveDate}
               </span>
             ) : ownaRefreshedAt ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
@@ -1461,6 +1531,7 @@ export default function RatioDashboardPage() {
             children={children}
             rosters={allRostersWithExternal.filter(r => !leaveUnitIds.includes(r.unitId))}
             onLunchAlerts={setLunchAlerts}
+            onStaffTimeOverrides={setStaffTimeOverrides}
           />
         </div>
       )}
@@ -1513,7 +1584,7 @@ export default function RatioDashboardPage() {
             border: effectiveDate !== date ? '1px solid #fcd34d' : '1px solid #86efac',
           }}>
             {effectiveDate !== date
-              ? `📅 Predicted from ${effectiveDate} (same weekday last week)`
+              ? `📅 Predicted from ${forecastHistoricalDate ?? effectiveDate} (same weekday last week)`
               : '✅ Actual Owna data'}
           </span>
         )}
@@ -1694,9 +1765,16 @@ export default function RatioDashboardPage() {
                 roomStatus={rs}
                 issAssigned={issStaff.filter(s => staffMoves[s.employeeId] === rs.room.id)}
                 forecast={forecast?.rooms ? (() => {
-                  const owna = (rs.room.ownaRoomName ?? rs.room.name).toLowerCase();
-                  const match = Object.entries(forecast.rooms).find(([k]) => k.toLowerCase().includes(owna) || owna.includes(k.toLowerCase()));
-                  return match ? match[1] : null;
+                  const matches = Object.entries(forecast.rooms).filter(([k]) => roomNameMatches(k, rs.room));
+                  if (matches.length === 0) return null;
+                  // Merge matches so old room-name keys (expected) and new room-name
+                  // keys (booked) both contribute to the same card.
+                  const merged: RoomForecastData = matches.reduce((acc, [, data]) => ({
+                    expected: acc?.expected ?? data.expected,
+                    booked: acc?.booked ?? data.booked,
+                    weeksUsed: acc?.weeksUsed ?? data.weeksUsed,
+                  }), null as RoomForecastData);
+                  return merged;
                 })() : null}
                 drag={{
                   onDragStart,
@@ -1926,7 +2004,7 @@ export default function RatioDashboardPage() {
           allRosters={allRostersWithExternal}
           floats={floats}
           adStaff={adStaff}
-          effectiveDate={effectiveDate}
+          effectiveDate={forecastHistoricalDate ?? effectiveDate}
           targetDate={date}
         />
       )}
@@ -1985,7 +2063,7 @@ export default function RatioDashboardPage() {
           rooms={centre.rooms}
           roomStatuses={effectiveRoomStatuses}
           children={children}
-          historicalDate={planSubView === 'plan' && effectiveDate !== date ? effectiveDate : undefined}
+          historicalDate={planSubView === 'plan' && effectiveDate !== date ? (forecastHistoricalDate ?? effectiveDate) : undefined}
           onClose={() => setScheduledFloat(null)}
           onSaved={(_schedule: FloatSchedule) => {
             setScheduledFloat(null);
@@ -1997,5 +2075,6 @@ export default function RatioDashboardPage() {
       </>
       )}
     </Layout>
+    </StaffTimeOverridesContext.Provider>
   );
 }

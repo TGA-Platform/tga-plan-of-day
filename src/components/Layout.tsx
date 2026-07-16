@@ -1,11 +1,32 @@
-﻿import React from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { logout, getUser } from '../auth';
+import { getAllowedCentres } from '../auth';
 import { canAccess } from '../lib/rolePermissions';
+import { isStagingOrPreview } from '../lib/env';
+
+function usePendingTimesheetCount(user: ReturnType<typeof getUser>) {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!user) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const centres = getAllowedCentres(user);
+    Promise.all(
+      centres.map(c =>
+        fetch(`/api/timesheets?centreId=${encodeURIComponent(c.id)}&date=${today}`)
+          .then(r => (r.ok ? r.json() : { rows: [] }))
+          .then(data => (data.rows || []).filter((row: any) => row.status === 'pending' || row.status === 'flagged').length)
+          .catch(() => 0)
+      )
+    ).then(counts => setCount(counts.reduce((a, b) => a + b, 0)));
+  }, [user?.email]);
+  return count;
+}
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const navigate  = useNavigate();
   const user = getUser();
+  const pendingCount = usePendingTimesheetCount(user);
 
   return (
     <div className="min-h-screen flex flex-col" style={{ backgroundColor: '#F5FAF3', width: '100%' }}>
@@ -41,6 +62,25 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <span style={{ color: '#D0E8B8' }}>|</span>
                 </>
               )}
+              {canAccess(user.role, 'roster') && isStagingOrPreview() && (
+                <>
+                  <Link to="/roster" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Roster</Link>
+                  <span style={{ color: '#D0E8B8' }}>|</span>
+                </>
+              )}
+              {canAccess(user.role, 'timesheets') && isStagingOrPreview() && (
+                <>
+                  <Link to="/timesheets" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity flex items-center gap-1">
+                    Timesheets
+                    {pendingCount > 0 && (
+                      <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-bold text-white" style={{ backgroundColor: '#dc2626', minWidth: '18px' }}>
+                        {pendingCount > 99 ? '99+' : pendingCount}
+                      </span>
+                    )}
+                  </Link>
+                  <span style={{ color: '#D0E8B8' }}>|</span>
+                </>
+              )}
               {canAccess(user.role, 'summary') && (
                 <>
                   <Link to="/summary" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">All Centres</Link>
@@ -53,12 +93,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <span style={{ color: '#D0E8B8' }}>|</span>
                 </>
               )}
-              <>
-                <Link to="/roster" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Roster</Link>
-                <span style={{ color: '#D0E8B8' }}>|</span>
-              </>
-              {/* Staff nav hidden — work in progress */}
-              <span style={{ color: '#D0E8B8' }}>|</span>
+              {canAccess(user.role, 'roster') && isStagingOrPreview() && (
+                <>
+                  <Link to="/staffing" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Staffing</Link>
+                  <span style={{ color: '#D0E8B8' }}>|</span>
+                </>
+              )}
               <a href="/guide" target="_blank" rel="noopener noreferrer" style={{ color: '#050505' }} className="hover:opacity-60 transition-opacity">Guide</a>
               <span style={{ color: '#D0E8B8' }}>|</span>
               <span style={{ color: '#596570' }}>{user.name}</span>

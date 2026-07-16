@@ -4,7 +4,7 @@ import {
   ChevronDown, ChevronRight, ShieldCheck, AlertTriangle,
   Pencil, Plus, Trash2, Briefcase, UserMinus, Search, List, LayoutGrid,
   ChevronsDown, ChevronsUp, X, AlertCircle, CheckCircle, XCircle, Stethoscope,
-  FileText, ExternalLink, Eye,
+  FileText, ExternalLink, Eye, MessageSquare,
 } from 'lucide-react';
 import { getUser } from '../auth';
 import { CENTRES } from '../config';
@@ -100,6 +100,15 @@ function DocPreviewModal({ url, label, onClose }: { url: string; label: string; 
       </div>
     </div>
   );
+}
+
+interface StaffComment {
+  id: string;
+  centre_id: string;
+  staff_id: string;
+  user_name: string;
+  comment: string;
+  created_at: string;
 }
 
 interface StaffMemberRow {
@@ -1609,12 +1618,14 @@ function StaffCard({
   onSelect,
   onStatusChange,
   onArchive,
+  onOpenComments,
   groupId,
 }: {
   staff: StaffMemberRow;
   onSelect: (tab?: 'profile' | 'accidents' | 'issues') => void;
   onStatusChange: (staffId: string, status: string) => void;
   onArchive?: (staffId: string, staffName: string) => void;
+  onOpenComments?: (staff: StaffMemberRow) => void;
   groupId?: string;
 }) {
   const isResigned = staff.employment_status === 'Resigned';
@@ -1646,6 +1657,11 @@ function StaffCard({
           )}
         </button>
         <div className="flex gap-1">
+          {onOpenComments && (
+            <button onClick={() => onOpenComments(staff)} className="p-1 rounded-lg hover:bg-blue-50 text-gray-400 hover:text-blue-500" title="Comments">
+              <MessageSquare size={13} />
+            </button>
+          )}
           <button onClick={() => onSelect('accidents')} className="p-1 rounded-lg hover:bg-orange-50 text-gray-400 hover:text-orange-500" title="Accidents">
             <Stethoscope size={13} />
           </button>
@@ -1700,6 +1716,143 @@ function StaffCard({
         );
       })()}
     </div>
+  );
+}
+
+// ── Staff Comments Modal ───────────────────────────────────────────────────
+
+function CommentsModal({
+  staff,
+  centreId,
+  onClose,
+}: {
+  staff: StaffMemberRow;
+  centreId: string;
+  onClose: () => void;
+}) {
+  const user = getUser();
+  const [comments, setComments] = useState<StaffComment[]>([]);
+  const [newComment, setNewComment] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    loadComments();
+  }, [staff.id, centreId]);
+
+  async function loadComments() {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/staff-comments?staffId=${encodeURIComponent(staff.id)}&centreId=${encodeURIComponent(centreId)}`);
+      const data = await res.json();
+      if (res.ok && data.ok) setComments(data.comments || []);
+      else throw new Error(data.error || 'Failed to load comments');
+    } catch (e: any) {
+      setError(e.message || 'Failed to load comments');
+    }
+    setLoading(false);
+  }
+
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newComment.trim()) return;
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/staff-comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          centreId,
+          staffId: staff.id,
+          userName: user?.name || user?.email || 'Unknown',
+          comment: newComment.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to add comment');
+      setComments(prev => [data.comment, ...prev]);
+      setNewComment('');
+    } catch (e: any) {
+      setError(e.message || 'Failed to add comment');
+    }
+    setSaving(false);
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this comment?')) return;
+    try {
+      const res = await fetch(`/api/staff-comments?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to delete');
+      setComments(prev => prev.filter(c => c.id !== id));
+    } catch (e: any) {
+      setError(e.message || 'Failed to delete comment');
+    }
+  }
+
+  function formatTime(iso: string) {
+    try {
+      return new Date(iso).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    } catch { return iso; }
+  }
+
+  return (
+    <Modal isOpen onClose={onClose} title={`Comments — ${staff.name}`} size="md">
+      <div className="space-y-4">
+        {error && (
+          <div className="rounded-xl px-3 py-2 text-xs" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleAdd} className="flex gap-2">
+          <input
+            type="text"
+            value={newComment}
+            onChange={e => setNewComment(e.target.value)}
+            placeholder="Add a comment..."
+            className="flex-1 text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#2d5c18]/20"
+          />
+          <button
+            type="submit"
+            disabled={saving || !newComment.trim()}
+            className="px-4 py-2 bg-[#2d5c18] text-white text-sm font-medium rounded-xl hover:bg-[#2d5c18]/90 transition-colors disabled:opacity-50"
+          >
+            {saving ? 'Posting...' : 'Post'}
+          </button>
+        </form>
+
+        {loading ? (
+          <div className="text-sm text-gray-500">Loading…</div>
+        ) : comments.length === 0 ? (
+          <div className="text-sm text-gray-500">No comments yet.</div>
+        ) : (
+          <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-1">
+            {comments.map(c => (
+              <div key={c.id} className="rounded-xl border border-gray-100 p-3 bg-gray-50">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <span className="text-xs font-semibold" style={{ color: '#2d5c18' }}>{c.user_name}</span>
+                    <span className="text-[10px] text-gray-400 ml-2">{formatTime(c.created_at)}</span>
+                  </div>
+                  <button
+                    onClick={() => handleDelete(c.id)}
+                    className="text-gray-400 hover:text-red-500 p-1"
+                    title="Delete"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+                <div className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{c.comment}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -2478,6 +2631,7 @@ export default function StaffingStructurePage() {
   const [positionModal, setPositionModal] = useState<{ existing?: OpenPosition } | null>(null);
   const [resignationPending, setResignationPending] = useState<{ staffId: string; staffName: string } | null>(null);
   const [archivePending, setArchivePending] = useState<{ staffId: string; staffName: string } | null>(null);
+  const [commentsTarget, setCommentsTarget] = useState<StaffMemberRow | null>(null);
   const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
 
   // Room management modals
@@ -2899,6 +3053,13 @@ export default function StaffingStructurePage() {
           groups={activeGroups.map(g => ({ id: g.id, title: g.title }))}
           onClose={() => setDeleteRoomTarget(null)}
           onConfirm={(targetGroupId) => { handleDeleteRoom(deleteRoomTarget.groupId, targetGroupId); setDeleteRoomTarget(null); }}
+        />
+      )}
+      {commentsTarget && (
+        <CommentsModal
+          staff={commentsTarget}
+          centreId={centreId}
+          onClose={() => setCommentsTarget(null)}
         />
       )}
 
@@ -3417,6 +3578,7 @@ export default function StaffingStructurePage() {
                               onSelect={tab => setProfileTarget({ staff: sm, tab })}
                               onStatusChange={handleStatusChange}
                               onArchive={(staffId, staffName) => setArchivePending({ staffId, staffName })}
+                              onOpenComments={setCommentsTarget}
                             />
                           ))}
                         </div>
@@ -3449,6 +3611,7 @@ export default function StaffingStructurePage() {
                         groupId={exitedGroup.id}
                         onSelect={tab => setProfileTarget({ staff: sm, tab })}
                         onStatusChange={handleStatusChange}
+                        onOpenComments={setCommentsTarget}
                       />
                     ))}
                   </div>

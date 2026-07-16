@@ -95,16 +95,20 @@ async function main() {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(filePath);
 
+  const dailyWs = wb.getWorksheet('Daily Occupancy');
+  const occWs   = wb.getWorksheet('Occupancy');
+
   // Prefer the "Daily Occupancy" tab (real historical data from Owna daily runs)
-  // Fall back to "Occupancy" tab (future booking data) if Daily Occupancy not yet populated
-  const ws = wb.getWorksheet('Daily Occupancy') || wb.getWorksheet('Occupancy');
+  // Fall back to "Occupancy" tab (future booking data) if Daily Occupancy not yet populated.
+  // We still read the "Occupancy" tab for per-room booked counts even when Daily Occupancy
+  // supplies the campus total, so forward-looking room forecasts keep their booked badges.
+  const ws = dailyWs || occWs;
   if (!ws) throw new Error('No "Daily Occupancy" or "Occupancy" tab found in the spreadsheet');
-  console.log(`  Using sheet: "${ws.name}"`);
+  console.log(`  Campus totals from: "${ws.name}"`);
   const isDailyTab = ws.name === 'Daily Occupancy';
 
   // Always read capacity from the "Occupancy" tab (room capacities defined there)
   const capacity = new Map(); // centre => total licensed places
-  const occWs = wb.getWorksheet('Occupancy');
   if (occWs) {
     const seen = new Set(); // avoid double-counting rooms across term entries
     occWs.eachRow((row, i) => {
@@ -127,6 +131,33 @@ async function main() {
 
   // Accumulate booked totals per campus+date
   const totals = new Map(); // "Campus|YYYY-MM-DD" => booked
+
+  // Accumulate per-room booked counts per campus+date from the Occupancy tab.
+  // This is independent of the campus total source so future dates still get room-level detail.
+  const roomBooked = new Map(); // "Campus|YYYY-MM-DD" => { [roomName]: count }
+
+  if (occWs) {
+    occWs.eachRow((row, i) => {
+      if (i === 1) return;
+      const rawCentre = String(row.getCell(COL.centre).value || '').trim();
+      const weekVal   = row.getCell(COL.week).value;
+      if (!rawCentre || !weekVal) return;
+      const centre = normaliseCentre(rawCentre);
+      const weekDate = weekVal instanceof Date ? weekVal : new Date(String(weekVal));
+      if (isNaN(weekDate.getTime())) return;
+      const room = String(row.getCell(COL.room).value || '').trim();
+      if (!room) return;
+      for (const { offset, col } of DAY_COLS) {
+        const date   = fmt(addDays(weekDate, offset));
+        const booked = Number(row.getCell(col).value || 0);
+        const key = `${centre}|${date}`;
+        const byRoom = roomBooked.get(key) || {};
+        byRoom[room] = (byRoom[room] || 0) + booked;
+        roomBooked.set(key, byRoom);
+      }
+    });
+    console.log(`  Per-room booked: ${roomBooked.size} campus-day records from Occupancy tab`);
+  }
 
   ws.eachRow((row, i) => {
     if (i === 1) return; // skip header
@@ -162,7 +193,21 @@ async function main() {
   const rows = [...totals.entries()].map(([key, booked]) => {
     const [campus, date] = key.split('|');
     const cap = capacity.get(campus) || 0;
-    return { campus, date, booked, capacity: cap, updated_at: new Date().toISOString() };
+    const byRoom = roomBooked.get(key);
+    const row = {
+      campus,
+      date,
+      booked,
+      capacity: cap,
+      updated_at: new Date().toISOString(),
+    };
+    // Only write room_booked when we have real per-room data. If the Occupancy tab
+    // doesn't cover this date, leave any existing room_booked alone (e.g. from
+    // update-sharepoint-attendance.js) instead of overwriting it with {}.
+    if (byRoom && Object.keys(byRoom).length > 0) {
+      row.room_booked = byRoom;
+    }
+    return row;
   });
 
   console.log(`  Parsed ${rows.length} campus-day records from ${ws.rowCount - 1} rows`);
