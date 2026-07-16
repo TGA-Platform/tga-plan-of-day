@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  format, startOfWeek, addDays, parseISO, isSameDay,
+  format, startOfWeek, addDays, parseISO, isSameDay, subWeeks, getISODay,
 } from 'date-fns';
 import {
   ChevronLeft, ChevronRight, Plus, Printer,
   Trash2, Save, Upload, CheckCircle, AlertCircle, X,
+  BookTemplate, DownloadCloud, EyeOff,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import RosterTabs from '../components/RosterTabs';
@@ -13,7 +14,7 @@ import { isStagingOrPreview } from '../lib/env';
 import { CENTRES } from '../config';
 import { getUser, getAllowedCentres } from '../auth';
 import { fetchRosters } from '../deputy';
-import type { Room, RosterShift, RosterWeek } from '../types';
+import type { Room, RosterShift, RosterWeek, RosterTemplate, RosterTemplateShift } from '../types';
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NDE3MjUsImV4cCI6MjA4OTUxNzcyNX0.v_thHOU7xq0gaFhcnb2A3iBl5H7bAp9IbT9IPMg_jTY';
@@ -219,6 +220,87 @@ async function deleteShiftsForDate(weekId: string, date: string): Promise<boolea
   return res.ok;
 }
 
+async function unpublishWeek(weekId: string): Promise<boolean> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/roster_weeks?id=eq.${weekId}`, {
+    method: 'PATCH',
+    headers: HEADERS,
+    body: JSON.stringify({ status: 'draft', published_at: null }),
+  });
+  return res.ok;
+}
+
+// ── Template helpers ─────────────────────────────────────────────────────────
+
+async function loadTemplates(centreId: string): Promise<RosterTemplate[]> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/roster_templates?centre_id=eq.${encodeURIComponent(centreId)}&select=*&order=created_at.asc`,
+    { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
+  );
+  if (!res.ok) return [];
+  return res.json();
+}
+
+async function createTemplate(centreId: string, name: string, userEmail?: string): Promise<RosterTemplate | null> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/roster_templates`, {
+    method: 'POST',
+    headers: HEADERS,
+    body: JSON.stringify({ centre_id: centreId, name, created_by: userEmail }),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] : data;
+}
+
+async function deleteTemplate(templateId: string): Promise<boolean> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/roster_templates?id=eq.${templateId}`, {
+    method: 'DELETE',
+    headers: HEADERS,
+  });
+  return res.ok;
+}
+
+async function loadTemplateShifts(templateId: string): Promise<RosterTemplateShift[]> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/roster_template_shifts?template_id=eq.${templateId}&select=*&order=day_of_week.asc,start_time.asc&limit=500`,
+    { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
+  );
+  if (!res.ok) return [];
+  return res.json();
+}
+
+async function upsertTemplateShifts(templateId: string, centreId: string, tShifts: Omit<RosterTemplateShift, 'id' | 'created_at' | 'updated_at'>[]): Promise<boolean> {
+  // Delete existing then insert fresh
+  await fetch(`${SUPABASE_URL}/rest/v1/roster_template_shifts?template_id=eq.${templateId}`, {
+    method: 'DELETE',
+    headers: HEADERS,
+  });
+  if (tShifts.length === 0) return true;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/roster_template_shifts`, {
+    method: 'POST',
+    headers: HEADERS,
+    body: JSON.stringify(tShifts.map(s => ({ ...s, template_id: templateId, centre_id: centreId }))),
+  });
+  return res.ok;
+}
+
+// ── Ratio validation helper ──────────────────────────────────────────────────
+
+async function fetchAttendanceForDate(campus: string, date: string): Promise<{ room: string; count: number }[]> {
+  // Use last week's same weekday attendance as expected child count proxy
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/attendance_daily?campus=eq.${encodeURIComponent(campus)}&date=eq.${date}&select=room,sign_in&limit=500`,
+    { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
+  );
+  if (!res.ok) return [];
+  const rows: { room: string; sign_in: string | null }[] = await res.json();
+  const counts: Record<string, number> = {};
+  for (const r of rows) {
+    if (!r.room) continue;
+    counts[r.room] = (counts[r.room] || 0) + 1;
+  }
+  return Object.entries(counts).map(([room, count]) => ({ room, count }));
+}
+
 // ── Main component ───────────────────────────────────────────────────────────
 
 interface RosterBuilderPageProps {
@@ -261,6 +343,26 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
   const [pinLoading, setPinLoading] = useState(false);
   const [pinSearch, setPinSearch] = useState('');
 
+  // ── Import from Ratio Check ──────────────────────────────────────────────────
+  const [importRCModalOpen, setImportRCModalOpen] = useState(false);
+  const lastWeekMon = format(startOfWeek(subWeeks(new Date(), 1), { weekStartsOn: 1 }), 'yyyy-MM-dd');
+  const [importRCWeekStart, setImportRCWeekStart] = useState(lastWeekMon);
+  const [importRCLoading, setImportRCLoading] = useState(false);
+  const [importRCWarnings, setImportRCWarnings] = useState<string[]>([]);
+
+  // ── Templates panel ─────────────────────────────────────────────────────────────
+  const [templatesPanelOpen, setTemplatesPanelOpen] = useState(false);
+  const [templates, setTemplates] = useState<RosterTemplate[]>([]);
+  const [templateShifts, setTemplateShifts] = useState<Record<string, RosterTemplateShift[]>>({});
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState('');
+  const [applyTemplateConfirm, setApplyTemplateConfirm] = useState<string | null>(null); // templateId
+  const [deleteTemplateConfirm, setDeleteTemplateConfirm] = useState<string | null>(null); // templateId
+
+  // ── Live ratio validation ────────────────────────────────────────────────────────
+  const [dayValidation, setDayValidation] = useState<Record<string, 'green' | 'amber' | 'red'>>({}); // date -> status
+  const validationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [roomForecasts, setRoomForecasts] = useState<Record<string, Record<string, { expected: number | null; booked: number | null; actual: number | null; weeksUsed: number; required?: number | null }>>>({});
 
   const centre = useMemo(() => CENTRES.find(c => c.id === centreId) || CENTRES[0], [centreId]);
@@ -272,6 +374,18 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
     loadData();
     loadRoomForecasts();
   }, [centreId, weekStart]);
+
+  // Load templates when panel opens
+  useEffect(() => {
+    if (templatesPanelOpen) loadTemplatesData();
+  }, [templatesPanelOpen, centreId]);
+
+  // Re-run ratio validation 2s after shifts change
+  useEffect(() => {
+    if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
+    validationTimerRef.current = setTimeout(() => runRatioValidation(), 2000);
+    return () => { if (validationTimerRef.current) clearTimeout(validationTimerRef.current); };
+  }, [shifts, weekDays, centre]);
 
   async function loadData() {
     setLoading(true);
@@ -318,6 +432,295 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
       }
     }));
     setRoomForecasts(results);
+  }
+
+  // ── Templates data loading ───────────────────────────────────────────────────
+  async function loadTemplatesData() {
+    setTemplatesLoading(true);
+    const list = await loadTemplates(centreId);
+    setTemplates(list);
+    const shiftsMap: Record<string, RosterTemplateShift[]> = {};
+    await Promise.all(list.map(async t => {
+      shiftsMap[t.id] = await loadTemplateShifts(t.id);
+    }));
+    setTemplateShifts(shiftsMap);
+    setTemplatesLoading(false);
+  }
+
+  // ── Live ratio validation ────────────────────────────────────────────────────
+  async function runRatioValidation() {
+    if (!weekRecord) return;
+    const campus = centre.ownaName || centre.name;
+    const result: Record<string, 'green' | 'amber' | 'red'> = {};
+    for (const day of weekDays) {
+      const date = format(day, 'yyyy-MM-dd');
+      const lastWeek = format(addDays(day, -7), 'yyyy-MM-dd');
+      const [attendanceRows, dayShifts] = await Promise.all([
+        fetchAttendanceForDate(campus, lastWeek),
+        Promise.resolve(shifts.filter(s => s.date === date && !['leave', 'other'].includes(s.room_id || ''))),
+      ]);
+      let worst: 'green' | 'amber' | 'red' = 'green';
+      for (const room of centre.rooms) {
+        const expected = attendanceRows.find(r => r.room === (room.ownaRoomName || room.name))?.count || 0;
+        if (expected === 0) continue;
+        const required = Math.ceil(expected / room.ratio);
+        const roomShifts = dayShifts.filter(s => s.room_id === room.id);
+        for (let m = 6 * 60; m < 18 * 60; m += 30) {
+          const assigned = roomShifts.filter(s => {
+            const sm = hhmmToMinutes(s.start_time);
+            const em = hhmmToMinutes(s.end_time);
+            if (m < sm || m >= em) return false;
+            if (s.lunch_start) {
+              const ls = hhmmToMinutes(s.lunch_start);
+              const le = ls + (s.lunch_duration || 30);
+              if (m >= ls && m < le) return false;
+            }
+            return true;
+          }).length;
+          if (assigned < required) { worst = 'red'; break; }
+          if (assigned === required && worst === 'green') worst = 'amber';
+        }
+        if (worst === 'red') break;
+      }
+      result[date] = worst;
+    }
+    setDayValidation(result);
+  }
+
+  // ── Import from Ratio Check ──────────────────────────────────────────────────
+  async function handleImportFromRatioCheck() {
+    if (!weekRecord) {
+      const week = await getOrCreateWeek(centreId, weekStart, user?.email);
+      if (!week) { alert('Could not create roster week.'); return; }
+      setWeekRecord(week);
+    }
+    setImportRCLoading(true);
+    setImportRCWarnings([]);
+    setError(null);
+    const warnings: string[] = [];
+    const importedDates: string[] = [];
+    let importedCount = 0;
+
+    // Build reference week dates from importRCWeekStart (Monday)
+    const refDays = Array.from({ length: 5 }, (_, i) => addDays(parseISO(importRCWeekStart), i));
+    const staffRes = await fetch(`/api/staff-members?centreId=${encodeURIComponent(centreId)}`);
+    const staffData = await staffRes.json().catch(() => ({}));
+    const staffRows = staffData.staff || [];
+    const deputyToStaffId: Record<string, string> = {};
+    for (const s of staffRows) {
+      if (s.deputy_employee_id) deputyToStaffId[String(s.deputy_employee_id)] = String(s.id);
+    }
+
+    for (const day of refDays) {
+      const date = format(day, 'yyyy-MM-dd');
+      try {
+        const res = await fetch(
+          `${SUPABASE_URL}/rest/v1/ratio_check_data?centre_id=eq.${encodeURIComponent(centreId)}&date=eq.${date}&select=*&limit=50`,
+          { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
+        );
+        if (!res.ok) { warnings.push(`${date}: could not fetch ratio check data`); continue; }
+        const rows = await res.json();
+        if (!Array.isArray(rows) || rows.length === 0) { warnings.push(`${date}: no ratio check data found`); continue; }
+
+        // Merge morning and afternoon sessions
+        const merged: {
+          staffTimeOverrides: Record<string, { start?: string; end?: string }>;
+          staffMoves: Record<string, string>;
+        } = { staffTimeOverrides: {}, staffMoves: {} };
+        for (const row of rows) {
+          if (row.staff_time_overrides) Object.assign(merged.staffTimeOverrides, row.staff_time_overrides);
+          if (row.staff_moves) Object.assign(merged.staffMoves, row.staff_moves);
+        }
+
+        const deputyRoomCounts: Record<string, Record<string, number>> = {};
+        for (const [key, roomName] of Object.entries(merged.staffMoves)) {
+          const [deputyId, timeStr] = key.split(':');
+          if (!deputyId || !timeStr) continue;
+          const rname = String(roomName).toLowerCase();
+          if (['_removed_', '_cleaning_', '_additional_'].includes(rname)) continue;
+          deputyRoomCounts[deputyId] = deputyRoomCounts[deputyId] || {};
+          deputyRoomCounts[deputyId][String(roomName)] = (deputyRoomCounts[deputyId][String(roomName)] || 0) + 1;
+        }
+
+        // Map to current week's same weekday
+        const dayIndex = getISODay(day) - 1; // 0=Mon
+        const targetDate = format(weekDays[dayIndex], 'yyyy-MM-dd');
+
+        // Clear existing shifts for this day
+        await deleteShiftsForDate(weekRecord!.id, targetDate);
+
+        for (const [deputyId, times] of Object.entries(merged.staffTimeOverrides)) {
+          const staffId = deputyToStaffId[deputyId];
+          if (!staffId) { warnings.push(`${date}: no staff member for Deputy ID ${deputyId}`); continue; }
+          const start = times.start || '08:00';
+          const end = times.end || '16:00';
+          const roomCounts = deputyRoomCounts[deputyId] || {};
+          const primaryRoom = Object.entries(roomCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+          const room = centre.rooms.find(r => r.name === primaryRoom || r.ownaRoomName === primaryRoom);
+          const roomId = room?.id || (primaryRoom ? 'other' : '');
+          const saved = await saveShift({
+            roster_week_id: weekRecord!.id,
+            centre_id: centreId,
+            staff_id: staffId,
+            staff_name: staffList.find(s => s.id === staffId)?.name || '',
+            date: targetDate,
+            start_time: start.slice(0, 5),
+            end_time: end.slice(0, 5),
+            room_id: roomId || undefined,
+            room_name: room?.name || primaryRoom || undefined,
+            lunch_duration: 30,
+          });
+          if (saved) importedCount++; else warnings.push(`${date}: failed to save shift for staff ${staffId}`);
+        }
+        importedDates.push(targetDate);
+      } catch (err: any) {
+        warnings.push(`${date}: ${err.message || String(err)}`);
+      }
+    }
+
+    const loaded = await loadShifts(weekRecord!.id);
+    setShifts(loaded);
+    setImportRCLoading(false);
+    setImportRCWarnings(warnings);
+    if (warnings.length === 0) {
+      alert(`Imported ${importedCount} shifts from ratio check.`);
+      setImportRCModalOpen(false);
+    } else if (importedCount === 0) {
+      alert(`No shifts imported.\n${warnings.join('\n')}`);
+    } else {
+      alert(`Imported ${importedCount} shifts with warnings:\n${warnings.join('\n')}`);
+      setImportRCModalOpen(false);
+    }
+  }
+
+  // ── Templates actions ────────────────────────────────────────────────────────
+  async function handleCreateTemplateFromCurrentWeek() {
+    if (!newTemplateName.trim() || !weekRecord) return;
+    const template = await createTemplate(centreId, newTemplateName.trim(), user?.email);
+    if (!template) { alert('Failed to create template'); return; }
+    const tShifts: Omit<RosterTemplateShift, 'id' | 'created_at' | 'updated_at'>[] = shifts.map(s => {
+      const dayOfWeek = getISODay(parseISO(s.date)); // 1-5 for Mon-Fri
+      return {
+        template_id: template.id,
+        centre_id: centreId,
+        staff_id: s.staff_id,
+        staff_name: s.staff_name,
+        day_of_week: dayOfWeek,
+        start_time: s.start_time,
+        end_time: s.end_time,
+        room_id: s.room_id,
+        room_name: s.room_name,
+        lunch_start: s.lunch_start,
+        lunch_duration: s.lunch_duration || 30,
+        notes: s.notes,
+      };
+    });
+    const ok = await upsertTemplateShifts(template.id, centreId, tShifts);
+    if (!ok) { alert('Failed to save template shifts'); return; }
+    setNewTemplateName('');
+    await loadTemplatesData();
+  }
+
+  async function handleCreateTemplateFromRatioCheck() {
+    if (!newTemplateName.trim()) return;
+    setImportRCLoading(true);
+    const template = await createTemplate(centreId, newTemplateName.trim(), user?.email);
+    if (!template) { alert('Failed to create template'); setImportRCLoading(false); return; }
+    const refDays = Array.from({ length: 5 }, (_, i) => addDays(parseISO(importRCWeekStart), i));
+    const tShifts: Omit<RosterTemplateShift, 'id' | 'created_at' | 'updated_at'>[] = [];
+    for (const day of refDays) {
+      const date = format(day, 'yyyy-MM-dd');
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/ratio_check_data?centre_id=eq.${encodeURIComponent(centreId)}&date=eq.${date}&select=*&limit=50`,
+        { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
+      );
+      if (!res.ok) continue;
+      const rows = await res.json();
+      if (!Array.isArray(rows) || rows.length === 0) continue;
+      const merged: {
+        staffTimeOverrides: Record<string, { start?: string; end?: string }>;
+        staffMoves: Record<string, string>;
+      } = { staffTimeOverrides: {}, staffMoves: {} };
+      for (const row of rows) {
+        if (row.staff_time_overrides) Object.assign(merged.staffTimeOverrides, row.staff_time_overrides);
+        if (row.staff_moves) Object.assign(merged.staffMoves, row.staff_moves);
+      }
+      const deputyRoomCounts: Record<string, Record<string, number>> = {};
+      for (const [key, roomName] of Object.entries(merged.staffMoves)) {
+        const [deputyId] = key.split(':');
+        if (!deputyId) continue;
+        const rname = String(roomName).toLowerCase();
+        if (['_removed_', '_cleaning_', '_additional_'].includes(rname)) continue;
+        deputyRoomCounts[deputyId] = deputyRoomCounts[deputyId] || {};
+        deputyRoomCounts[deputyId][String(roomName)] = (deputyRoomCounts[deputyId][String(roomName)] || 0) + 1;
+      }
+      const staffRes = await fetch(`/api/staff-members?centreId=${encodeURIComponent(centreId)}`);
+      const staffData = await staffRes.json().catch(() => ({}));
+      const deputyToStaffId: Record<string, string> = {};
+      for (const s of staffData.staff || []) {
+        if (s.deputy_employee_id) deputyToStaffId[String(s.deputy_employee_id)] = String(s.id);
+      }
+      const dayOfWeek = getISODay(day);
+      for (const [deputyId, times] of Object.entries(merged.staffTimeOverrides)) {
+        const staffId = deputyToStaffId[deputyId];
+        if (!staffId) continue;
+        const roomCounts = deputyRoomCounts[deputyId] || {};
+        const primaryRoom = Object.entries(roomCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+        const room = centre.rooms.find(r => r.name === primaryRoom || r.ownaRoomName === primaryRoom);
+        tShifts.push({
+          template_id: template.id,
+          centre_id: centreId,
+          staff_id: staffId,
+          staff_name: staffList.find(s => s.id === staffId)?.name || '',
+          day_of_week: dayOfWeek,
+          start_time: (times.start || '08:00').slice(0, 5),
+          end_time: (times.end || '16:00').slice(0, 5),
+          room_id: room?.id || (primaryRoom ? 'other' : undefined),
+          room_name: room?.name || primaryRoom || undefined,
+          lunch_duration: 30,
+        });
+      }
+    }
+    await upsertTemplateShifts(template.id, centreId, tShifts);
+    setNewTemplateName('');
+    setImportRCLoading(false);
+    await loadTemplatesData();
+  }
+
+  async function handleApplyTemplate(templateId: string) {
+    if (!weekRecord) return;
+    setTemplatesLoading(true);
+    const tShifts = templateShifts[templateId] || [];
+    for (const ts of tShifts) {
+      const dayIndex = ts.day_of_week - 1;
+      if (dayIndex < 0 || dayIndex >= weekDays.length) continue;
+      const targetDate = format(weekDays[dayIndex], 'yyyy-MM-dd');
+      await saveShift({
+        roster_week_id: weekRecord.id,
+        centre_id: centreId,
+        staff_id: ts.staff_id,
+        staff_name: ts.staff_name,
+        date: targetDate,
+        start_time: ts.start_time,
+        end_time: ts.end_time,
+        room_id: ts.room_id,
+        room_name: ts.room_name,
+        lunch_start: ts.lunch_start,
+        lunch_duration: ts.lunch_duration || 30,
+        notes: ts.notes,
+      });
+    }
+    const loaded = await loadShifts(weekRecord.id);
+    setShifts(loaded);
+    setApplyTemplateConfirm(null);
+    setTemplatesLoading(false);
+  }
+
+  async function handleUnpublish() {
+    if (!weekRecord) return;
+    if (!confirm('Unpublish this roster? It will become editable again.')) return;
+    const ok = await unpublishWeek(weekRecord.id);
+    if (ok) setWeekRecord({ ...weekRecord, status: 'draft', published_at: undefined });
   }
 
   async function handleSaveShift(shift: Partial<RosterShift>, dates?: string[]) {
@@ -759,11 +1162,18 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
         {weekViewMode === 'staff' ? (
           <div className="grid" style={{ gridTemplateColumns: '180px repeat(5, 1fr)', gap: '8px' }}>
             <div className="text-xs font-semibold" style={{ color: '#596570' }}>Staff / Day</div>
-            {weekDays.map(d => (
-              <div key={format(d, 'yyyy-MM-dd')} className="text-xs font-semibold text-center py-2 rounded-lg" style={{ color: '#2d5c18', backgroundColor: '#F5FAF3' }}>
-                {format(d, 'EEE d MMM')}
-              </div>
-            ))}
+            {weekDays.map(d => {
+              const date = format(d, 'yyyy-MM-dd');
+              const status = dayValidation[date];
+              return (
+                <div key={date} className="text-xs font-semibold text-center py-2 rounded-lg" style={{ color: '#2d5c18', backgroundColor: '#F5FAF3' }}>
+                  <div className="flex items-center justify-center gap-1">
+                    {status && <span className={`w-2 h-2 rounded-full ${status === 'red' ? 'bg-red-500' : status === 'amber' ? 'bg-yellow-500' : 'bg-green-500'}`} />}
+                    {format(d, 'EEE d MMM')}
+                  </div>
+                </div>
+              );
+            })}
             {filteredStaff.map(staff => (
               <React.Fragment key={staff.id}>
                 <div className="py-2">
@@ -773,13 +1183,14 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
                 {weekDays.map(d => {
                   const date = format(d, 'yyyy-MM-dd');
                   const dayShifts = shifts.filter(s => s.date === date && s.staff_id === staff.id);
+                  const isPublished = weekRecord?.status === 'published';
                   return (
                     <div
                       key={date}
-                      onDragOver={e => e.preventDefault()}
-                      onDrop={e => handleDropOnCell(e, date, staff.id)}
-                      onClick={() => openAddModal(date, staff)}
-                      className="min-h-[60px] rounded-lg border border-dashed p-1.5 cursor-pointer hover:bg-white"
+                      onDragOver={e => !isPublished && e.preventDefault()}
+                      onDrop={e => !isPublished && handleDropOnCell(e, date, staff.id)}
+                      onClick={() => !isPublished && openAddModal(date, staff)}
+                      className={`min-h-[60px] rounded-lg border border-dashed p-1.5 ${isPublished ? '' : 'cursor-pointer hover:bg-white'}`}
                       style={{ borderColor: '#D0E8B8', backgroundColor: '#F5FAF3' }}
                     >
                       {dayShifts.length === 0 && <Plus size={14} className="mx-auto mt-3" style={{ color: '#D0E8B8' }} />}
@@ -816,11 +1227,18 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
         ) : (
           <div className="grid" style={{ gridTemplateColumns: '180px repeat(5, 1fr)', gap: '8px' }}>
             <div className="text-xs font-semibold" style={{ color: '#596570' }}>Room / Day</div>
-            {weekDays.map(d => (
-              <div key={format(d, 'yyyy-MM-dd')} className="text-xs font-semibold text-center py-2 rounded-lg" style={{ color: '#2d5c18', backgroundColor: '#F5FAF3' }}>
-                {format(d, 'EEE d MMM')}
-              </div>
-            ))}
+            {weekDays.map(d => {
+              const date = format(d, 'yyyy-MM-dd');
+              const status = dayValidation[date];
+              return (
+                <div key={date} className="text-xs font-semibold text-center py-2 rounded-lg" style={{ color: '#2d5c18', backgroundColor: '#F5FAF3' }}>
+                  <div className="flex items-center justify-center gap-1">
+                    {status && <span className={`w-2 h-2 rounded-full ${status === 'red' ? 'bg-red-500' : status === 'amber' ? 'bg-yellow-500' : 'bg-green-500'}`} />}
+                    {format(d, 'EEE d MMM')}
+                  </div>
+                </div>
+              );
+            })}
             {[
               ...centre.rooms.map((r, i) => ({ id: r.id, name: r.name, idx: i, ratio: r.ratio })),
               { id: 'float', name: 'Float', idx: centre.rooms.length },
@@ -836,13 +1254,14 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
                 {weekDays.map(d => {
                   const date = format(d, 'yyyy-MM-dd');
                   const dayShifts = shifts.filter(s => s.date === date && s.room_id === area.id);
+                  const isPublished = weekRecord?.status === 'published';
                   return (
                     <div
                       key={date}
-                      onDragOver={e => e.preventDefault()}
-                      onDrop={e => handleDropOnRoomLane(e, area.id, area.name)}
-                      onClick={() => openAddModal(date)}
-                      className="min-h-[60px] rounded-lg border border-dashed p-1.5 cursor-pointer hover:bg-white"
+                      onDragOver={e => !isPublished && e.preventDefault()}
+                      onDrop={e => !isPublished && handleDropOnRoomLane(e, area.id, area.name)}
+                      onClick={() => !isPublished && openAddModal(date)}
+                      className={`min-h-[60px] rounded-lg border border-dashed p-1.5 ${isPublished ? '' : 'cursor-pointer hover:bg-white'}`}
                       style={{ borderColor: '#D0E8B8', backgroundColor: '#F5FAF3' }}
                     >
                       {dayShifts.length === 0 && <Plus size={14} className="mx-auto mt-3" style={{ color: '#D0E8B8' }} />}
@@ -943,13 +1362,14 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
                       const em = hhmmToMinutes(s.end_time);
                       return m >= sm && m < em;
                     });
+                    const isPublished = weekRecord?.status === 'published';
                     return (
                       <div
                         key={t}
-                        onDragOver={e => e.preventDefault()}
-                        onDrop={e => handleDropOnCell(e, dayStr, staff.id)}
-                        onClick={() => shiftHere ? openEditModal(shiftHere) : openAddModal(dayStr, staff)}
-                        className={`h-10 border-r ${shiftHere ? '' : 'hover:bg-white cursor-pointer'}`}
+                        onDragOver={e => !isPublished && e.preventDefault()}
+                        onDrop={e => !isPublished && handleDropOnCell(e, dayStr, staff.id)}
+                        onClick={() => !isPublished && (shiftHere ? openEditModal(shiftHere) : openAddModal(dayStr, staff))}
+                        className={`h-10 border-r ${shiftHere || isPublished ? '' : 'hover:bg-white cursor-pointer'}`}
                         style={{ borderColor: '#E2F1DA', backgroundColor: shiftHere ? undefined : '#F5FAF3' }}
                       >
                         {shiftHere && m === hhmmToMinutes(shiftHere.start_time) && (
@@ -1450,6 +1870,171 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
     );
   }
 
+  function ImportRCModal() {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="bg-white rounded-2xl p-5 w-full max-w-md space-y-4 shadow-xl">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-lg" style={{ color: '#2d5c18' }}>Import from Ratio Check</h3>
+            <button onClick={() => setImportRCModalOpen(false)} className="p-1 hover:bg-gray-100 rounded"><X size={18} /></button>
+          </div>
+          <p className="text-sm" style={{ color: '#596570' }}>
+            We'll use the saved ratio check data from this week to pre-fill your roster.
+          </p>
+          <div>
+            <label className="text-xs font-semibold" style={{ color: '#596570' }}>Reference week starting (Monday)</label>
+            <input
+              type="date"
+              value={importRCWeekStart}
+              onChange={e => setImportRCWeekStart(e.target.value)}
+              className="w-full px-3 py-1.5 rounded-lg border text-sm"
+              style={{ borderColor: '#D0E8B8' }}
+            />
+          </div>
+          {importRCWarnings.length > 0 && (
+            <div className="rounded-lg p-3 text-sm max-h-40 overflow-y-auto" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
+              <div className="font-semibold mb-1">Warnings:</div>
+              {importRCWarnings.map((w, i) => <div key={i}>• {w}</div>)}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              onClick={() => setImportRCModalOpen(false)}
+              className="px-4 py-1.5 rounded-lg text-sm font-semibold border"
+              style={{ borderColor: '#D0E8B8', color: '#596570' }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleImportFromRatioCheck}
+              disabled={importRCLoading}
+              className="px-4 py-1.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50 flex items-center gap-1.5"
+              style={{ backgroundColor: '#2d5c18' }}
+            >
+              <DownloadCloud size={16} /> {importRCLoading ? 'Importing…' : 'Import'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function TemplatesPanel() {
+    return (
+      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-white shadow-2xl border-l flex flex-col" style={{ borderColor: '#E2F1DA' }}>
+        <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: '#E2F1DA' }}>
+          <h3 className="font-bold text-lg" style={{ color: '#2d5c18' }}>Roster Templates</h3>
+          <button onClick={() => setTemplatesPanelOpen(false)} className="p-1 hover:bg-gray-100 rounded"><X size={18} /></button>
+        </div>
+        <div className="p-4 space-y-4 overflow-y-auto flex-1">
+          <div className="space-y-2">
+            <label className="text-xs font-semibold" style={{ color: '#596570' }}>New template name</label>
+            <input
+              type="text"
+              placeholder="Week A, Week B, School Holidays…"
+              value={newTemplateName}
+              onChange={e => setNewTemplateName(e.target.value)}
+              className="w-full px-3 py-1.5 rounded-lg border text-sm"
+              style={{ borderColor: '#D0E8B8' }}
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleCreateTemplateFromCurrentWeek}
+                disabled={!newTemplateName.trim() || templatesLoading}
+                className="flex-1 px-3 py-1.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
+                style={{ backgroundColor: '#2d5c18' }}
+              >
+                From current week
+              </button>
+              <button
+                onClick={handleCreateTemplateFromRatioCheck}
+                disabled={!newTemplateName.trim() || importRCLoading}
+                className="flex-1 px-3 py-1.5 rounded-lg text-sm font-semibold border disabled:opacity-50"
+                style={{ borderColor: '#D0E8B8', color: '#2d5c18', backgroundColor: 'white' }}
+              >
+                From ratio check
+              </button>
+            </div>
+          </div>
+
+          {templatesLoading && <p className="text-sm" style={{ color: '#596570' }}>Loading…</p>}
+
+          <div className="space-y-3">
+            {templates.length === 0 && !templatesLoading && <p className="text-sm" style={{ color: '#596570' }}>No templates yet.</p>}
+            {templates.map(t => {
+              const tShifts = templateShifts[t.id] || [];
+              const byDay: Record<number, number> = {};
+              for (const s of tShifts) byDay[s.day_of_week] = (byDay[s.day_of_week] || 0) + 1;
+              return (
+                <div key={t.id} className="rounded-xl border p-3 space-y-2" style={{ borderColor: '#E2F1DA' }}>
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold text-sm" style={{ color: '#050505' }}>{t.name}</div>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setApplyTemplateConfirm(t.id)}
+                        className="px-2 py-1 rounded text-xs font-semibold text-white"
+                        style={{ backgroundColor: '#2d5c18' }}
+                      >
+                        Apply
+                      </button>
+                      <button
+                        onClick={() => setDeleteTemplateConfirm(t.id)}
+                        className="px-2 py-1 rounded text-xs font-semibold text-white"
+                        style={{ backgroundColor: '#dc2626' }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                  <div className="text-xs" style={{ color: '#596570' }}>
+                    {tShifts.length} shifts • {Object.keys(byDay).map(d => `D${d}: ${byDay[Number(d)]}`).join(' • ')}
+                  </div>
+                  <div className="grid grid-cols-5 gap-1 text-[10px] text-center">
+                    {['Mon','Tue','Wed','Thu','Fri'].map((label, i) => (
+                      <div key={label} className="rounded py-1" style={{ backgroundColor: byDay[i+1] ? '#E2F1DA' : '#f3f4f6', color: byDay[i+1] ? '#2d5c18' : '#9ca3af' }}>
+                        {label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {applyTemplateConfirm && (
+          <div className="p-4 border-t" style={{ borderColor: '#E2F1DA' }}>
+            <div className="text-sm mb-2" style={{ color: '#050505' }}>Apply this template to the current week? Existing shifts will be kept and overlapping entries updated.</div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setApplyTemplateConfirm(null)} className="px-3 py-1.5 rounded-lg text-sm font-semibold border" style={{ borderColor: '#D0E8B8', color: '#596570' }}>Cancel</button>
+              <button onClick={() => handleApplyTemplate(applyTemplateConfirm)} disabled={templatesLoading} className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ backgroundColor: '#2d5c18' }}>Apply</button>
+            </div>
+          </div>
+        )}
+
+        {deleteTemplateConfirm && (
+          <div className="p-4 border-t" style={{ borderColor: '#E2F1DA' }}>
+            <div className="text-sm mb-2" style={{ color: '#050505' }}>Delete this template? This cannot be undone.</div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setDeleteTemplateConfirm(null)} className="px-3 py-1.5 rounded-lg text-sm font-semibold border" style={{ borderColor: '#D0E8B8', color: '#596570' }}>Cancel</button>
+              <button
+                onClick={async () => {
+                  const ok = await deleteTemplate(deleteTemplateConfirm);
+                  if (ok) await loadTemplatesData();
+                  setDeleteTemplateConfirm(null);
+                }}
+                className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white"
+                style={{ backgroundColor: '#dc2626' }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (printMode) {
     return (
       <div className="p-8 bg-white text-black min-h-screen">
@@ -1548,8 +2133,13 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {weekRecord?.status === 'published' && (
-              <span className="px-3 py-1 rounded-full text-xs font-semibold" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>
-                Published
+              <span className="px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>
+                <CheckCircle size={12} /> Published
+              </span>
+            )}
+            {weekRecord?.status === 'draft' && (
+              <span className="px-3 py-1 rounded-full text-xs font-semibold" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
+                Draft
               </span>
             )}
             {hasCoverageRed && (
@@ -1558,8 +2148,24 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
               </span>
             )}
             <button
+              onClick={() => setImportRCModalOpen(true)}
+              disabled={importRCLoading || weekRecord?.status === 'published'}
+              className="px-3 py-1.5 rounded-lg text-sm font-semibold border flex items-center gap-1.5 disabled:opacity-50"
+              style={{ borderColor: '#D0E8B8', color: '#2d5c18', backgroundColor: 'white' }}
+            >
+              <DownloadCloud size={16} /> {importRCLoading ? 'Importing…' : 'Import from Ratio Check'}
+            </button>
+            <button
+              onClick={() => setTemplatesPanelOpen(true)}
+              disabled={weekRecord?.status === 'published'}
+              className="px-3 py-1.5 rounded-lg text-sm font-semibold border flex items-center gap-1.5 disabled:opacity-50"
+              style={{ borderColor: '#D0E8B8', color: '#2d5c18', backgroundColor: 'white' }}
+            >
+              <BookTemplate size={16} /> Templates
+            </button>
+            <button
               onClick={handleImportFromDeputy}
-              disabled={importing}
+              disabled={importing || weekRecord?.status === 'published'}
               className="px-3 py-1.5 rounded-lg text-sm font-semibold border flex items-center gap-1.5 disabled:opacity-50"
               style={{ borderColor: '#D0E8B8', color: '#2d5c18', backgroundColor: 'white' }}
             >
@@ -1572,14 +2178,24 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
             >
               <Printer size={16} /> Print
             </button>
-            <button
-              onClick={() => setPublishModalOpen(true)}
-              disabled={!weekRecord || weekRecord.status === 'published'}
-              className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50 flex items-center gap-1.5"
-              style={{ backgroundColor: '#2d5c18' }}
-            >
-              <CheckCircle size={16} /> Publish
-            </button>
+            {weekRecord?.status === 'published' ? (
+              <button
+                onClick={handleUnpublish}
+                className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white flex items-center gap-1.5"
+                style={{ backgroundColor: '#92400e' }}
+              >
+                <EyeOff size={16} /> Unpublish
+              </button>
+            ) : (
+              <button
+                onClick={() => setPublishModalOpen(true)}
+                disabled={!weekRecord}
+                className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50 flex items-center gap-1.5"
+                style={{ backgroundColor: '#2d5c18' }}
+              >
+                <CheckCircle size={16} /> Publish
+              </button>
+            )}
           </div>
         </div>
 
@@ -1652,6 +2268,8 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
       {modalOpen && <ShiftModal />}
       {publishModalOpen && <PublishModal />}
       {pinsModalOpen && <PinModal />}
+      {importRCModalOpen && <ImportRCModal />}
+      {templatesPanelOpen && <TemplatesPanel />}
     </>
   );
 
