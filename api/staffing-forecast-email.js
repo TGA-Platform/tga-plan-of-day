@@ -205,7 +205,9 @@ function calcCentreForecast(centre, date, forecasts, childrenExpected, rosters, 
   const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
   const bufferRequired = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
   const roomNetSurplus = Math.max(0, totalSurplus - totalRatioShortage);
-  const effectiveFloatCount = floatCount + roomNetSurplus;
+  // Match the Plan of Day Float Pool panel: available = floats + AD (+ room surplus already used to cover shortages).
+  // Internal casuals are rostered into rooms/float already and shown as a column, but not double-counted here.
+  const effectiveFloatCount = floatCount;
   const totalFloatersNeeded = Math.max(0, netShortageAfterRealloc + bufferRequired);
   const casualsNeeded = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
   const floatSurplus = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
@@ -285,7 +287,7 @@ function buildHtml(summary, opts = {}) {
   `;
 }
 
-async function sendEmails(summary, date) {
+async function sendEmails(summary, date, includeClusters = true) {
   if (!SMTP_PASS) {
     throw new Error('SMTP_PASS not configured');
   }
@@ -320,6 +322,8 @@ async function sendEmails(summary, date) {
     });
     results.push({ to: DEFAULT_RECIPIENTS, messageId: info.messageId });
   }
+
+  if (!includeClusters) return results;
 
   // Cluster emails to area managers
   for (const [clusterName, centreIds] of Object.entries(CLUSTERS)) {
@@ -373,8 +377,7 @@ export default async function handler(req, res) {
     const host = req.headers.host || 'plan.tga.edu.au';
     const proto = req.headers['x-forwarded-proto'] || 'https';
 
-    const [forecastRes, rosterRes, wwccRes, zCasualRes] = await Promise.all([
-      fetch(`${proto}://${host}/api/room-forecast?campus=all&date=${date}`),
+    const [rosterRes, wwccRes, zCasualRes] = await Promise.all([
       fetch(`${proto}://${host}/api/deputy-rosters`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -384,22 +387,7 @@ export default async function handler(req, res) {
       fetch(`${proto}://${host}/api/z-casuals?centre=all&date=${date}`),
     ]);
 
-    const forecasts = forecastRes.ok ? await forecastRes.json() : {};
     const rosters = rosterRes.ok ? await rosterRes.json() : [];
-
-    // Fetch children-expected per campus to match the Ratio Dashboard "Expected" number.
-    const childrenExpectedByCentre = {};
-    await Promise.all(CENTRES.map(async (centre) => {
-      const campus = centre.ownaName ?? centre.name;
-      try {
-        const res = await fetch(`${proto}://${host}/api/children-expected?campus=${encodeURIComponent(campus)}&date=${date}`);
-        if (res.ok) {
-          childrenExpectedByCentre[centre.id] = await res.json();
-        }
-      } catch (e) {
-        console.warn(`[staffing-forecast-email] children-expected failed for ${campus}:`, e.message);
-      }
-    }));
 
     const wwccRows = wwccRes.ok ? await wwccRes.json() : [];
     const internalCasualSet = new Set(
@@ -412,12 +400,34 @@ export default async function handler(req, res) {
       zCasualCountByCentre[row.centre] = (zCasualCountByCentre[row.centre] || 0) + 1;
     }
 
+    // Fetch room-forecast per centre (single-campus) to avoid the bulk campus=all bug
+    // that inflates expected/required child counts.
+    const forecasts = {};
+    const childrenExpectedByCentre = {};
+    await Promise.all(CENTRES.map(async (centre) => {
+      const campus = centre.ownaName ?? centre.name;
+      try {
+        const [fcRes, ceRes] = await Promise.all([
+          fetch(`${proto}://${host}/api/room-forecast?campus=${encodeURIComponent(campus)}&date=${date}`),
+          fetch(`${proto}://${host}/api/children-expected?campus=${encodeURIComponent(campus)}&date=${date}`),
+        ]);
+        if (fcRes.ok) forecasts[campus] = await fcRes.json();
+        if (ceRes.ok) {
+          const json = await ceRes.json();
+          childrenExpectedByCentre[centre.id] = Array.isArray(json) ? json : (json.children || []);
+        }
+      } catch (e) {
+        console.warn(`[staffing-forecast-email] forecast fetch failed for ${campus}:`, e.message);
+      }
+    }));
+
     const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, childrenExpectedByCentre[centre.id], rosters, internalCasualSet, zCasualCountByCentre));
     const html = buildHtml(summary, { title: `TGA Staffing Forecast — ${formatDateLabel(date)}` });
 
+    const includeClusters = req.query.clusters !== '0' && req.query.includeClusters !== 'false';
     let sent = null;
     if (shouldSend) {
-      sent = await sendEmails(summary, date);
+      sent = await sendEmails(summary, date, includeClusters);
     }
 
     return res.status(200).json({
