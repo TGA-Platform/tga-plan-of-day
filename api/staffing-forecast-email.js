@@ -132,6 +132,8 @@ function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet,
   const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
   const bufferRequired = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
   const roomNetSurplus = Math.max(0, totalSurplus - totalRatioShortage);
+  // Match the Plan of Day Float Pool panel: available = floats + AD (+ room surplus).
+  // Internal casuals are rostered into rooms/float already and shown as a column, but not double-counted here.
   const effectiveFloatCount = floatCount + roomNetSurplus;
   const totalFloatersNeeded = Math.max(0, netShortageAfterRealloc + bufferRequired);
   const casualsNeeded = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
