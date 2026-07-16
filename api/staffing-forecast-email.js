@@ -1,9 +1,9 @@
 /**
  * /api/staffing-forecast-email
  *
- * Generates a next-day staffing summary using EXPECTED attendance (from
- * room-forecast based on last week's same weekday + booked numbers) and
- * tomorrow's rosters.
+ * Generates a next-day staffing summary that matches the Plan of Day
+ * Staffing Analysis panel exactly. Uses the shared calculator in
+ * ./_staffing-analysis.js.
  *
  * Query params:
  *   date  - optional YYYY-MM-DD, defaults to forecast date (tomorrow, or Monday if called on Friday)
@@ -14,6 +14,7 @@
 
 import nodemailer from 'nodemailer';
 import { CENTRES } from './_centres.js';
+import { calculateStaffingAnalysis } from './_staffing-analysis.js';
 
 const CRON_SECRET = process.env.CRON_SECRET || '';
 
@@ -69,191 +70,8 @@ function forecastDate(baseDate) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function hhmmToMins(t) {
-  if (!t) return null;
-  const parts = String(t).split(':').map(Number);
-  if (parts.length < 2 || isNaN(parts[0])) return null;
-  return parts[0] * 60 + (parts[1] || 0);
-}
-
-function rosterTimeToMins(t) {
-  if (!t) return null;
-  const num = typeof t === 'string' ? parseInt(t, 10) : t;
-  if (!isNaN(num) && num > 100000) {
-    const d = new Date(num * 1000);
-    const sydney = new Date(d.toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
-    return sydney.getHours() * 60 + sydney.getMinutes();
-  }
-  const parts = String(t).split(':').map(Number);
-  if (parts.length >= 2 && !isNaN(parts[0])) return parts[0] * 60 + (parts[1] || 0);
-  return null;
-}
-
-function shiftCoversSlot(r, slotMinutes) {
-  if (!r.StartTime || !r.EndTime) return false;
-  const startM = rosterTimeToMins(r.StartTime);
-  const endM = rosterTimeToMins(r.EndTime);
-  if (startM === null || endM === null) return false;
-  return startM <= slotMinutes && endM > slotMinutes;
-}
-
-function ratioForRoom(roomName) {
-  const lower = (roomName ?? '').toLowerCase();
-  if (lower.includes('0-1') || lower.includes('0-2') || lower.includes('1-2')) return 4;
-  if (lower.includes('2-3') || lower.includes('2.5-3.5') || lower.includes('2.5-3')) return 5;
-  if (lower.includes('3-4') || lower.includes('3-5') || lower.includes('3.5-5') || lower.includes('4-5')) return 10;
-  if (lower.includes('0-2')) return 4;
-  return 5; // default conservative
-}
-
-function ratioForAge(ageMonths) {
-  if (ageMonths === null || ageMonths === undefined) return 5; // conservative default
-  if (ageMonths < 24) return 4;
-  if (ageMonths < 36) return 5;
-  return 10;
-}
-
-function unitType(r, centre) {
-  const uid = r.OperationalUnit;
-  if ((centre.leaveUnitIds || []).includes(uid)) return 'leave';
-  if ((centre.floatUnitIds || []).includes(uid)) return 'float';
-  if ((centre.nonRatioUnitIds || []).includes(uid)) return 'support';
-  if (centre.rooms.some(rm => rm.deputyUnitId === uid)) return 'room';
-  return 'other';
-}
-
 function normName(name) {
   return String(name || '').toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-function calcCentreForecast(centre, date, forecasts, childrenExpected, rosters, internalCasualSet, zCasualCountByCentre) {
-  const campus = centre.ownaName ?? centre.name;
-  const fc = forecasts[campus];
-  if (!fc) return null;
-
-  const centreRosters = rosters.filter(r => {
-    const uid = r.OperationalUnit;
-    return centre.rooms.some(rm => rm.deputyUnitId === uid)
-      || centre.floatUnitIds.includes(uid)
-      || centre.leaveUnitIds.includes(uid)
-      || centre.nonRatioUnitIds.includes(uid)
-      || (centre.issUnitIds || []).includes(uid);
-  });
-
-  const internalCasualCount = centreRosters.filter(r => {
-    const name = r._DPMetaData?.EmployeeInfo?.DisplayName || '';
-    return internalCasualSet.has(normName(name));
-  }).length;
-
-  const zCasualFloatCount = zCasualCountByCentre[centre.name] || 0;
-
-  const totalExpected = Array.isArray(childrenExpected) && childrenExpected.length > 0
-    ? childrenExpected.length
-    : null;
-
-  // Compute required per room from children-expected ages (matches dashboard ratio engine).
-  // Fall back to room-forecast required values when children-expected is unavailable.
-  const roomData = centre.rooms.map(room => {
-    const owna = (room.ownaRoomName ?? room.name).toLowerCase();
-    let expected = 0;
-    let required = 0;
-    for (const [roomName, data] of Object.entries(fc.rooms || {})) {
-      if (roomName.toLowerCase().includes(owna) || owna.includes(roomName.toLowerCase())) {
-        expected += (data.expected ?? 0);
-        if (!Array.isArray(childrenExpected) || childrenExpected.length === 0) {
-          if ((data.required ?? null) !== null) {
-            required += data.required;
-          } else {
-            const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
-            required += data.expected > 0 ? Math.ceil(data.expected / ratio) : 0;
-          }
-        }
-      }
-    }
-
-    if (Array.isArray(childrenExpected) && childrenExpected.length > 0) {
-      // Sum 1/ratio for each child in this room, then ceiling (matches NSW ratio rules)
-      const roomChildren = childrenExpected.filter(c => {
-        const childRoom = (c.room ?? '').toLowerCase();
-        return childRoom === owna || childRoom.includes(owna) || owna.includes(childRoom);
-      });
-      if (roomChildren.length > 0) {
-        const rawRequired = roomChildren.reduce((s, c) => s + 1 / ratioForAge(c.ageMonths), 0);
-        required = Math.ceil(rawRequired);
-      }
-    }
-
-    if (required === 0 && expected > 0 && !Array.isArray(childrenExpected)) {
-      const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
-      required = Math.ceil(expected / ratio);
-    }
-
-    const roomStaff = rosters.filter(r => r.OperationalUnit === room.deputyUnitId && r.Employee && r.Employee !== 0).length;
-    return { room: room.name, expected, required, staffCount: roomStaff };
-  });
-
-  const totalExpectedFromRooms = roomData.reduce((s, r) => s + r.expected, 0);
-  let totalRequired = roomData.reduce((s, r) => s + r.required, 0);
-
-  // If room name matching failed to produce a required total, fall back to the
-  // sum of required values returned by room-forecast regardless of room mapping.
-  if (totalRequired === 0 && Object.keys(fc.rooms || {}).length > 0) {
-    totalRequired = Object.values(fc.rooms).reduce((s, data) => s + (data.required ?? 0), 0);
-  }
-
-  // Last resort: estimate from total expected children using an average ratio.
-  if (totalRequired === 0 && totalExpected > 0) {
-    totalRequired = centre.rooms.reduce((s, room) => {
-      const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
-      return s + Math.ceil((totalExpected / centre.rooms.length) / ratio);
-    }, 0);
-  }
-  const totalFloorStaff = roomData.reduce((s, r) => s + r.staffCount, 0);
-
-  const floatIds = new Set(centre.floatUnitIds || []);
-  const internalFloatCount = rosters.filter(r => floatIds.has(r.OperationalUnit)).length;
-  const floatCount = internalFloatCount + zCasualFloatCount;
-
-  const nonRatioIds = new Set([...(centre.nonRatioUnitIds || []), ...(centre.leaveUnitIds || [])]);
-  const adCount = rosters.filter(r => {
-    if (!nonRatioIds.has(r.OperationalUnit)) return false;
-    const un = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '').toLowerCase();
-    return un.includes('assistant director') || un.includes('asst director') || un.includes('ass. director');
-  }).length;
-  const adAvailable = (totalExpected > 0 && totalExpected < 100) ? adCount : 0;
-
-  const totalRatioShortage = roomData.reduce((s, r) => s + Math.max(0, r.required - r.staffCount), 0);
-  const totalSurplus = roomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
-  const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
-  const bufferRequired = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
-  const roomNetSurplus = Math.max(0, totalSurplus - totalRatioShortage);
-  // Match the Plan of Day Float Pool panel: available = floats + AD (+ room surplus already used to cover shortages).
-  // Internal casuals are rostered into rooms/float already and shown as a column, but not double-counted here.
-  const effectiveFloatCount = floatCount;
-  const totalFloatersNeeded = Math.max(0, netShortageAfterRealloc + bufferRequired);
-  const casualsNeeded = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
-  const floatSurplus = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
-
-  return {
-    centreId: centre.id,
-    name: centre.name,
-    campus,
-    date,
-    expectedChildren: totalExpected,
-    booked: fc.booked ?? null,
-    capacity: fc.capacity ?? null,
-    requiredStaff: totalRequired,
-    floorStaff: totalFloorStaff,
-    floatCount,
-    internalFloatCount,
-    zCasualFloatCount,
-    internalCasualCount,
-    adAvailable,
-    casualsNeeded,
-    floatSurplus,
-    surplusVal: casualsNeeded > 0 ? -casualsNeeded : floatSurplus,
-    roomData,
-  };
 }
 
 function buildHtml(summary, opts = {}) {
@@ -283,7 +101,7 @@ function buildHtml(summary, opts = {}) {
       return `
         <tr>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-weight:600;">${s.name}</td>
-          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.expectedChildren}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.expectedChildren ?? '-'}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.booked ?? '-'}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.requiredStaff}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.floorStaff}</td>
@@ -438,28 +256,78 @@ export default async function handler(req, res) {
       zCasualCountByCentre[row.centre] = (zCasualCountByCentre[row.centre] || 0) + 1;
     }
 
-    // Fetch room-forecast per centre (single-campus) to avoid the bulk campus=all bug
-    // that inflates expected/required child counts.
+    // Fetch room-forecast, children-expected and saved staff moves per centre.
     const forecasts = {};
     const childrenExpectedByCentre = {};
+    const staffMovesByCentre = {};
     await Promise.all(CENTRES.map(async (centre) => {
       const campus = centre.ownaName ?? centre.name;
       try {
-        const [fcRes, ceRes] = await Promise.all([
+        const [fcRes, ceRes, movesRes] = await Promise.all([
           fetch(`${proto}://${host}/api/room-forecast?campus=${encodeURIComponent(campus)}&date=${date}`),
           fetch(`${proto}://${host}/api/children-expected?campus=${encodeURIComponent(campus)}&date=${date}`),
+          fetch(`${proto}://${host}/api/staff-allocations?centre=${encodeURIComponent(centre.id)}&date=${date}`),
         ]);
         if (fcRes.ok) forecasts[campus] = await fcRes.json();
         if (ceRes.ok) {
           const json = await ceRes.json();
           childrenExpectedByCentre[centre.id] = Array.isArray(json) ? json : (json.children || []);
         }
+        if (movesRes.ok) {
+          const rows = await movesRes.json();
+          if (Array.isArray(rows) && rows.length > 0 && rows[0].moves) {
+            staffMovesByCentre[centre.id] = rows[0].moves;
+          }
+        }
       } catch (e) {
-        console.warn(`[staffing-forecast-email] forecast fetch failed for ${campus}:`, e.message);
+        console.warn(`[staffing-forecast-email] per-centre fetch failed for ${campus}:`, e.message);
       }
     }));
 
-    const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, childrenExpectedByCentre[centre.id], rosters, internalCasualSet, zCasualCountByCentre));
+    const summary = CENTRES.map(centre => {
+      const campus = centre.ownaName ?? centre.name;
+      const fc = forecasts[campus];
+      if (!fc) return null;
+
+      const childrenExpected = childrenExpectedByCentre[centre.id] || [];
+      const staffMoves = staffMovesByCentre[centre.id] || {};
+      const zCasualFloatCount = zCasualCountByCentre[centre.name] || 0;
+
+      const result = calculateStaffingAnalysis({
+        centre,
+        date,
+        children: childrenExpected,
+        rosters,
+        internalCasualSet,
+        zCasualFloatCount,
+        staffMoves,
+        isFutureDate: true,
+        forecastRes: fc,
+        showCurrentOnly: false,
+      });
+
+      // Internal casual count across all units (for the banner/column).
+      const centreRosters = (rosters || []).filter(r => {
+        const uid = r.OperationalUnit;
+        return centre.rooms.some(rm => rm.deputyUnitId === uid)
+          || centre.floatUnitIds.includes(uid)
+          || centre.leaveUnitIds.includes(uid)
+          || centre.nonRatioUnitIds.includes(uid)
+          || (centre.issUnitIds || []).includes(uid);
+      });
+      const internalCasualCount = centreRosters.filter(r => {
+        const name = r._DPMetaData?.EmployeeInfo?.DisplayName || '';
+        return internalCasualSet.has(normName(name));
+      }).length;
+
+      return {
+        ...result,
+        booked: fc.booked ?? null,
+        capacity: fc.capacity ?? null,
+        internalCasualCount,
+      };
+    });
+
     const html = buildHtml(summary, { title: `TGA Staffing Forecast — ${formatDateLabel(date)}` });
 
     const includeClusters = req.query.clusters !== '0' && req.query.includeClusters !== 'false';
@@ -476,7 +344,7 @@ export default async function handler(req, res) {
       html,
     });
   } catch (err) {
-    console.error('[staffing-forecast-email] Error:', err.message);
+    console.error('[staffing-forecast-email] Error:', err.stack || err.message);
     return res.status(500).json({ error: err.message });
   }
 }
