@@ -22,9 +22,6 @@ const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
 const SMTP_USER = process.env.SMTP_USER || 'claude@tga.edu.au';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 
-const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbG…6f1c';
-
 const DEFAULT_RECIPIENTS = Array.from(new Set([
   ...(process.env.FORECAST_EMAIL_TO || SMTP_USER)
     .split(',')
@@ -72,38 +69,57 @@ function forecastDate(baseDate) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function hhmmToMins(t) {
+  if (!t) return null;
+  const parts = String(t).split(':').map(Number);
+  if (parts.length < 2 || isNaN(parts[0])) return null;
+  return parts[0] * 60 + (parts[1] || 0);
+}
+
+function rosterTimeToMins(t) {
+  if (!t) return null;
+  const num = typeof t === 'string' ? parseInt(t, 10) : t;
+  if (!isNaN(num) && num > 100000) {
+    const d = new Date(num * 1000);
+    const sydney = new Date(d.toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+    return sydney.getHours() * 60 + sydney.getMinutes();
+  }
+  const parts = String(t).split(':').map(Number);
+  if (parts.length >= 2 && !isNaN(parts[0])) return parts[0] * 60 + (parts[1] || 0);
+  return null;
+}
+
+function shiftCoversSlot(r, slotMinutes) {
+  if (!r.StartTime || !r.EndTime) return false;
+  const startM = rosterTimeToMins(r.StartTime);
+  const endM = rosterTimeToMins(r.EndTime);
+  if (startM === null || endM === null) return false;
+  return startM <= slotMinutes && endM > slotMinutes;
+}
+
+function ratioForRoom(roomName) {
+  const lower = (roomName ?? '').toLowerCase();
+  if (lower.includes('0-1') || lower.includes('0-2') || lower.includes('1-2')) return 4;
+  if (lower.includes('2-3') || lower.includes('2.5-3.5') || lower.includes('2.5-3')) return 5;
+  if (lower.includes('3-4') || lower.includes('3-5') || lower.includes('3.5-5') || lower.includes('4-5')) return 10;
+  if (lower.includes('0-2')) return 4;
+  return 5; // default conservative
+}
+
+function unitType(r, centre) {
+  const uid = r.OperationalUnit;
+  if ((centre.leaveUnitIds || []).includes(uid)) return 'leave';
+  if ((centre.floatUnitIds || []).includes(uid)) return 'float';
+  if ((centre.nonRatioUnitIds || []).includes(uid)) return 'support';
+  if (centre.rooms.some(rm => rm.deputyUnitId === uid)) return 'room';
+  return 'other';
+}
+
 function normName(name) {
   return String(name || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-async function sbFetch(path, init = {}) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...init,
-    headers: {
-      apikey: SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      'Content-Type': 'application/json',
-      ...init.headers,
-    },
-  });
-  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
-  return res.json();
-}
-
-async function fetchForecastCache(date) {
-  try {
-    if (!SUPABASE_SERVICE_KEY) return {};
-    const rows = await sbFetch(`staffing_analysis_cache?date=eq.${date}&select=*&limit=1000`);
-    const out = {};
-    for (const r of rows) out[r.centre_id] = r;
-    return out;
-  } catch (e) {
-    console.warn('[staffing-forecast-email] cache fetch failed:', e.message);
-    return {};
-  }
-}
-
-function calcCentreForecast(centre, date, forecasts, cache, rosters, internalCasualSet, zCasualCountByCentre) {
+function calcCentreForecast(centre, date, forecasts, childrenExpected, rosters, internalCasualSet, zCasualCountByCentre) {
   const campus = centre.ownaName ?? centre.name;
   const fc = forecasts[campus];
   if (!fc) return null;
@@ -124,16 +140,53 @@ function calcCentreForecast(centre, date, forecasts, cache, rosters, internalCas
 
   const zCasualFloatCount = zCasualCountByCentre[centre.name] || 0;
 
-  // Staffing totals are computed by the Plan of Day dashboard and cached at 2:45pm.
-  // Use those authoritative numbers instead of duplicating the logic here.
-  const hasCache = cache && cache.required_staff != null;
-  const totalExpected = hasCache ? cache.expected_children : null;
-  const totalRequired = hasCache ? cache.required_staff : null;
-  const totalFloorStaff = hasCache ? cache.floor_staff : null;
-  const totalFloatersNeeded = hasCache ? cache.floaters_needed : null;
-  const casualsNeeded = hasCache ? cache.casuals_needed : null;
-  const floatSurplus = hasCache ? cache.float_surplus : null;
-  const surplusVal = casualsNeeded > 0 ? -casualsNeeded : floatSurplus;
+  const roomData = centre.rooms.map(room => {
+    const owna = (room.ownaRoomName ?? room.name).toLowerCase();
+    let expected = 0;
+    let required = 0;
+    for (const [roomName, data] of Object.entries(fc.rooms || {})) {
+      if (roomName.toLowerCase().includes(owna) || owna.includes(roomName.toLowerCase())) {
+        expected += (data.expected ?? 0);
+        if ((data.required ?? null) !== null) {
+          required += data.required;
+        } else {
+          const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
+          required += data.expected > 0 ? Math.ceil(data.expected / ratio) : 0;
+        }
+      }
+    }
+    const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
+    if (required === 0 && expected > 0) {
+      required = Math.ceil(expected / ratio);
+    }
+    const roomStaff = rosters.filter(r => r.OperationalUnit === room.deputyUnitId && r.Employee && r.Employee !== 0).length;
+    return { room: room.name, expected, required, staffCount: roomStaff };
+  });
+
+  const totalExpectedFromRooms = roomData.reduce((s, r) => s + r.expected, 0);
+  let totalRequired = roomData.reduce((s, r) => s + r.required, 0);
+
+  // If room name matching failed to produce a required total, fall back to the
+  // sum of required values returned by room-forecast regardless of room mapping.
+  if (totalRequired === 0 && Object.keys(fc.rooms || {}).length > 0) {
+    totalRequired = Object.values(fc.rooms).reduce((s, data) => s + (data.required ?? 0), 0);
+  }
+
+  // Match the Ratio Dashboard "Expected" number, which uses children-expected (last week's same-weekday attendance).
+  const totalExpected = Array.isArray(childrenExpected) && childrenExpected.length > 0
+    ? childrenExpected.length
+    : totalExpectedFromRooms;
+
+  // Last resort: estimate from total expected children using an average ratio.
+  // Use totalExpected so we still produce a required number when room-forecast attendance is missing
+  // but children-expected has data.
+  if (totalRequired === 0 && totalExpected > 0) {
+    totalRequired = centre.rooms.reduce((s, room) => {
+      const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
+      return s + Math.ceil((totalExpected / centre.rooms.length) / ratio);
+    }, 0);
+  }
+  const totalFloorStaff = roomData.reduce((s, r) => s + r.staffCount, 0);
 
   const floatIds = new Set(centre.floatUnitIds || []);
   const internalFloatCount = rosters.filter(r => floatIds.has(r.OperationalUnit)).length;
@@ -146,6 +199,16 @@ function calcCentreForecast(centre, date, forecasts, cache, rosters, internalCas
     return un.includes('assistant director') || un.includes('asst director') || un.includes('ass. director');
   }).length;
   const adAvailable = (totalExpected > 0 && totalExpected < 100) ? adCount : 0;
+
+  const totalRatioShortage = roomData.reduce((s, r) => s + Math.max(0, r.required - r.staffCount), 0);
+  const totalSurplus = roomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
+  const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
+  const bufferRequired = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
+  const roomNetSurplus = Math.max(0, totalSurplus - totalRatioShortage);
+  const effectiveFloatCount = floatCount + roomNetSurplus;
+  const totalFloatersNeeded = Math.max(0, netShortageAfterRealloc + bufferRequired);
+  const casualsNeeded = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
+  const floatSurplus = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
 
   return {
     centreId: centre.id,
@@ -164,8 +227,8 @@ function calcCentreForecast(centre, date, forecasts, cache, rosters, internalCas
     adAvailable,
     casualsNeeded,
     floatSurplus,
-    surplusVal,
-    roomData: [],
+    surplusVal: casualsNeeded > 0 ? -casualsNeeded : floatSurplus,
+    roomData,
   };
 }
 
@@ -310,7 +373,7 @@ export default async function handler(req, res) {
     const host = req.headers.host || 'plan.tga.edu.au';
     const proto = req.headers['x-forwarded-proto'] || 'https';
 
-    const [forecastRes, rosterRes, wwccRes, zCasualRes, cacheByCentre] = await Promise.all([
+    const [forecastRes, rosterRes, wwccRes, zCasualRes] = await Promise.all([
       fetch(`${proto}://${host}/api/room-forecast?campus=all&date=${date}`),
       fetch(`${proto}://${host}/api/deputy-rosters`, {
         method: 'POST',
@@ -319,11 +382,25 @@ export default async function handler(req, res) {
       }),
       fetch(`${proto}://${host}/api/staff-wwcc`),
       fetch(`${proto}://${host}/api/z-casuals?centre=all&date=${date}`),
-      fetchForecastCache(date),
     ]);
 
     const forecasts = forecastRes.ok ? await forecastRes.json() : {};
     const rosters = rosterRes.ok ? await rosterRes.json() : [];
+
+    // Fetch children-expected per campus to match the Ratio Dashboard "Expected" number.
+    const childrenExpectedByCentre = {};
+    await Promise.all(CENTRES.map(async (centre) => {
+      const campus = centre.ownaName ?? centre.name;
+      try {
+        const res = await fetch(`${proto}://${host}/api/children-expected?campus=${encodeURIComponent(campus)}&date=${date}`);
+        if (res.ok) {
+          const json = await res.json();
+          childrenExpectedByCentre[centre.id] = Array.isArray(json) ? json : (json.children || []);
+        }
+      } catch (e) {
+        console.warn(`[staffing-forecast-email] children-expected failed for ${campus}:`, e.message);
+      }
+    }));
 
     const wwccRows = wwccRes.ok ? await wwccRes.json() : [];
     const internalCasualSet = new Set(
@@ -336,7 +413,7 @@ export default async function handler(req, res) {
       zCasualCountByCentre[row.centre] = (zCasualCountByCentre[row.centre] || 0) + 1;
     }
 
-    const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, cacheByCentre[centre.id], rosters, internalCasualSet, zCasualCountByCentre));
+    const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, childrenExpectedByCentre[centre.id], rosters, internalCasualSet, zCasualCountByCentre));
     const html = buildHtml(summary, { title: `TGA Staffing Forecast — ${formatDateLabel(date)}` });
 
     let sent = null;

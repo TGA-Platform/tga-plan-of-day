@@ -185,21 +185,6 @@ export default function MorningBriefingPage() {
         (unitMap.get(u.centre) ?? unitMap.set(u.centre,[]).get(u.centre)!).push(u);
       }
 
-      // Fetch staffing analysis cache from Supabase (written by RatioDashboardPage float pool)
-      const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-      const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5NDE3MjUsImV4cCI6MjA4OTUxNzcyNX0.v_thHOU7xq0gaFhcnb2A3iBl5H7bAp9IbT9IPMg_jTY';
-      let analysisCache: Record<string, { casuals_needed: number; float_surplus: number; floaters_needed: number; floor_staff: number; updated_at: string }> = {};
-      try {
-        const cacheRes = await fetch(
-          `${SUPABASE_URL}/rest/v1/staffing_analysis_cache?date=eq.${date}&select=centre_id,casuals_needed,float_surplus,floaters_needed,floor_staff,updated_at`,
-          { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
-        );
-        if (cacheRes.ok) {
-          const rows = await cacheRes.json() as { centre_id: string; casuals_needed: number; float_surplus: number; floaters_needed: number; floor_staff: number; updated_at: string }[];
-          for (const row of rows) analysisCache[row.centre_id] = row;
-        }
-      } catch { /* best-effort */ }
-
       // ONE bulk fetchRosters call for all centres combined-avoids rate-limiting 16+ parallel calls
       // Then filter per-centre from the result
       const allCentreUnitIds = [...new Set(allowed.flatMap(c => [
@@ -382,25 +367,12 @@ export default function MorningBriefingPage() {
         }
 
 
-        // Raw ratio status (used as fallback when no cache available)
-        const ratioStatus: CentreCard['status'] = kids.length === 0 ? 'unknown'
-          : statusShortage > 0   ? 'red'
-          : statusShortage === 0 ? 'amber'
-          : 'green';
-
-        // Use staffing analysis cache (written by RatioDashboardPage) when available —
-        // this guarantees the briefing card shows exactly the same number as the staffing analysis.
-        // Falls back to locally-calculated values when cache is empty (e.g. early morning before anyone opens the dashboard).
-        const cached = analysisCache[centre.id];
-        const finalCasualsNeeded = cached != null ? cached.casuals_needed : allDayPool.casualsNeeded;
-        const finalFloatSurplus  = cached != null ? cached.float_surplus  : allDayPool.floatSurplus;
-
-        // Status pill must also reflect the cached values so header + footer stay in sync.
-        // If cached says casuals needed → amber (monitor). If compliant → green. Unknown if no kids.
-        const finalStatus: CentreCard['status'] = kids.length === 0 ? 'unknown'
-          : finalCasualsNeeded > 0 ? 'amber'   // needs casuals → Monitor
-          : ratioStatus === 'red'  ? 'red'      // ratio breach (no cache override)
-          : 'green';                            // compliant
+        // Status = ratio compliance only (not buffer/casuals)
+        // Green = more staff than required, Amber = exact match, Red = short
+        const status: CentreCard['status'] = kids.length === 0 ? 'unknown'
+          : statusShortage > 0   ? 'red'    // short on ratio
+          : statusShortage === 0 ? 'amber'  // exactly meeting ratio
+          : 'green';                        // surplus staff - compliant
 
         result.push({
           centreId:         centre.id,
@@ -417,15 +389,15 @@ export default function MorningBriefingPage() {
           requiredStaff:    required,
           requiredPresent,
           requiredExpected,
-          shortage:         statusShortage,
-          roomShortage,
-          floatSurplus:       finalFloatSurplus,
-          casualsNeeded:      finalCasualsNeeded,
+          shortage:         statusShortage,  // positive = short, 0 = exact, negative = surplus (room+float)
+          roomShortage,                      // positive = short, negative = surplus (room staff only)
+          floatSurplus:       allDayPool.floatSurplus,
+          casualsNeeded:      allDayPool.casualsNeeded,
           floatSurplusPresent:  presentPool.floatSurplus,
           casualsNeededPresent: presentPool.casualsNeeded,
           effectiveFloatCount:  poolToUse.effectiveFloatCount,
           roomNetSurplus:       poolToUse.roomNetSurplus,
-          status:               finalStatus,
+          status,
         });
       }
 
