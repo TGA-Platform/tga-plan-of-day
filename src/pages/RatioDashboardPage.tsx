@@ -1105,13 +1105,25 @@ export default function RatioDashboardPage() {
       // rather than fetching last week's attendance (which gives wrong ages and wrong room data).
       const useFutureEnrolled = isFutureDate;
 
-      const [attendanceRes, enrolledRes, rosters, forecastRes] = await Promise.all([
+      // Fetch expected children first so we know which historical date the API used
+      // (it falls back to the most recent previous same-weekday with attendance data).
+      let enrolledRes: { children?: { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[]; historicalDate?: string } | { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[] | null = null;
+      if (useFutureEnrolled) {
+        enrolledRes = await withCache(
+          `expected:${campusName}:${date}`,
+          () => fetch(`/api/children-expected?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()),
+          900000
+        );
+      }
+      const enrolledArray = Array.isArray(enrolledRes)
+        ? (enrolledRes as { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[])
+        : (enrolledRes?.children ?? []);
+      const historicalDate = Array.isArray(enrolledRes) ? effectiveDate : (enrolledRes?.historicalDate ?? effectiveDate);
+
+      const [attendanceRes, rosters, forecastRes] = await Promise.all([
         useFutureEnrolled
           ? Promise.resolve([])
-          : withCache(attKey, () => fetch(`/api/attendance?campus=${encodeURIComponent(campusName)}&date=${effectiveDate}`).then(r => r.json())),
-        useFutureEnrolled
-          ? withCache(`expected:${campusName}:${date}`, () => fetch(`/api/children-expected?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()), 900000)
-          : Promise.resolve([]),
+          : withCache(attKey, () => fetch(`/api/attendance?campus=${encodeURIComponent(campusName)}&date=${historicalDate}`).then(r => r.json())),
         withCache(rosterKey, () => fetchRosters(date, allUnitIds, forceRefresh)),
         withCache(forecastKey, () => fetch(`/api/room-forecast?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()).catch(() => null), 300000),
       ]);
@@ -1119,10 +1131,10 @@ export default function RatioDashboardPage() {
 
       let childRows: AttendanceChild[];
 
-      if (useFutureEnrolled && Array.isArray(enrolledRes) && enrolledRes.length > 0) {
+      if (useFutureEnrolled && enrolledArray.length > 0) {
         // children-expected API returns children expected on this specific weekday
         // based on historical attendance patterns, with age already projected to target date
-        childRows = (enrolledRes as { full_name: string; room: string | null; dob: string | null; ageMonths: number | null }[]).map(c => ({
+        childRows = enrolledArray.map(c => ({
           child_name:           c.full_name,
           room:                 c.room ?? '',
           sign_in:              '08:00',  // assumed present all day for ratio planning
