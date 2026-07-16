@@ -424,6 +424,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             : undefined;
 
           const isInProgress = tss.some(ts => ts.isInProgress);
+          // We only have a real sign-out time when the shift is complete and Deputy returned an actual end.
+          // Rostered/in-progress end times must not clobber a manual overtime extension.
+          const hasActualEnd = !isInProgress && tss.some(ts => ts.actualEnd);
           const firstStart = actualSegments[0]?.start ?? '';
           let lastEnd = isInProgress ? '' : (actualSegments[actualSegments.length - 1]?.end ?? '');
           // For in-progress shifts, prefer the published roster end time. Deputy timesheets can
@@ -456,9 +459,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
           setMorningData(prev => {
             const existing = prev.staffTimeOverrides[key];
-            // Manual overrides (e.g. overtime finish) are the source of truth —
-            // never let Deputy polling clobber them.
-            if (existing?.source === 'manual') return prev;
+            // Manual overrides (e.g. overtime finish) are protected from rostered/in-progress
+            // Deputy data, but real sign-out actuals still win.
+            if (existing?.source === 'manual' && !hasActualEnd) return prev;
             const newOverride = buildNewOverride(existing);
             if (employeeId === 1611) console.log('[Deputy debug Anisha morning]', { existing, newOverride });
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
@@ -468,7 +471,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           });
           setMiddayData(prev => {
             const existing = prev.staffTimeOverrides[key];
-            if (existing?.source === 'manual') return prev;
+            if (existing?.source === 'manual' && !hasActualEnd) return prev;
             const newOverride = buildNewOverride(existing);
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };
@@ -477,7 +480,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           });
           setAfternoonData(prev => {
             const existing = prev.staffTimeOverrides[key];
-            if (existing?.source === 'manual') return prev;
+            if (existing?.source === 'manual' && !hasActualEnd) return prev;
             const newOverride = buildNewOverride(existing);
             if (JSON.stringify(existing) === JSON.stringify(newOverride)) return prev;
             const next = { ...prev, staffTimeOverrides: { ...prev.staffTimeOverrides, [key]: newOverride } };

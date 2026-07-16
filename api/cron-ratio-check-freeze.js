@@ -139,6 +139,9 @@ function buildOverridesFromActuals(actuals, rosters) {
       b => b.type === 'meal' && (b.status === 'finished' || b.status === 'in_progress')
     );
 
+    const lastTs = sorted[sorted.length - 1];
+    const hasActualEnd = !!lastTs && !lastTs.is_in_progress && !!lastTs.actual_end;
+
     overrides[employeeId] = {
       start:      segments[0].start,
       end:        segments[segments.length - 1].end,
@@ -146,6 +149,7 @@ function buildOverridesFromActuals(actuals, rosters) {
       lunchStart: meal?.breakStart || undefined,
       lunchEnd:   meal?.breakEnd   || undefined,
       source:     'deputy',
+      hasActualEnd,
     };
   }
   return overrides;
@@ -209,7 +213,8 @@ async function freezeCentreDate(centre, date) {
     const merged = { ...existingOverrides };
 
     for (const [empId, ov] of Object.entries(newOverrides)) {
-      if (existingOverrides[empId]?.source === 'manual') continue;
+      // Manual overrides are protected unless Deputy has a real sign-out time to apply.
+      if (existingOverrides[empId]?.source === 'manual' && !ov.hasActualEnd) continue;
       merged[empId] = ov;
       overridesWritten += 1;
     }
