@@ -394,8 +394,7 @@ export default async function handler(req, res) {
       try {
         const res = await fetch(`${proto}://${host}/api/children-expected?campus=${encodeURIComponent(campus)}&date=${date}`);
         if (res.ok) {
-          const json = await res.json();
-          childrenExpectedByCentre[centre.id] = Array.isArray(json) ? json : (json.children || []);
+          childrenExpectedByCentre[centre.id] = await res.json();
         }
       } catch (e) {
         console.warn(`[staffing-forecast-email] children-expected failed for ${campus}:`, e.message);
