@@ -50,6 +50,35 @@ function timeInputOptions(): string[] {
   return out;
 }
 
+function roundToNearest15(mins: number): number {
+  return Math.round(mins / 15) * 15;
+}
+
+function roundTimeToNearest15(hhmm: string): string {
+  const m = hhmmToMinutes(hhmm);
+  return minutesToHhmm(roundToNearest15(m));
+}
+
+function parseLunchDuration(lunchStart?: string, lunchEnd?: string): number {
+  if (!lunchStart || !lunchEnd) return 30;
+  const s = hhmmToMinutes(lunchStart);
+  const e = hhmmToMinutes(lunchEnd);
+  const dur = e - s;
+  return dur > 0 && dur <= 120 ? dur : 30;
+}
+
+/** Map ratio-check staffMoves special values to roster room lanes */
+function activityToRoomId(moveVal: string): { roomId: string; roomName: string } | null {
+  const v = moveVal.toLowerCase();
+  if (v === '__programming__') return { roomId: 'director', roomName: 'Off Floor Team' };
+  if (v === '__cleaning__') return { roomId: 'other', roomName: 'Cleaning' };
+  if (v === '__additional__') return { roomId: 'other', roomName: 'Additional Duties' };
+  if (v === '__removed__') return null; // skip — not working
+  if (v === '__float__') return { roomId: 'float', roomName: 'Float' };
+  if (v === '__lunch__') return null; // handled via lunch_start / lunch_duration
+  return null;
+}
+
 const TIME_OPTIONS = timeInputOptions();
 
 function getRoomColour(index: number): string {
@@ -489,8 +518,9 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
 
   // ── Import from Ratio Check ──────────────────────────────────────────────────
   async function handleImportFromRatioCheck() {
-    if (!weekRecord) {
-      const week = await getOrCreateWeek(centreId, weekStart, user?.email);
+    let week = weekRecord;
+    if (!week) {
+      week = await getOrCreateWeek(centreId, weekStart, user?.email);
       if (!week) { alert('Could not create roster week.'); return; }
       setWeekRecord(week);
     }
@@ -503,12 +533,16 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
 
     // Build reference week dates from importRCWeekStart (Monday)
     const refDays = Array.from({ length: 5 }, (_, i) => addDays(parseISO(importRCWeekStart), i));
+
+    // Fetch staff mapping (Deputy employee ID -> internal staff ID)
     const staffRes = await fetch(`/api/staff-members?centreId=${encodeURIComponent(centreId)}`);
     const staffData = await staffRes.json().catch(() => ({}));
     const staffRows = staffData.staff || [];
     const deputyToStaffId: Record<string, string> = {};
+    const staffIdToName: Record<string, string> = {};
     for (const s of staffRows) {
       if (s.deputy_employee_id) deputyToStaffId[String(s.deputy_employee_id)] = String(s.id);
+      staffIdToName[String(s.id)] = s.name || 'Unknown';
     }
 
     for (const day of refDays) {
@@ -522,24 +556,38 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
         const rows = await res.json();
         if (!Array.isArray(rows) || rows.length === 0) { warnings.push(`${date}: no ratio check data found`); continue; }
 
-        // Merge morning and afternoon sessions
-        const merged: {
-          staffTimeOverrides: Record<string, { start?: string; end?: string }>;
-          staffMoves: Record<string, string>;
-        } = { staffTimeOverrides: {}, staffMoves: {} };
+        // Merge all sessions (morning/midday/afternoon)
+        // The data is stored in row.data per the ratio-check API
+        const mergedOverrides: Record<string, {
+          start?: string; end?: string; lunchStart?: string; lunchEnd?: string;
+          source?: string; isOvertime?: boolean; comment?: string;
+        }> = {};
+        const mergedMoves: Record<string, string> = {};
         for (const row of rows) {
-          if (row.staff_time_overrides) Object.assign(merged.staffTimeOverrides, row.staff_time_overrides);
-          if (row.staff_moves) Object.assign(merged.staffMoves, row.staff_moves);
+          const data = row.data || {};
+          if (data.staffTimeOverrides) Object.assign(mergedOverrides, data.staffTimeOverrides);
+          if (data.staffMoves) Object.assign(mergedMoves, data.staffMoves);
         }
 
+        // Count room appearances per deputy ID across all sessions for primary room determination
         const deputyRoomCounts: Record<string, Record<string, number>> = {};
-        for (const [key, roomName] of Object.entries(merged.staffMoves)) {
-          const [deputyId, timeStr] = key.split(':');
-          if (!deputyId || !timeStr) continue;
-          const rname = String(roomName).toLowerCase();
-          if (['_removed_', '_cleaning_', '_additional_'].includes(rname)) continue;
+        const deputyActivityCounts: Record<string, Record<string, number>> = {};
+        for (const [key, moveVal] of Object.entries(mergedMoves)) {
+          const [deputyId] = key.split(':');
+          if (!deputyId) continue;
+          const val = String(moveVal);
+          const lowerVal = val.toLowerCase();
+          // Track special activities
+          if (lowerVal.startsWith('__') && lowerVal.endsWith('__')) {
+            deputyActivityCounts[deputyId] = deputyActivityCounts[deputyId] || {};
+            deputyActivityCounts[deputyId][lowerVal] = (deputyActivityCounts[deputyId][lowerVal] || 0) + 1;
+            continue;
+          }
+          // Skip removed
+          if (lowerVal === '__removed__') continue;
+          // Normal room assignment
           deputyRoomCounts[deputyId] = deputyRoomCounts[deputyId] || {};
-          deputyRoomCounts[deputyId][String(roomName)] = (deputyRoomCounts[deputyId][String(roomName)] || 0) + 1;
+          deputyRoomCounts[deputyId][val] = (deputyRoomCounts[deputyId][val] || 0) + 1;
         }
 
         // Map to current week's same weekday
@@ -547,28 +595,65 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
         const targetDate = format(weekDays[dayIndex], 'yyyy-MM-dd');
 
         // Clear existing shifts for this day
-        await deleteShiftsForDate(weekRecord!.id, targetDate);
+        await deleteShiftsForDate(week.id, targetDate);
 
-        for (const [deputyId, times] of Object.entries(merged.staffTimeOverrides)) {
+        for (const [deputyId, ov] of Object.entries(mergedOverrides)) {
           const staffId = deputyToStaffId[deputyId];
           if (!staffId) { warnings.push(`${date}: no staff member for Deputy ID ${deputyId}`); continue; }
-          const start = times.start || '08:00';
-          const end = times.end || '16:00';
+
+          // Round start/end to nearest 15 minutes
+          const rawStart = ov.start || '08:00';
+          const rawEnd = ov.end || '16:00';
+          const start = roundTimeToNearest15(rawStart);
+          const end = roundTimeToNearest15(rawEnd);
+
+          // Lunch from override data
+          const lunchStart = ov.lunchStart ? roundTimeToNearest15(ov.lunchStart) : undefined;
+          const lunchEnd = ov.lunchEnd ? roundTimeToNearest15(ov.lunchEnd) : undefined;
+          const lunchDuration = parseLunchDuration(lunchStart, lunchEnd);
+
+          // Determine primary room from staffMoves across all sessions
           const roomCounts = deputyRoomCounts[deputyId] || {};
-          const primaryRoom = Object.entries(roomCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-          const room = centre.rooms.find(r => r.name === primaryRoom || r.ownaRoomName === primaryRoom);
-          const roomId = room?.id || (primaryRoom ? 'other' : '');
+          const primaryRoomName = Object.entries(roomCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+          const room = primaryRoomName
+            ? centre.rooms.find(r => r.name === primaryRoomName || r.ownaRoomName === primaryRoomName || r.id === primaryRoomName)
+            : undefined;
+
+          // Determine if they have significant off-floor activity that should override the room
+          const activityCounts = deputyActivityCounts[deputyId] || {};
+          const topActivity = Object.entries(activityCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+          const activityRoom = activityToRoomId(topActivity);
+
+          // Use activity room if no real room assignments, or if activity dominates
+          const totalRooms = Object.values(roomCounts).reduce((a, b) => a + b, 0);
+          const totalActivities = Object.values(activityCounts).reduce((a, b) => a + b, 0);
+          let roomId: string | undefined;
+          let roomName: string | undefined;
+
+          if (activityRoom && totalRooms === 0) {
+            roomId = activityRoom.roomId;
+            roomName = activityRoom.roomName;
+          } else if (activityRoom && totalActivities > totalRooms) {
+            roomId = activityRoom.roomId;
+            roomName = activityRoom.roomName;
+          } else {
+            roomId = room?.id || (primaryRoomName ? 'other' : undefined);
+            roomName = room?.name || primaryRoomName || undefined;
+          }
+
           const saved = await saveShift({
-            roster_week_id: weekRecord!.id,
+            roster_week_id: week.id,
             centre_id: centreId,
             staff_id: staffId,
-            staff_name: staffList.find(s => s.id === staffId)?.name || '',
+            staff_name: staffIdToName[staffId] || staffList.find(s => s.id === staffId)?.name || '',
             date: targetDate,
-            start_time: start.slice(0, 5),
-            end_time: end.slice(0, 5),
-            room_id: roomId || undefined,
-            room_name: room?.name || primaryRoom || undefined,
-            lunch_duration: 30,
+            start_time: start,
+            end_time: end,
+            room_id: roomId,
+            room_name: roomName,
+            lunch_start: lunchStart,
+            lunch_duration: lunchDuration,
+            notes: ov.comment || undefined,
           });
           if (saved) importedCount++; else warnings.push(`${date}: failed to save shift for staff ${staffId}`);
         }
@@ -578,7 +663,7 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
       }
     }
 
-    const loaded = await loadShifts(weekRecord!.id);
+    const loaded = await loadShifts(week.id);
     setShifts(loaded);
     setImportRCLoading(false);
     setImportRCWarnings(warnings);
@@ -624,62 +709,129 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
   async function handleCreateTemplateFromRatioCheck() {
     if (!newTemplateName.trim()) return;
     setImportRCLoading(true);
+
+    // Ensure we have staff list loaded for name lookups
+    let currentStaffList = staffList;
+    if (currentStaffList.length === 0) {
+      currentStaffList = await fetchStaffList(centreId);
+      setStaffList(currentStaffList);
+    }
+
     const template = await createTemplate(centreId, newTemplateName.trim(), user?.email);
     if (!template) { alert('Failed to create template'); setImportRCLoading(false); return; }
+
     const refDays = Array.from({ length: 5 }, (_, i) => addDays(parseISO(importRCWeekStart), i));
     const tShifts: Omit<RosterTemplateShift, 'id' | 'created_at' | 'updated_at'>[] = [];
+
+    // Pre-fetch staff mapping once
+    const staffRes = await fetch(`/api/staff-members?centreId=${encodeURIComponent(centreId)}`);
+    const staffData = await staffRes.json().catch(() => ({}));
+    const staffRows = staffData.staff || [];
+    const deputyToStaffId: Record<string, string> = {};
+    const staffIdToName: Record<string, string> = {};
+    for (const s of staffRows) {
+      if (s.deputy_employee_id) deputyToStaffId[String(s.deputy_employee_id)] = String(s.id);
+      staffIdToName[String(s.id)] = s.name || 'Unknown';
+    }
+
     for (const day of refDays) {
       const date = format(day, 'yyyy-MM-dd');
-      const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/ratio_check_data?centre_id=eq.${encodeURIComponent(centreId)}&date=eq.${date}&select=*&limit=50`,
-        { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
-      );
-      if (!res.ok) continue;
-      const rows = await res.json();
-      if (!Array.isArray(rows) || rows.length === 0) continue;
-      const merged: {
-        staffTimeOverrides: Record<string, { start?: string; end?: string }>;
-        staffMoves: Record<string, string>;
-      } = { staffTimeOverrides: {}, staffMoves: {} };
-      for (const row of rows) {
-        if (row.staff_time_overrides) Object.assign(merged.staffTimeOverrides, row.staff_time_overrides);
-        if (row.staff_moves) Object.assign(merged.staffMoves, row.staff_moves);
-      }
-      const deputyRoomCounts: Record<string, Record<string, number>> = {};
-      for (const [key, roomName] of Object.entries(merged.staffMoves)) {
-        const [deputyId] = key.split(':');
-        if (!deputyId) continue;
-        const rname = String(roomName).toLowerCase();
-        if (['_removed_', '_cleaning_', '_additional_'].includes(rname)) continue;
-        deputyRoomCounts[deputyId] = deputyRoomCounts[deputyId] || {};
-        deputyRoomCounts[deputyId][String(roomName)] = (deputyRoomCounts[deputyId][String(roomName)] || 0) + 1;
-      }
-      const staffRes = await fetch(`/api/staff-members?centreId=${encodeURIComponent(centreId)}`);
-      const staffData = await staffRes.json().catch(() => ({}));
-      const deputyToStaffId: Record<string, string> = {};
-      for (const s of staffData.staff || []) {
-        if (s.deputy_employee_id) deputyToStaffId[String(s.deputy_employee_id)] = String(s.id);
-      }
-      const dayOfWeek = getISODay(day);
-      for (const [deputyId, times] of Object.entries(merged.staffTimeOverrides)) {
-        const staffId = deputyToStaffId[deputyId];
-        if (!staffId) continue;
-        const roomCounts = deputyRoomCounts[deputyId] || {};
-        const primaryRoom = Object.entries(roomCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-        const room = centre.rooms.find(r => r.name === primaryRoom || r.ownaRoomName === primaryRoom);
-        tShifts.push({
-          template_id: template.id,
-          centre_id: centreId,
-          staff_id: staffId,
-          staff_name: staffList.find(s => s.id === staffId)?.name || '',
-          day_of_week: dayOfWeek,
-          start_time: (times.start || '08:00').slice(0, 5),
-          end_time: (times.end || '16:00').slice(0, 5),
-          room_id: room?.id || (primaryRoom ? 'other' : undefined),
-          room_name: room?.name || primaryRoom || undefined,
-          lunch_duration: 30,
-        });
-      }
+      try {
+        const res = await fetch(
+          `${SUPABASE_URL}/rest/v1/ratio_check_data?centre_id=eq.${encodeURIComponent(centreId)}&date=eq.${date}&select=*&limit=50`,
+          { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
+        );
+        if (!res.ok) continue;
+        const rows = await res.json();
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+
+        // Merge all sessions — data is in row.data per the ratio-check API
+        const mergedOverrides: Record<string, {
+          start?: string; end?: string; lunchStart?: string; lunchEnd?: string;
+          source?: string; isOvertime?: boolean; comment?: string;
+        }> = {};
+        const mergedMoves: Record<string, string> = {};
+        for (const row of rows) {
+          const data = row.data || {};
+          if (data.staffTimeOverrides) Object.assign(mergedOverrides, data.staffTimeOverrides);
+          if (data.staffMoves) Object.assign(mergedMoves, data.staffMoves);
+        }
+
+        // Count room appearances + activities per deputy ID
+        const deputyRoomCounts: Record<string, Record<string, number>> = {};
+        const deputyActivityCounts: Record<string, Record<string, number>> = {};
+        for (const [key, moveVal] of Object.entries(mergedMoves)) {
+          const [deputyId] = key.split(':');
+          if (!deputyId) continue;
+          const val = String(moveVal);
+          const lowerVal = val.toLowerCase();
+          if (lowerVal.startsWith('__') && lowerVal.endsWith('__')) {
+            deputyActivityCounts[deputyId] = deputyActivityCounts[deputyId] || {};
+            deputyActivityCounts[deputyId][lowerVal] = (deputyActivityCounts[deputyId][lowerVal] || 0) + 1;
+            continue;
+          }
+          if (lowerVal === '__removed__') continue;
+          deputyRoomCounts[deputyId] = deputyRoomCounts[deputyId] || {};
+          deputyRoomCounts[deputyId][val] = (deputyRoomCounts[deputyId][val] || 0) + 1;
+        }
+
+        const dayOfWeek = getISODay(day);
+        for (const [deputyId, ov] of Object.entries(mergedOverrides)) {
+          const staffId = deputyToStaffId[deputyId];
+          if (!staffId) continue;
+
+          // Round times to nearest 15 minutes
+          const start = roundTimeToNearest15(ov.start || '08:00');
+          const end = roundTimeToNearest15(ov.end || '16:00');
+
+          // Lunch from override data
+          const lunchStart = ov.lunchStart ? roundTimeToNearest15(ov.lunchStart) : undefined;
+          const lunchEnd = ov.lunchEnd ? roundTimeToNearest15(ov.lunchEnd) : undefined;
+          const lunchDuration = parseLunchDuration(lunchStart, lunchEnd);
+
+          // Determine primary room
+          const roomCounts = deputyRoomCounts[deputyId] || {};
+          const primaryRoomName = Object.entries(roomCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+          const room = primaryRoomName
+            ? centre.rooms.find(r => r.name === primaryRoomName || r.ownaRoomName === primaryRoomName || r.id === primaryRoomName)
+            : undefined;
+
+          // Check dominant activity
+          const activityCounts = deputyActivityCounts[deputyId] || {};
+          const topActivity = Object.entries(activityCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+          const activityRoom = activityToRoomId(topActivity);
+          const totalRooms = Object.values(roomCounts).reduce((a, b) => a + b, 0);
+          const totalActivities = Object.values(activityCounts).reduce((a, b) => a + b, 0);
+
+          let roomId: string | undefined;
+          let roomName: string | undefined;
+          if (activityRoom && totalRooms === 0) {
+            roomId = activityRoom.roomId;
+            roomName = activityRoom.roomName;
+          } else if (activityRoom && totalActivities > totalRooms) {
+            roomId = activityRoom.roomId;
+            roomName = activityRoom.roomName;
+          } else {
+            roomId = room?.id || (primaryRoomName ? 'other' : undefined);
+            roomName = room?.name || primaryRoomName || undefined;
+          }
+
+          tShifts.push({
+            template_id: template.id,
+            centre_id: centreId,
+            staff_id: staffId,
+            staff_name: staffIdToName[staffId] || currentStaffList.find(s => s.id === staffId)?.name || '',
+            day_of_week: dayOfWeek,
+            start_time: start,
+            end_time: end,
+            room_id: roomId,
+            room_name: roomName,
+            lunch_start: lunchStart,
+            lunch_duration: lunchDuration,
+            notes: ov.comment || undefined,
+          });
+        }
+      } catch { /* skip day on error */ }
     }
     await upsertTemplateShifts(template.id, centreId, tShifts);
     setNewTemplateName('');
