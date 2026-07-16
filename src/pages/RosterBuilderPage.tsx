@@ -221,12 +221,18 @@ async function deleteShiftsForDate(weekId: string, date: string): Promise<boolea
 
 // ── Main component ───────────────────────────────────────────────────────────
 
-export default function RosterBuilderPage() {
+interface RosterBuilderPageProps {
+  centreId?: string;
+  embedded?: boolean;
+}
+
+export default function RosterBuilderPage({ centreId: propCentreId, embedded }: RosterBuilderPageProps) {
   const navigate = useNavigate();
   const user = getUser();
   const allowedCentres = user ? getAllowedCentres(user) : CENTRES;
 
-  const [centreId, setCentreId] = useState(user?.centreId || allowedCentres[0]?.id || CENTRES[0].id);
+  const [localCentreId, setLocalCentreId] = useState(user?.centreId || allowedCentres[0]?.id || CENTRES[0].id);
+  const centreId = propCentreId ?? localCentreId;
   const [weekDate, setWeekDate] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [view, setView] = useState<'week' | 'day'>('week');
   const [selectedDay, setSelectedDay] = useState<Date>(new Date());
@@ -1486,22 +1492,24 @@ export default function RosterBuilderPage() {
     );
   }
 
-  return (
-    <Layout>
+  const content = (
+    <>
       <div className="space-y-4">
-        {isStagingOrPreview() && <RosterTabs centreId={centreId} />}
+        {!embedded && isStagingOrPreview() && <RosterTabs centreId={centreId} />}
         {/* Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-xl font-bold" style={{ color: '#2d5c18' }}>Roster Builder</h1>
-            <select
-              className="px-3 py-1.5 rounded-lg border text-sm"
-              style={{ borderColor: '#D0E8B8', backgroundColor: 'white' }}
-              value={centreId}
-              onChange={e => setCentreId(e.target.value)}
-            >
-              {allowedCentres.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            {!embedded && (
+              <select
+                className="px-3 py-1.5 rounded-lg border text-sm"
+                style={{ borderColor: '#D0E8B8', backgroundColor: 'white' }}
+                value={centreId}
+                onChange={e => setLocalCentreId(e.target.value)}
+              >
+                {allowedCentres.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            )}
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setWeekDate(addDays(weekDate, -7))}
@@ -1644,6 +1652,9 @@ export default function RosterBuilderPage() {
       {modalOpen && <ShiftModal />}
       {publishModalOpen && <PublishModal />}
       {pinsModalOpen && <PinModal />}
-    </Layout>
+    </>
   );
+
+  if (embedded) return content;
+  return <Layout>{content}</Layout>;
 }

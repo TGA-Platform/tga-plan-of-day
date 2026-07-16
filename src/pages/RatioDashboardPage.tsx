@@ -22,6 +22,7 @@ import FloatBreakPanel from '../components/FloatBreakPanel';
 import RatioCheckPanel, { type LunchAlert } from '../components/RatioCheckPanel';
 import PredictedCoveragePanel from '../components/PredictedCoveragePanel';
 import SummaryTab from '../components/SummaryTab';
+import RosterBuilderPage from './RosterBuilderPage';
 import type { AttendanceChild, RoomRatioStatus, RosteredStaff, FloatStaff, ExternalCasualMeta } from '../types';
 import type { FloatSchedule } from '../components/FloatSchedulePanel';
 
@@ -778,7 +779,7 @@ export default function RatioDashboardPage() {
   const [internalCasualSet, setInternalCasualSet] = useState<Set<string>>(new Set());
   // External casuals from Z Staffing (converted to RosteredStaff)
   const [externalCasuals, setExternalCasuals] = useState<RosteredStaff[]>([]);
-  const [activeView, setActiveView]   = useState<'plan-of-day' | 'ratio-check' | 'summary'>('plan-of-day');
+  const [activeView, setActiveView]   = useState<'plan-of-day' | 'ratio-check' | 'summary' | 'roster'>('plan-of-day');
   const [planSubView, setPlanSubView] = useState<'live' | 'plan'>('live');
 
   // Seed staff time overrides from saved ratio-check data when the RatioCheckPanel
@@ -1494,6 +1495,13 @@ export default function RatioDashboardPage() {
             ? { backgroundColor: '#2d5c18', color: 'white' }
             : { backgroundColor: 'white', color: '#2d5c18', border: '1px solid #c0d0c0' }}
         >🗒️ Summary</button>
+        <button
+          onClick={() => setActiveView('roster')}
+          className="px-4 py-2 rounded-xl text-sm font-semibold transition-all"
+          style={activeView === 'roster'
+            ? { backgroundColor: '#2d5c18', color: 'white' }
+            : { backgroundColor: 'white', color: '#2d5c18', border: '1px solid #c0d0c0' }}
+        >🗓️ Roster</button>
       </div>
 
       {/* -- Lunch overdue alerts — shown across all tabs -- */}
@@ -1549,6 +1557,11 @@ export default function RatioDashboardPage() {
           issUnitIds={issUnitIds}
           nonRatioUnitIds={nonRatioUnitIds}
         />
+      )}
+
+      {/* —— Roster Builder tab —— */}
+      {activeView === 'roster' && (
+        <RosterBuilderPage centreId={selectedCentreId} embedded />
       )}
 
       {/* Attendance overview — Plan of the Day */}
