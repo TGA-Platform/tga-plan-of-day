@@ -236,6 +236,15 @@ function calcCentreForecast(centre, date, forecasts, childrenExpected, rosters, 
 
 function buildHtml(summary, opts = {}) {
   const { title, subtitle, showFooter = true } = opts;
+  const totalExternal = summary.reduce((s, x) => s + (x?.zCasualFloatCount || 0), 0);
+  const totalInternal = summary.reduce((s, x) => s + (x?.internalCasualCount || 0), 0);
+  const casualBanner = (totalExternal > 0 || totalInternal > 0)
+    ? `<div style="margin:0 0 16px 0;padding:10px 14px;background:#fff7ed;border:1px solid #fdba74;border-radius:8px;color:#9a3412;font-size:14px;">
+        <strong>Casuals scheduled across network:</strong>
+        ${totalExternal > 0 ? `<span style="margin-left:12px;background:#fed7aa;padding:2px 8px;border-radius:4px;font-weight:700;">${totalExternal} External</span>` : ''}
+        ${totalInternal > 0 ? `<span style="margin-left:12px;background:#fef3c7;padding:2px 8px;border-radius:4px;font-weight:700;">${totalInternal} Internal</span>` : ''}
+       </div>`
+    : '';
   const rows = summary
     .filter(s => s !== null)
     .map(s => {
@@ -243,6 +252,12 @@ function buildHtml(summary, opts = {}) {
       const color = short ? '#dc2626' : s.surplusVal > 0 ? '#16a34a' : '#b45309';
       const label = short ? 'Deficit' : s.surplusVal > 0 ? 'Surplus' : 'Exact';
       const valStr = s.surplusVal === 0 ? '0' : `${s.surplusVal > 0 ? '+' : ''}${Number.isInteger(s.surplusVal) ? s.surplusVal : s.surplusVal.toFixed(1)}`;
+      const extCellStyle = s.zCasualFloatCount > 0
+        ? 'padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;background:#fed7aa;color:#c2410c;font-weight:700;'
+        : 'padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;';
+      const intCellStyle = s.internalCasualCount > 0
+        ? 'padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;background:#fef3c7;color:#92400e;font-weight:700;'
+        : 'padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;';
       return `
         <tr>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-weight:600;">${s.name}</td>
@@ -251,8 +266,8 @@ function buildHtml(summary, opts = {}) {
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.requiredStaff}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.floorStaff}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.internalFloatCount}</td>
-          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.zCasualFloatCount}</td>
-          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.internalCasualCount}</td>
+          <td style="${extCellStyle}">${s.zCasualFloatCount}</td>
+          <td style="${intCellStyle}">${s.internalCasualCount}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.adAvailable}</td>
           <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;color:${color};font-weight:700;">${valStr} ${label}</td>
         </tr>
@@ -263,6 +278,7 @@ function buildHtml(summary, opts = {}) {
     <div style="font-family:Arial,sans-serif;color:#111827;max-width:800px;">
       <h2 style="margin:0 0 12px 0;">${title || `TGA Staffing Forecast — ${summary[0]?.date ?? ''}`}</h2>
       <p style="margin:0 0 16px 0;color:#596570;">${subtitle || 'Expected children and required staffing based on booked numbers and last week\'s attendance.'}</p>
+      ${casualBanner}
       <table style="width:100%;border-collapse:collapse;font-size:14px;">
         <thead>
           <tr style="background:#f3f4f6;">
