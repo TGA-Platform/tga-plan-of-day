@@ -9,6 +9,7 @@
  *   node update-sharepoint-attendance.js --today           (today's data, all open centres)
  *   node update-sharepoint-attendance.js --date 2026-05-21 (specific date)
  *   node update-sharepoint-attendance.js --week 2026-05-12 (full week, Mon–Fri)
+ *   node update-sharepoint-attendance.js --weeks-ahead 4   (this week + next 3 weeks, Mon–Fri)
  *   node update-sharepoint-attendance.js --centre Wollongong --today
  *   node update-sharepoint-attendance.js --all --today
  */
@@ -55,10 +56,11 @@ const LOCAL_OUT     = path.join(TMP_DIR, 'attendance-records-updated.xlsx');
 
 // ─── Args ─────────────────────────────────────────────────────────────────────
 const args       = process.argv.slice(2);
-const weekArg    = args.includes('--week')   ? args[args.indexOf('--week') + 1]   : null;
-const dateArg    = args.includes('--date')   ? args[args.indexOf('--date') + 1]   : null;
+const weekArg    = args.includes('--week')       ? args[args.indexOf('--week') + 1]       : null;
+const dateArg    = args.includes('--date')       ? args[args.indexOf('--date') + 1]       : null;
+const weeksAheadArg = args.includes('--weeks-ahead') ? parseInt(args[args.indexOf('--weeks-ahead') + 1], 10) : null;
 const isToday    = args.includes('--today');
-const centreArg  = args.includes('--centre') ? args[args.indexOf('--centre') + 1] : null;
+const centreArg  = args.includes('--centre')     ? args[args.indexOf('--centre') + 1]     : null;
 // --today fetches all open centres unless --centre is explicitly specified
 const isAll      = args.includes('--all') || (isToday && !centreArg);
 
@@ -189,12 +191,18 @@ async function fetchOwnaData(datesToFetch, targets) {
 
         // Columns: [toggle, centre, child, room, signIn, signOut, notes, roomChanges, session, fee]
         // Rows with class "background-red" = absent children — excluded from attendance but counted for bookings
-        const { dayRows, bookedCount } = await tmp.evaluate(() => {
+        const { dayRows, bookedCount, roomBooked } = await tmp.evaluate(() => {
           const allTrs = [...document.querySelectorAll('table tbody tr')];
           // Booked = ALL rows that have a room (includes absent children with background-red)
+          const roomBooked = {};
           const bookedCount = allTrs.filter(tr => {
             const cells = [...tr.querySelectorAll('td')];
-            return cells.length > 3 && (cells[3]||{}).innerText && cells[3].innerText.trim();
+            if (cells.length > 3 && (cells[3]||{}).innerText && cells[3].innerText.trim()) {
+              const room = cells[3].innerText.trim();
+              roomBooked[room] = (roomBooked[room] || 0) + 1;
+              return true;
+            }
+            return false;
           }).length;
           const dayRows = allTrs
             .filter(tr => !tr.className.includes('background-red'))
@@ -203,15 +211,19 @@ async function fetchOwnaData(datesToFetch, targets) {
               return { child: c[2]||'', room: c[3]||'', signIn: c[4]||'', signOut: c[5]||'', age: '' };
             })
             .filter(r => r.room && (r.signIn || r.signOut));
-          return { dayRows, bookedCount };
+          return { dayRows, bookedCount, roomBooked };
         });
         await tmp.close();
 
-        // Track booked counts for Daily Occupancy tab
+        // Track booked counts for Daily Occupancy tab (campus total + per-room)
         if (bookedCount > 0) {
           const occKey = centreName + '|' + dateStr;
           if (!rows._occupancy) rows._occupancy = {};
-          rows._occupancy[occKey] = (rows._occupancy[occKey] || 0) + bookedCount;
+          if (!rows._occupancy[occKey]) rows._occupancy[occKey] = { booked: 0, roomBooked: {} };
+          rows._occupancy[occKey].booked += bookedCount;
+          for (const [room, count] of Object.entries(roomBooked)) {
+            rows._occupancy[occKey].roomBooked[room] = (rows._occupancy[occKey].roomBooked[room] || 0) + count;
+          }
         }
 
         console.log(`${dayRows.length} attended / ${bookedCount} booked`);
@@ -241,7 +253,7 @@ const COL_WIDTHS  = [20, 28, 26, 22, 12, 12, 10];
 
 // ─── Step 2b: Update Daily Occupancy tab ────────────────────────────────────
 async function updateDailyOccupancyTab(wb, occupancyMap) {
-  // occupancyMap: { "Campus|YYYY-MM-DD": bookedCount }
+  // occupancyMap: { "Campus|YYYY-MM-DD": { booked: number, roomBooked: { [room]: count } } | number }
   const OCC_HEADERS = ['Campus', 'Date', 'Booked', 'Attended', 'Absent'];
   const headerFill  = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF1a2e1a' } };
   const headerFont  = { bold:true, color:{ argb:'FFFFFFFF' }, size:11 };
@@ -269,9 +281,11 @@ async function updateDailyOccupancyTab(wb, occupancyMap) {
   for (const rn of toDelete.reverse()) ws.spliceRows(rn, 1);
 
   // Build attended counts from occupancyMap keys (will be filled after fetchOwnaData)
-  // occupancyMap values are booked counts; attended is passed separately
-  for (const [key, booked] of Object.entries(occupancyMap)) {
+  // occupancyMap values are either legacy numbers or { booked, roomBooked }
+  for (const [key, data] of Object.entries(occupancyMap)) {
+    if (key.includes('__')) continue;
     const [campus, date] = key.split('|');
+    const booked = typeof data === 'number' ? data : (data?.booked || 0);
     const attended = occupancyMap[key + '__attended'] || 0;
     const absent   = Math.max(0, booked - attended);
     const row = ws.addRow([campus, date, booked, attended, absent]);
@@ -381,6 +395,16 @@ async function updateExcel(attendanceRows, datesToReplace, dobLookup) {
     const d = dateArg || getTodayStr();
     datesToFetch = [d];
     console.log(`\n=== SharePoint Attendance Update: ${dayLabel(d)} ===`);
+  } else if (weeksAheadArg && weeksAheadArg > 0) {
+    const mondayStr = weekArg || getLastMondayStr();
+    const start = new Date(mondayStr + 'T00:00:00');
+    datesToFetch = [];
+    for (let i = 0; i < weeksAheadArg; i++) {
+      const d = new Date(start);
+      d.setDate(d.getDate() + 7 * i);
+      datesToFetch.push(...weekDays(fmtDate(d)));
+    }
+    console.log(`\n=== SharePoint Attendance Update: ${weeksAheadArg} weeks ahead from ${mondayStr} (${datesToFetch.length} weekdays) ===`);
   } else {
     const mondayStr = weekArg || getLastMondayStr();
     datesToFetch = weekDays(mondayStr);
@@ -466,11 +490,13 @@ async function updateExcel(attendanceRows, datesToReplace, dobLookup) {
     try {
       const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
       const SERVICE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
-      const occRows = occEntries.map(([key, booked]) => {
+      const occRows = occEntries.map(([key, data]) => {
         const [campus, date] = key.split('|');
+        const booked = typeof data === 'number' ? data : (data?.booked || 0);
+        const roomBooked = typeof data === 'object' ? (data?.roomBooked || {}) : {};
         // Note: do NOT include capacity here — it is set separately by sync-occupancy.js
         // and we don't want to overwrite it with 0 on every daily run
-        return { campus, date, booked, updated_at: new Date().toISOString() };
+        return { campus, date, booked, room_booked: roomBooked, updated_at: new Date().toISOString() };
       });
       const res = await fetch(SUPABASE_URL + '/rest/v1/daily_occupancy', {
         method: 'POST',
