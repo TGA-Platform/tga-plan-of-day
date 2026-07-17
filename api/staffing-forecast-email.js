@@ -76,7 +76,7 @@ function normName(name) {
   return String(name || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet, zCasualCountByCentre) {
+function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet, zCasualRowsByCentre) {
   const campus = centre.ownaName ?? centre.name;
   const fc = forecasts[campus];
   if (!fc) return null;
@@ -90,12 +90,17 @@ function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet,
       || (centre.issUnitIds || []).includes(uid);
   });
 
-  const internalCasualCount = centreRosters.filter(r => {
-    const name = r._DPMetaData?.EmployeeInfo?.DisplayName || '';
-    return internalCasualSet.has(normName(name));
-  }).length;
+  const internalCasualNames = centreRosters
+    .filter(r => {
+      const name = r._DPMetaData?.EmployeeInfo?.DisplayName || '';
+      return internalCasualSet.has(normName(name));
+    })
+    .map(r => r._DPMetaData?.EmployeeInfo?.DisplayName || String(r.Employee || ''));
+  const internalCasualCount = internalCasualNames.length;
 
-  const zCasualFloatCount = zCasualCountByCentre[centre.name] || 0;
+  const zCasualRowsForCentre = zCasualRowsByCentre[centre.name] || [];
+  const zCasualFloatCount = zCasualRowsForCentre.length;
+  const zCasualNames = zCasualRowsForCentre.map(r => r.name);
 
   const roomData = centre.rooms.map(room => {
     const owna = (room.ownaRoomName ?? '').toLowerCase();
@@ -159,7 +164,9 @@ function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet,
     floatCount,
     internalFloatCount,
     zCasualFloatCount,
+    zCasualNames,
     internalCasualCount,
+    internalCasualNames,
     adAvailable,
     casualsNeeded,
     floatSurplus,
@@ -256,12 +263,13 @@ export default async function handler(req, res) {
     );
 
     const zCasualRows = zCasualRes.ok ? await zCasualRes.json() : [];
-    const zCasualCountByCentre = {};
+    const zCasualRowsByCentre = {};
     for (const row of zCasualRows) {
-      zCasualCountByCentre[row.centre] = (zCasualCountByCentre[row.centre] || 0) + 1;
+      if (!zCasualRowsByCentre[row.centre]) zCasualRowsByCentre[row.centre] = [];
+      zCasualRowsByCentre[row.centre].push(row);
     }
 
-    const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet, zCasualCountByCentre));
+    const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet, zCasualRowsByCentre));
     const html = buildHtml(summary);
 
     return res.status(200).json({
