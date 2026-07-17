@@ -42,6 +42,14 @@ function minutesToHhmm(mins: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
 function timeInputOptions(): string[] {
   const out: string[] = [];
   for (let m = 6 * 60; m <= 22 * 60; m += 15) {
@@ -560,6 +568,7 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
         // The data is stored in row.data per the ratio-check API
         const mergedOverrides: Record<string, {
           start?: string; end?: string; lunchStart?: string; lunchEnd?: string;
+          segments?: Array<{ start: string; end: string }>;
           source?: string; isOvertime?: boolean; comment?: string;
         }> = {};
         const mergedMoves: Record<string, string> = {};
@@ -568,6 +577,24 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
           if (data.staffTimeOverrides) Object.assign(mergedOverrides, data.staffTimeOverrides);
           if (data.staffMoves) Object.assign(mergedMoves, data.staffMoves);
         }
+
+        // Also pull planned lunch breaks from lunch_schedules as a fallback when
+        // staffTimeOverrides doesn't have lunch times.
+        try {
+          const lsRes = await fetch(`/api/lunch-schedules?centre=${encodeURIComponent(centre.ownaName || centre.name)}&date=${date}`);
+          if (lsRes.ok) {
+            const lsRows = await lsRes.json();
+            const entries = Array.isArray(lsRows) && lsRows.length > 0 ? lsRows[0].schedule ?? [] : [];
+            for (const e of entries) {
+              if (!e.employeeId || !e.lunchStart || !e.lunchEnd) continue;
+              const empId = String(e.employeeId);
+              const ov = mergedOverrides[empId] || {};
+              if (!ov.lunchStart && !ov.lunchEnd) {
+                mergedOverrides[empId] = { ...ov, lunchStart: e.lunchStart, lunchEnd: e.lunchEnd };
+              }
+            }
+          }
+        } catch { /* non-critical */ }
 
         // Look up Deputy employee names so unlinked IDs still import with a real name
         const deputyIds = Object.keys(mergedOverrides).map(id => Number(id)).filter(id => !isNaN(id));
@@ -607,7 +634,7 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
           const staffName = matchedStaffId
             ? (staffIdToName[matchedStaffId] || staffList.find(s => s.id === matchedStaffId)?.name || fallbackName)
             : fallbackName;
-          const staffId = matchedStaffId || `deputy_${deputyId}`;
+          const staffId = matchedStaffId || generateUUID();
 
           // Round start/end to nearest 15 minutes
           const rawStart = ov.start || '08:00';
@@ -649,22 +676,30 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
             roomName = room?.name || primaryRoomName || undefined;
           }
 
-          const saved = await saveShift({
-            roster_week_id: week.id,
-            centre_id: centreId,
-            staff_id: staffId,
-            staff_name: staffName,
-            date: targetDate,
-            start_time: start,
-            end_time: end,
-            room_id: roomId,
-            room_name: roomName,
-            lunch_start: lunchStart,
-            lunch_duration: lunchDuration,
-            is_casual: !matchedStaffId,
-            notes: ov.comment || undefined,
-          });
-          if (saved) importedCount++; else warnings.push(`${date}: failed to save shift for staff ${staffId}`);
+          // If the ratio-check data captured split shifts (e.g. trainee work + study),
+          // import each segment as a separate roster shift instead of one merged block.
+          const segments = ov.segments && ov.segments.length > 0
+            ? ov.segments.map(seg => ({ start: roundTimeToNearest15(seg.start || rawStart), end: roundTimeToNearest15(seg.end || rawEnd) }))
+            : [{ start, end }];
+
+          for (const seg of segments) {
+            const saved = await saveShift({
+              roster_week_id: week.id,
+              centre_id: centreId,
+              staff_id: staffId,
+              staff_name: staffName,
+              date: targetDate,
+              start_time: seg.start,
+              end_time: seg.end,
+              room_id: roomId,
+              room_name: roomName,
+              lunch_start: lunchStart,
+              lunch_duration: lunchDuration,
+              is_casual: !matchedStaffId,
+              notes: ov.comment || undefined,
+            });
+            if (saved) importedCount++; else warnings.push(`${date}: failed to save shift for staff ${staffId}`);
+          }
         }
         importedDates.push(targetDate);
       } catch (err: any) {
@@ -757,6 +792,7 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
         // Merge all sessions — data is in row.data per the ratio-check API
         const mergedOverrides: Record<string, {
           start?: string; end?: string; lunchStart?: string; lunchEnd?: string;
+          segments?: Array<{ start: string; end: string }>;
           source?: string; isOvertime?: boolean; comment?: string;
         }> = {};
         const mergedMoves: Record<string, string> = {};
@@ -765,6 +801,24 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
           if (data.staffTimeOverrides) Object.assign(mergedOverrides, data.staffTimeOverrides);
           if (data.staffMoves) Object.assign(mergedMoves, data.staffMoves);
         }
+
+        // Also pull planned lunch breaks from lunch_schedules as a fallback when
+        // staffTimeOverrides doesn't have lunch times.
+        try {
+          const lsRes = await fetch(`/api/lunch-schedules?centre=${encodeURIComponent(centre.ownaName || centre.name)}&date=${date}`);
+          if (lsRes.ok) {
+            const lsRows = await lsRes.json();
+            const entries = Array.isArray(lsRows) && lsRows.length > 0 ? lsRows[0].schedule ?? [] : [];
+            for (const e of entries) {
+              if (!e.employeeId || !e.lunchStart || !e.lunchEnd) continue;
+              const empId = String(e.employeeId);
+              const ov = mergedOverrides[empId] || {};
+              if (!ov.lunchStart && !ov.lunchEnd) {
+                mergedOverrides[empId] = { ...ov, lunchStart: e.lunchStart, lunchEnd: e.lunchEnd };
+              }
+            }
+          }
+        } catch { /* non-critical */ }
 
         // Look up Deputy employee names so unlinked IDs still import with a real name
         const deputyIds = Object.keys(mergedOverrides).map(id => Number(id)).filter(id => !isNaN(id));
@@ -795,7 +849,7 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
           const staffName = matchedStaffId
             ? (staffIdToName[matchedStaffId] || currentStaffList.find(s => s.id === matchedStaffId)?.name || fallbackName)
             : fallbackName;
-          const staffId = matchedStaffId || `deputy_${deputyId}`;
+          const staffId = matchedStaffId || generateUUID();
 
           // Round times to nearest 15 minutes
           const start = roundTimeToNearest15(ov.start || '08:00');
@@ -833,20 +887,28 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
             roomName = room?.name || primaryRoomName || undefined;
           }
 
-          tShifts.push({
-            template_id: template.id,
-            centre_id: centreId,
-            staff_id: staffId,
-            staff_name: staffName,
-            day_of_week: dayOfWeek,
-            start_time: start,
-            end_time: end,
-            room_id: roomId,
-            room_name: roomName,
-            lunch_start: lunchStart,
-            lunch_duration: lunchDuration,
-            notes: ov.comment || undefined,
-          });
+          // If the ratio-check data captured split shifts (e.g. trainee work + study),
+          // import each segment as a separate template shift instead of one merged block.
+          const segments = ov.segments && ov.segments.length > 0
+            ? ov.segments.map(seg => ({ start: roundTimeToNearest15(seg.start || ov.start || '08:00'), end: roundTimeToNearest15(seg.end || ov.end || '16:00') }))
+            : [{ start, end }];
+
+          for (const seg of segments) {
+            tShifts.push({
+              template_id: template.id,
+              centre_id: centreId,
+              staff_id: staffId,
+              staff_name: staffName,
+              day_of_week: dayOfWeek,
+              start_time: seg.start,
+              end_time: seg.end,
+              room_id: roomId,
+              room_name: roomName,
+              lunch_start: lunchStart,
+              lunch_duration: lunchDuration,
+              notes: ov.comment || undefined,
+            });
+          }
         }
       } catch { /* skip day on error */ }
     }
@@ -1626,7 +1688,32 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
   function ShiftModal() {
     const [draft, setDraft] = useState<Partial<RosterShift>>(modalShift || {});
     const [applyDates, setApplyDates] = useState<Record<string, boolean>>({});
-    const staffOptions = staffForDisplay.map(s => ({ id: s.id, name: s.name }));
+
+    // Imported/casual staff who don't exist in the central staff table still need
+    // to appear in the dropdown so shifts imported from ratio check remain editable.
+    const adHocStaff = useMemo(() => {
+      const map = new Map<string, { id: string; name: string }>();
+      for (const s of shifts) {
+        if (!s.staff_id || staffForDisplay.some(st => st.id === s.staff_id)) continue;
+        if (!map.has(s.staff_id)) map.set(s.staff_id, { id: s.staff_id, name: s.staff_name || 'Unknown' });
+      }
+      return [...map.values()];
+    }, [shifts, staffForDisplay]);
+
+    const staffOptions = useMemo(() => {
+      return [...staffForDisplay.map(s => ({ id: s.id, name: s.name })), ...adHocStaff];
+    }, [staffForDisplay, adHocStaff]);
+
+    // Ensure the staff dropdown pre-selects the current shift's staff member.
+    // If staff_id doesn't match any option (e.g. legacy deputy_ IDs), match by name.
+    useEffect(() => {
+      if (!draft.staff_id) return;
+      if (staffOptions.some(s => s.id === draft.staff_id)) return;
+      const byName = staffOptions.find(s => s.name && s.name === draft.staff_name);
+      if (byName) {
+        setDraft(prev => ({ ...prev, staff_id: byName.id }));
+      }
+    }, [draft.staff_id, draft.staff_name, staffOptions]);
 
     useEffect(() => {
       const initial: Record<string, boolean> = {};
