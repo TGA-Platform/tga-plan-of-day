@@ -122,6 +122,8 @@ function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet,
   const totalFloorStaff = roomData.reduce((s, r) => s + r.staffCount, 0);
 
   const floatIds = new Set(centre.floatUnitIds || []);
+  // Split-shift float staff are not continuous 10am-2pm floaters; the panel excludes them
+  // from the float pool and puts them in support. Match that behaviour here.
   const internalFloatCount = rosters.filter(r => floatIds.has(r.OperationalUnit) && !r.isSplitShift).length;
   const floatCount = internalFloatCount + zCasualFloatCount;
 
