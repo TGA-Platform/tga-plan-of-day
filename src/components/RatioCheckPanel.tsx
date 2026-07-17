@@ -17,6 +17,7 @@ function isRatioCheckLocked(date: string): boolean {
 }
 import type { Room, AttendanceChild, RosteredStaff, FamilyGroupingConfig, FamilyGroupingTemplate } from '../types';
 import { calcRequiredStaff, parseAgeMonths, roomNameMatches } from '../utils/ratioEngine';
+import { minsToHHMM, hhmmToMins } from '../utils/timeUtils';
 import { enqueueSave } from '../utils/syncQueue';
 import type { LunchBreakEntry } from '../utils/lunchScheduler';
 import { getUser } from '../auth';
@@ -544,7 +545,22 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   const sessionData    = activeSession === 'morning' ? morningData : activeSession === 'midday' ? middayData : afternoonData;
   const setSessionData = activeSession === 'morning' ? setMorningData : activeSession === 'midday' ? setMiddayData : setAfternoonData;
-  const slots = activeSession === 'morning' ? MORNING_SLOTS : activeSession === 'midday' ? MIDDAY_SLOTS : AFTERNOON_SLOTS;
+
+  // Centre-specific morning slots based on opening time (e.g. Mount Annan 06:30)
+  const centreConfig = useMemo(() => CENTRES.find(c => c.id === centreId), [centreId]);
+  const morningSlots = useMemo(() => {
+    const opening = centreConfig?.openingTime || '07:00';
+    const openingMins = hhmmToMins(opening);
+    const baseStartMins = hhmmToMins(MORNING_SLOTS[0]); // 07:00
+    if (!Number.isFinite(openingMins) || openingMins >= baseStartMins) return MORNING_SLOTS;
+    const extra: string[] = [];
+    for (let m = openingMins; m < baseStartMins; m += 15) {
+      extra.push(minsToHHMM(m));
+    }
+    return [...extra, ...MORNING_SLOTS];
+  }, [centreConfig?.openingTime]);
+  const allSlots = useMemo(() => [...morningSlots, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS], [morningSlots]);
+  const slots = activeSession === 'morning' ? morningSlots : activeSession === 'midday' ? MIDDAY_SLOTS : AFTERNOON_SLOTS;
 
   function setSessionUpdatedAt(session: 'morning' | 'midday' | 'afternoon', updatedAt: string) {
     const patch = (prev: RatioCheckSession) => ({ ...prev, updatedAt });
@@ -1032,7 +1048,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const map: Record<string, RosteredStaff[]> = {};
     // Use allSlots (not just current session) so offFloorStaffBySlot can find
     // staff objects for any session's lunch/programming blocks
-    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    // allSlots computed above from centre openingTime
     for (const slot of allSlots) {
       const slotMins = slotToMins(slot);
       const seen = new Set<number>();
@@ -1061,7 +1077,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // Used to show draggable badges in activity columns
   const offFloorStaffBySlot = useMemo(() => {
     const map: Record<string, { programming: RosteredStaff[]; lunch: RosteredStaff[]; cleaning: RosteredStaff[] }> = {};
-    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    // allSlots computed above from centre openingTime
     for (const slot of allSlots) {
       const slotMins = slotToMins(slot);
       // Track by empId to deduplicate and enforce single-column placement
@@ -1103,7 +1119,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const offFloorBySlot = useMemo(() => {
     const activityMoves = new Set(['__programming__', '__lunch__', '__cleaning__', '__additional__', '__removed__']);
     const map: Record<string, Set<number>> = {};
-    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    // allSlots computed above from centre openingTime
     for (const slot of allSlots) {
       const slotMins = slotToMins(slot);
       const offFloor = new Set<number>();
@@ -1133,7 +1149,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // keyed: slot ? roomId ? [floatEmployeeIds]
   const floatCoveringRoomBySlot = useMemo(() => {
     const map: Record<string, Record<string, number[]>> = {};
-    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    // allSlots computed above from centre openingTime
     for (const slot of allSlots) {
       const slotMins = slotToMins(slot);
       const roomCover: Record<string, number[]> = {};
@@ -1163,7 +1179,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
    *  Enforces one-room-per-staff so nobody can render in two room columns. */
   const staffPrimaryRoomBySlot = useMemo(() => {
     const map: Record<string, Record<number, string | null>> = {};
-    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    // allSlots computed above from centre openingTime
     const roomIds = new Set(rooms.map(r => r.id));
     for (const slot of allSlots) {
       const byEmp: Record<number, string | null> = {};
@@ -1350,7 +1366,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
    */
   const rosterClaimedByRoomAtSlot = useMemo(() => {
     const result: Record<string, Set<number>> = {};
-    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    // allSlots computed above from centre openingTime
     for (const slot of allSlots) {
       const available = staffAtSlotMap[slot] ?? [];
       const offFloor  = offFloorBySlot[slot] ?? new Set<number>();
@@ -2664,7 +2680,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     const done = markedFinished.has(s.employeeId);
                     // Find the last slot where this staff member appears in any room
                     let lastRoomName = '-';
-                    const allSlotsAll = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+                    const allSlotsAll = allSlots;
                     for (let i = allSlotsAll.length - 1; i >= 0; i--) {
                       const sl = allSlotsAll[i];
                       for (const room of rooms) {

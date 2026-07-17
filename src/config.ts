@@ -85,6 +85,7 @@ export const CENTRES: Centre[] = [
   {
     id: 'mount-annan', name: 'Mount Annan',
     approvedPlaces: 120,
+    openingTime: '06:30',
     rooms: [
       room('ma_0_1', '0-1 Explorers',   '0-1 yrs', 4,  74,  '0-1'),
       room('ma_1_2', '1-2 Adventurers', '1-2 yrs', 4,  76,  '1-2'),

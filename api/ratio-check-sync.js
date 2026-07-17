@@ -38,6 +38,7 @@ const HDRS = {
 const ACTIVITY_MOVES = new Set(['__programming__', '__lunch__', '__cleaning__', '__additional__', '__float__', '__removed__', 'none']);
 
 const MORNING_SLOTS = [
+  '06:30','06:45',
   '07:00','07:15','07:30','07:45',
   '08:00','08:15','08:30','08:45',
   '09:00','09:15','09:30','09:45',

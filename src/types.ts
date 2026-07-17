@@ -20,6 +20,7 @@ export interface Centre {
   nonRatioUnitIds?: number[];
   approvedPlaces?: number;   // NSW approved places — ADs/Ed Leaders can cover lunch if < 100
   outdoorAreas?: string[];    // Configurable outdoor / non-room areas (e.g. 'Outdoor Area', 'Front Yard')
+  openingTime?: string;       // HH:MM — centre opening time for ratio-check slots (default 07:00)
 }
 
 export interface User {
