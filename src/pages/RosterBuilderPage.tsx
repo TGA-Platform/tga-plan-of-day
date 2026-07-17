@@ -545,6 +545,26 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
       staffIdToName[String(s.id)] = s.name || 'Unknown';
     }
 
+    // Fetch Deputy rosters for the reference week so we can name staff even if
+    // they aren't linked in the staff table (casuals, recent starters, etc.)
+    const deputyIdToName: Record<string, string> = {};
+    for (const day of refDays) {
+      const date = format(day, 'yyyy-MM-dd');
+      try {
+        const rr = await fetch('/api/deputy-rosters', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date, unitIds: centre.rooms.map(r => r.deputyUnitId).filter(Boolean) }),
+        });
+        if (rr.ok) {
+          const rosters: any[] = await rr.json();
+          for (const r of rosters) {
+            if (r.employeeId && r.name) deputyIdToName[String(r.employeeId)] = r.name;
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
     for (const day of refDays) {
       const date = format(day, 'yyyy-MM-dd');
       try {
@@ -598,8 +618,14 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
         await deleteShiftsForDate(week.id, targetDate);
 
         for (const [deputyId, ov] of Object.entries(mergedOverrides)) {
-          const staffId = deputyToStaffId[deputyId];
-          if (!staffId) { warnings.push(`${date}: no staff member for Deputy ID ${deputyId}`); continue; }
+          const matchedStaffId = deputyToStaffId[deputyId];
+          const staffName = matchedStaffId
+            ? (staffIdToName[matchedStaffId] || staffList.find(s => s.id === matchedStaffId)?.name || 'Unknown')
+            : (deputyIdToName[deputyId] || 'Unknown');
+          const staffId = matchedStaffId || `deputy_${deputyId}`;
+          if (!matchedStaffId && !deputyIdToName[deputyId]) {
+            warnings.push(`${date}: no name found for Deputy ID ${deputyId}`);
+          }
 
           // Round start/end to nearest 15 minutes
           const rawStart = ov.start || '08:00';
@@ -645,7 +671,7 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
             roster_week_id: week.id,
             centre_id: centreId,
             staff_id: staffId,
-            staff_name: staffIdToName[staffId] || staffList.find(s => s.id === staffId)?.name || '',
+            staff_name: staffName,
             date: targetDate,
             start_time: start,
             end_time: end,
@@ -653,6 +679,7 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
             room_name: roomName,
             lunch_start: lunchStart,
             lunch_duration: lunchDuration,
+            is_casual: !matchedStaffId,
             notes: ov.comment || undefined,
           });
           if (saved) importedCount++; else warnings.push(`${date}: failed to save shift for staff ${staffId}`);
@@ -734,6 +761,25 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
       staffIdToName[String(s.id)] = s.name || 'Unknown';
     }
 
+    // Fetch Deputy rosters for the reference week so unlinked Deputy IDs still get a name
+    const deputyIdToName: Record<string, string> = {};
+    for (const day of refDays) {
+      const date = format(day, 'yyyy-MM-dd');
+      try {
+        const rr = await fetch('/api/deputy-rosters', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date, unitIds: centre.rooms.map(r => r.deputyUnitId).filter(Boolean) }),
+        });
+        if (rr.ok) {
+          const rosters: any[] = await rr.json();
+          for (const r of rosters) {
+            if (r.employeeId && r.name) deputyIdToName[String(r.employeeId)] = r.name;
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
     for (const day of refDays) {
       const date = format(day, 'yyyy-MM-dd');
       try {
@@ -777,8 +823,11 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
 
         const dayOfWeek = getISODay(day);
         for (const [deputyId, ov] of Object.entries(mergedOverrides)) {
-          const staffId = deputyToStaffId[deputyId];
-          if (!staffId) continue;
+          const matchedStaffId = deputyToStaffId[deputyId];
+          const staffName = matchedStaffId
+            ? (staffIdToName[matchedStaffId] || currentStaffList.find(s => s.id === matchedStaffId)?.name || 'Unknown')
+            : (deputyIdToName[deputyId] || 'Unknown');
+          const staffId = matchedStaffId || `deputy_${deputyId}`;
 
           // Round times to nearest 15 minutes
           const start = roundTimeToNearest15(ov.start || '08:00');
@@ -820,7 +869,7 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
             template_id: template.id,
             centre_id: centreId,
             staff_id: staffId,
-            staff_name: staffIdToName[staffId] || currentStaffList.find(s => s.id === staffId)?.name || '',
+            staff_name: staffName,
             day_of_week: dayOfWeek,
             start_time: start,
             end_time: end,
