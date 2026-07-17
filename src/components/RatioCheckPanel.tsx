@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { getISODay, parseISO } from 'date-fns';
 import { CENTRES } from '../config';
 
 // 24h ? 12h display: '14:30' ? '2:30pm', '07:00' ? '7am'
@@ -14,23 +15,13 @@ function isRatioCheckLocked(date: string): boolean {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
   return date < today;
 }
-import type { Room, AttendanceChild, RosteredStaff } from '../types';
+import type { Room, AttendanceChild, RosteredStaff, FamilyGroupingConfig, FamilyGroupingTemplate } from '../types';
 import { calcRequiredStaff, parseAgeMonths, roomNameMatches } from '../utils/ratioEngine';
 import { enqueueSave } from '../utils/syncQueue';
 import type { LunchBreakEntry } from '../utils/lunchScheduler';
+import { getUser } from '../auth';
 
 // --- Types --------------------------------------------------------------------
-
-interface FamilyGroupingConfig {
-  id: string;
-  label: string;
-  roomIds: string[];    // empty = all rooms
-  slots: string[];      // HH:MM slots this applies to
-  color: string;        // hex colour
-  heldInRoom?: string;  // which room the grouping is physically held in
-  staffIdsBySlot?: Record<string, number[]>; // staff explicitly added to this grouping, keyed by slot
-  staffIds?: number[];  // legacy: migrated to staffIdsBySlot on load
-}
 
 interface RoomVisitor {
   id: string;           // unique per entry
@@ -327,6 +318,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [fgPanelOpen, setFgPanelOpen] = useState(false);
   const [editingFgId, setEditingFgId] = useState<string | null>(null);
   const [fgPopoverSlot, setFgPopoverSlot] = useState<string | null>(null);
+  const [fgTemplates, setFgTemplates] = useState<FamilyGroupingTemplate[]>([]);
+  const [fgTemplatesLoading, setFgTemplatesLoading] = useState(false);
+  const [fgTemplateManagerOpen, setFgTemplateManagerOpen] = useState(false);
+  const [fgTemplateName, setFgTemplateName] = useState('');
+  const [fgTemplateDays, setFgTemplateDays] = useState<number[]>([]);
+  const [fgTemplateSaving, setFgTemplateSaving] = useState(false);
+  const templatesAppliedRef = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Serialize saves per centre+date+session so two overlapping saves can't race
   // and cause the older payload to overwrite the newer one on the server.
@@ -755,6 +753,44 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const interval = setInterval(poll, 30_000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [centreId, date]);
+
+  // -- Reset template auto-apply when date changes ---------------------------
+  useEffect(() => {
+    templatesAppliedRef.current = false;
+  }, [date, centreId]);
+
+  // -- Load family grouping templates for this centre ------------------------
+  useEffect(() => {
+    if (!centreId) return;
+    setFgTemplatesLoading(true);
+    fetch(`/api/family-grouping-templates?centre_id=${encodeURIComponent(centreId)}`)
+      .then(async r => {
+        if (!r.ok) throw new Error(await r.text());
+        const rows = await r.json();
+        setFgTemplates(Array.isArray(rows) ? rows : []);
+      })
+      .catch(e => console.error('[FG Templates] load failed:', e))
+      .finally(() => setFgTemplatesLoading(false));
+  }, [centreId]);
+
+  // -- Auto-apply matching FG templates on first load ------------------------
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    if (templatesAppliedRef.current) return;
+    if (sharedFamilyGroupings.length > 0) return;
+    if (fgTemplates.length === 0) return;
+    if (!date) return;
+
+    const dayOfWeek = getISODay(parseISO(date));
+    const matching = fgTemplates.filter(t => t.days_of_week.includes(dayOfWeek));
+    if (matching.length === 0) return;
+
+    templatesAppliedRef.current = true;
+    const merged = mergeFgTemplates(matching, rooms);
+    if (merged.length > 0) {
+      syncFGToAllSessions(() => merged);
+    }
+  }, [sharedFamilyGroupings.length, fgTemplates, date, rooms]);
 
   // -- Periodic live attendance refresh (every 2 minutes) --------------------
   // Keeps child counts current as children sign in throughout the day.
@@ -1509,6 +1545,100 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   // -- Family Grouping helpers ------------------------------------------------
 
+  /** Merge one or more FG templates into a fresh FG list, skipping any
+   *  room/slot combos already used by an earlier template. */
+  function mergeFgTemplates(templates: FamilyGroupingTemplate[], allRooms: Room[]): FamilyGroupingConfig[] {
+    const used = new Set<string>(); // "HH:MM:roomId"
+    const result: FamilyGroupingConfig[] = [];
+    for (const template of templates) {
+      for (const fg of template.template_data) {
+        const allowedSlots: string[] = [];
+        for (const slot of fg.slots) {
+          const roomsToCheck = fg.roomIds.length === 0 ? allRooms.map(r => r.id) : fg.roomIds;
+          const conflict = roomsToCheck.some(roomId => used.has(`${slot}:${roomId}`));
+          if (!conflict) {
+            allowedSlots.push(slot);
+            for (const roomId of roomsToCheck) used.add(`${slot}:${roomId}`);
+          }
+        }
+        if (allowedSlots.length > 0) {
+          result.push({
+            ...fg,
+            id: Math.random().toString(36).slice(2, 9),
+            slots: allowedSlots,
+            staffIdsBySlot: fg.staffIdsBySlot ? JSON.parse(JSON.stringify(fg.staffIdsBySlot)) : {},
+          });
+        }
+      }
+    }
+    return result;
+  }
+
+  async function createFgTemplateFromCurrent(name: string, daysOfWeek: number[]) {
+    if (!centreId || !name.trim() || daysOfWeek.length === 0) return;
+    setFgTemplateSaving(true);
+    try {
+      const r = await fetch('/api/family-grouping-templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          centre_id: centreId,
+          name: name.trim(),
+          days_of_week: daysOfWeek,
+          template_data: sharedFamilyGroupings,
+          created_by: getUser()?.email ?? null,
+        }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const created = await r.json();
+      setFgTemplates(prev => [...prev, created]);
+      setFgTemplateName('');
+      setFgTemplateDays([]);
+    } catch (e: any) {
+      alert('Failed to save template: ' + (e.message || String(e)));
+    } finally {
+      setFgTemplateSaving(false);
+    }
+  }
+
+  async function deleteFgTemplate(id: string) {
+    if (!confirm('Delete this family grouping template?')) return;
+    try {
+      const r = await fetch(`/api/family-grouping-templates?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!r.ok) throw new Error(await r.text());
+      setFgTemplates(prev => prev.filter(t => t.id !== id));
+    } catch (e: any) {
+      alert('Failed to delete template: ' + (e.message || String(e)));
+    }
+  }
+
+  function applyFgTemplate(template: FamilyGroupingTemplate) {
+    const merged = mergeFgTemplates([template], rooms);
+    if (merged.length === 0) return;
+    syncFGToAllSessions(prev => {
+      // Merge with existing FGs, skipping conflicts
+      const used = new Set<string>();
+      for (const fg of prev) {
+        const roomIds = fg.roomIds.length === 0 ? rooms.map(r => r.id) : fg.roomIds;
+        for (const slot of fg.slots) {
+          for (const roomId of roomIds) used.add(`${slot}:${roomId}`);
+        }
+      }
+      const extra: FamilyGroupingConfig[] = [];
+      for (const fg of merged) {
+        const roomIds = fg.roomIds.length === 0 ? rooms.map(r => r.id) : fg.roomIds;
+        const allowedSlots = fg.slots.filter(slot => !roomIds.some(roomId => used.has(`${slot}:${roomId}`)));
+        if (allowedSlots.length > 0) {
+          extra.push({ ...fg, slots: allowedSlots });
+          for (const slot of allowedSlots) {
+            for (const roomId of roomIds) used.add(`${slot}:${roomId}`);
+          }
+        }
+      }
+      return [...prev, ...extra];
+    });
+  }
+
   /** Write FG changes to ALL three sessions so groupings persist across morning/midday/afternoon */
   function syncFGToAllSessions(updater: (fgs: FamilyGroupingConfig[]) => FamilyGroupingConfig[]) {
     hasUserEdited.current = true;
@@ -2135,15 +2265,132 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                 : `${sharedFamilyGroupings.length} grouping(s) configured.`}
             </span>
             <button
-              onClick={addFamilyGrouping}
+              onClick={() => setFgTemplateManagerOpen(v => !v)}
               style={{
                 marginLeft: 'auto', padding: '5px 14px', borderRadius: '8px', fontWeight: 600,
+                fontSize: '12px', backgroundColor: 'white', color: '#7c3aed', border: '1px solid #7c3aed', cursor: 'pointer',
+              }}
+            >
+              {fgTemplateManagerOpen ? 'Close Templates' : 'Templates'}
+            </button>
+            <button
+              onClick={addFamilyGrouping}
+              style={{
+                padding: '5px 14px', borderRadius: '8px', fontWeight: 600,
                 fontSize: '12px', backgroundColor: '#7c3aed', color: 'white', border: 'none', cursor: 'pointer',
               }}
             >
               + Add Grouping
             </button>
           </div>
+
+          {/* FG Template Manager */}
+          {fgTemplateManagerOpen && (
+            <div style={{
+              background: 'white',
+              border: '1px solid #ddd6fe',
+              borderRadius: '8px',
+              padding: '12px',
+              marginBottom: '12px',
+            }}>
+              <div style={{ fontWeight: 700, fontSize: '12px', color: '#6d28d9', marginBottom: '8px' }}>
+                Family Grouping Templates
+              </div>
+
+              {/* Create from current */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                <input
+                  type="text"
+                  placeholder="Template name (e.g. Mon/Wed routine)"
+                  value={fgTemplateName}
+                  onChange={e => setFgTemplateName(e.target.value)}
+                  style={{
+                    padding: '6px 10px', borderRadius: '6px', border: '1px solid #c4b5fd',
+                    fontSize: '12px', color: '#050505',
+                  }}
+                />
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                  {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((label, idx) => {
+                    const day = idx + 1;
+                    const checked = fgTemplateDays.includes(day);
+                    return (
+                      <label key={label} style={{
+                        fontSize: '11px', padding: '4px 8px', borderRadius: '6px',
+                        border: '1px solid #c4b5fd', cursor: 'pointer',
+                        backgroundColor: checked ? '#7c3aed' : 'white',
+                        color: checked ? 'white' : '#6d28d9',
+                      }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setFgTemplateDays(prev =>
+                            checked ? prev.filter(d => d !== day) : [...prev, day]
+                          )}
+                          style={{ marginRight: '4px' }}
+                        />
+                        {label}
+                      </label>
+                    );
+                  })}
+                </div>
+                <button
+                  onClick={() => createFgTemplateFromCurrent(fgTemplateName, fgTemplateDays)}
+                  disabled={fgTemplateSaving || !fgTemplateName.trim() || fgTemplateDays.length === 0 || sharedFamilyGroupings.length === 0}
+                  style={{
+                    padding: '6px 12px', borderRadius: '6px', fontWeight: 600, fontSize: '12px',
+                    backgroundColor: '#7c3aed', color: 'white', border: 'none', cursor: 'pointer',
+                    opacity: (fgTemplateSaving || !fgTemplateName.trim() || fgTemplateDays.length === 0 || sharedFamilyGroupings.length === 0) ? 0.5 : 1,
+                  }}
+                >
+                  {fgTemplateSaving ? 'Saving…' : 'Save current groupings as template'}
+                </button>
+              </div>
+
+              {/* Existing templates */}
+              {fgTemplatesLoading ? (
+                <div style={{ fontSize: '11px', color: '#6b7280' }}>Loading templates…</div>
+              ) : fgTemplates.length === 0 ? (
+                <div style={{ fontSize: '11px', color: '#9ca3af' }}>No templates saved for this centre yet.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {fgTemplates.map(t => (
+                    <div key={t.id} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '8px', borderRadius: '6px', backgroundColor: '#f5f3ff', fontSize: '12px',
+                    }}>
+                      <div>
+                        <div style={{ fontWeight: 600, color: '#050505' }}>{t.name}</div>
+                        <div style={{ color: '#6b7280', fontSize: '10px' }}>
+                          {t.days_of_week.map(d => ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][d]).filter(Boolean).join(', ')}
+                          {' · '}{t.template_data.length} grouping{t.template_data.length === 1 ? '' : 's'}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          onClick={() => applyFgTemplate(t)}
+                          style={{
+                            padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                            backgroundColor: '#7c3aed', color: 'white', border: 'none', cursor: 'pointer',
+                          }}
+                        >
+                          Apply
+                        </button>
+                        <button
+                          onClick={() => deleteFgTemplate(t.id)}
+                          style={{
+                            padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                            backgroundColor: '#fee2e2', color: '#991b1b', border: 'none', cursor: 'pointer',
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* FG list */}
           {sharedFamilyGroupings.length === 0 && (

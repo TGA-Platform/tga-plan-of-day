@@ -254,6 +254,30 @@ export interface KioskSession {
   events: KioskTimeclockEvent[];
 }
 
+// ── Family Groupings ─────────────────────────────────────────────────────────
+
+export interface FamilyGroupingConfig {
+  id: string;
+  label: string;
+  roomIds: string[];    // empty = all rooms
+  slots: string[];      // HH:MM slots this applies to
+  color: string;        // hex colour
+  heldInRoom?: string;  // which room the grouping is physically held in
+  staffIdsBySlot?: Record<string, number[]>; // staff explicitly added to this grouping, keyed by slot
+  staffIds?: number[];  // legacy: migrated to staffIdsBySlot on load
+}
+
+export interface FamilyGroupingTemplate {
+  id: string;
+  centre_id: string;
+  name: string;
+  days_of_week: number[]; // 1=Mon ... 7=Sun
+  template_data: FamilyGroupingConfig[];
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // ── Timesheet Approvals ──────────────────────────────────────────────────────
 
 export type TimesheetStatus = 'pending' | 'approved' | 'flagged';
