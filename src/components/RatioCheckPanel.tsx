@@ -838,17 +838,28 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       // Sync staffMoves to float_schedules so ratio check is the source of truth
       // for programming vs ratio cover — prevents float panel save from overriding
       if (data.staffMoves && Object.keys(data.staffMoves).length > 0) {
+        const centre = CENTRES.find(c => c.id === centreId);
+        const floatEmpIds = rosters
+          .filter(r => centre && ((centre.floatUnitIds ?? []).includes(r.unitId) || (centre.issUnitIds ?? []).includes(r.unitId)))
+          .map(r => r.employeeId);
         fetch('/api/ratio-check-sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ centre_id: centreId, date, staffMoves: data.staffMoves }),
+          body: JSON.stringify({
+            centre_id: centreId,
+            date,
+            staffMoves: data.staffMoves,
+            rosters: rosters.map(r => ({ employeeId: r.employeeId, employeeName: r.employeeName, startTime: r.startTime, endTime: r.endTime })),
+            staffTimeOverrides: data.staffTimeOverrides || {},
+            floatEmployeeIds: floatEmpIds,
+          }),
         }).catch(e => console.warn('[RatioCheck] Float schedule sync failed:', e));
       }
     })();
 
     saveInFlight.current[key] = promise;
     await promise;
-  }, [centreId, date]);
+  }, [centreId, date, rosters]);
 
   // -- Computed children counts (auto-populated) ------------------------------
   // Computed children counts for Ratio Check:
