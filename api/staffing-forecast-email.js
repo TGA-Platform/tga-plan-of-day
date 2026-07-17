@@ -98,10 +98,12 @@ function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet,
   const zCasualFloatCount = zCasualCountByCentre[centre.name] || 0;
 
   const roomData = centre.rooms.map(room => {
-    const owna = (room.ownaRoomName ?? room.name).toLowerCase();
+    const owna = (room.ownaRoomName ?? '').toLowerCase();
+    const displayName = (room.name ?? '').toLowerCase();
     let expected = 0;
     for (const [roomName, data] of Object.entries(fc.rooms || {})) {
-      if (roomName.toLowerCase().includes(owna) || owna.includes(roomName.toLowerCase())) {
+      const rn = roomName.toLowerCase();
+      if (rn.includes(owna) || owna.includes(rn) || rn.includes(displayName) || displayName.includes(rn)) {
         expected += (data.expected ?? 0);
       }
     }
