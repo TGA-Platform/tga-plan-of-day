@@ -247,6 +247,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [morningData,   setMorningData]   = useState<RatioCheckSession>(EMPTY_SESSION);
   const [middayData,    setMiddayData]    = useState<RatioCheckSession>(EMPTY_SESSION);
   const [afternoonData, setAfternoonData] = useState<RatioCheckSession>(EMPTY_SESSION);
+  // Refs to latest session data so auto-save / delayed saves always write current state,
+  // not a stale closure captured at the time the change was made.
+  const morningRef   = useRef(morningData);
+  const middayRef    = useRef(middayData);
+  const afternoonRef = useRef(afternoonData);
+  useEffect(() => { morningRef.current   = morningData; }, [morningData]);
+  useEffect(() => { middayRef.current    = middayData; }, [middayData]);
+  useEffect(() => { afternoonRef.current = afternoonData; }, [afternoonData]);
   // Guard: don't let Deputy polling save until initial data load has completed.
   // Without this, the poll fires immediately on mount and overwrites saved FGs with empty state.
   const initialLoadDone = useRef(false);
@@ -319,6 +327,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [editingFgId, setEditingFgId] = useState<string | null>(null);
   const [fgPopoverSlot, setFgPopoverSlot] = useState<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Serialize saves per centre+date+session so two overlapping saves can't race
+  // and cause the older payload to overwrite the newer one on the server.
+  const saveInFlight = useRef<Record<string, Promise<void>>>({});
   const dragState = useRef<{ empId: number; slot: string; fromSource: string } | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null); // "roomId:slot" | "available:slot"
   const [touchSelected, setTouchSelected] = useState<{ empId: number; slot: string; source: string } | null>(null);
@@ -708,39 +719,60 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // -- Auto-save --------------------------------------------------------------
   const save = useCallback(async (session: 'morning' | 'midday' | 'afternoon', data: RatioCheckSession) => {
     if (!centreId || !date) return; // guard: don't attempt save without required props
-    setSaveStatus('saving');
 
-    // Compute required staff per room from the current children list so the roster
-    // forecast can read the same numbers as the plan of the day.
-    const requiredByRoom: Record<string, number> = {};
-    for (const room of rooms) {
-      const roomChildren = children.filter(c => c.room && roomNameMatches(c.room, room));
-      requiredByRoom[room.id] = calcRequiredStaff(roomChildren).required;
-    }
-    const dataWithRequired = { ...data, requiredByRoom };
+    const key = `${centreId}:${date}:${session}`;
 
-    const result = await enqueueSave('/api/ratio-check', { centre_id: centreId, date, session, data: dataWithRequired });
-    if (result === 'saved') {
-      setSaveStatus('saved');
-    } else if (result === 'queued') {
-      // Saved locally, will sync when Supabase comes back
-      setSaveStatus('saved'); // show saved - it IS saved locally and will sync
-      console.warn('[RatioCheck] Supabase unavailable - queued for retry');
-    } else {
-      setSaveStatus('error');
-    }
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => setSaveStatus('idle'), 3000);
+    // Wait for any in-flight save for the same session so we don't race and
+    // accidentally let an older payload complete after a newer one.
+    await saveInFlight.current[key]?.catch(() => {});
 
-    // Sync staffMoves to float_schedules so ratio check is the source of truth
-    // for programming vs ratio cover — prevents float panel save from overriding
-    if (data.staffMoves && Object.keys(data.staffMoves).length > 0) {
-      fetch('/api/ratio-check-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ centre_id: centreId, date, staffMoves: data.staffMoves }),
-      }).catch(e => console.warn('[RatioCheck] Float schedule sync failed:', e));
+    // If an auto-save was scheduled for this session, cancel it — we are about
+    // to save the latest state directly, and the auto-save's captured data may
+    // be stale and overwrite what we just changed.
+    if (pendingSave.current?.session === session) {
+      if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+      autoSaveTimer.current = null;
+      pendingSave.current = null;
     }
+
+    const promise = (async () => {
+      setSaveStatus('saving');
+
+      // Compute required staff per room from the current children list so the roster
+      // forecast can read the same numbers as the plan of the day.
+      const requiredByRoom: Record<string, number> = {};
+      for (const room of rooms) {
+        const roomChildren = children.filter(c => c.room && roomNameMatches(c.room, room));
+        requiredByRoom[room.id] = calcRequiredStaff(roomChildren).required;
+      }
+      const dataWithRequired = { ...data, requiredByRoom };
+
+      const result = await enqueueSave('/api/ratio-check', { centre_id: centreId, date, session, data: dataWithRequired });
+      if (result === 'saved') {
+        setSaveStatus('saved');
+      } else if (result === 'queued') {
+        // Saved locally, will sync when Supabase comes back
+        setSaveStatus('saved'); // show saved - it IS saved locally and will sync
+        console.warn('[RatioCheck] Supabase unavailable - queued for retry');
+      } else {
+        setSaveStatus('error');
+      }
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => setSaveStatus('idle'), 3000);
+
+      // Sync staffMoves to float_schedules so ratio check is the source of truth
+      // for programming vs ratio cover — prevents float panel save from overriding
+      if (data.staffMoves && Object.keys(data.staffMoves).length > 0) {
+        fetch('/api/ratio-check-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ centre_id: centreId, date, staffMoves: data.staffMoves }),
+        }).catch(e => console.warn('[RatioCheck] Float schedule sync failed:', e));
+      }
+    })();
+
+    saveInFlight.current[key] = promise;
+    await promise;
   }, [centreId, date]);
 
   // -- Computed children counts (auto-populated) ------------------------------
@@ -1402,11 +1434,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     setMorningData(prev =>   { nextMorning   = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; return nextMorning; });
     setMiddayData(prev =>    { nextMidday    = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; return nextMidday; });
     setAfternoonData(prev => { nextAfternoon = { ...prev, familyGroupings: updater(prev.familyGroupings ?? []) }; return nextAfternoon; });
-    // Schedule saves after state updates are queued
+    // Schedule saves after state updates are queued. Use refs to read the latest
+    // state so we don't overwrite time overrides / staff moves that changed in
+    // the brief window between the FG state update and this save.
     setTimeout(() => {
-      if (nextMorning)   save('morning',   nextMorning);
-      if (nextMidday)    save('midday',    nextMidday);
-      if (nextAfternoon) save('afternoon', nextAfternoon);
+      if (nextMorning)   save('morning',   morningRef.current);
+      if (nextMidday)    save('midday',    middayRef.current);
+      if (nextAfternoon) save('afternoon', afternoonRef.current);
     }, 0);
   }
 
@@ -1797,15 +1831,22 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // overwriting saved data with empty state.
   const hasUserEdited = useRef(false);
 
-  function scheduleAutoSave(data: RatioCheckSession) {
+  function scheduleAutoSave(_data: RatioCheckSession) {
     hasUserEdited.current = true; // mark that user has made at least one edit
-    pendingSave.current = { session: activeSession, data };
+    pendingSave.current = { session: activeSession, data: _data };
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
-      if (pendingSave.current && hasUserEdited.current) {
-        save(pendingSave.current.session, pendingSave.current.data);
-        pendingSave.current = null;
-      }
+      if (!hasUserEdited.current) return;
+      // Read the latest state at timeout time rather than the data captured
+      // when the change was made — prevents a stale auto-save from clobbering
+      // a more recent direct save or time override.
+      const latest = activeSession === 'morning'
+        ? morningRef.current
+        : activeSession === 'midday'
+          ? middayRef.current
+          : afternoonRef.current;
+      save(activeSession, latest);
+      pendingSave.current = null;
     }, 1500);
   }
 
