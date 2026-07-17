@@ -72,12 +72,12 @@ export default async function handler(req, res) {
     }
 
     // Upsert — must specify on_conflict columns so PostgREST resolves the UNIQUE constraint
-    const url = `${SUPABASE_URL}/rest/v1/ratio_check_data?on_conflict=centre_id,date,session`;
+    const url = `${SUPABASE_URL}/rest/v1/ratio_check_data?on_conflict=centre_id,date,session&select=updated_at`;
     const r = await fetch(url, {
       method: 'POST',
       headers: {
         ...HEADERS,
-        Prefer: 'resolution=merge-duplicates,return=minimal',
+        Prefer: 'resolution=merge-duplicates,return=representation',
       },
       body: JSON.stringify({
         centre_id,
@@ -92,7 +92,8 @@ export default async function handler(req, res) {
       const err = await r.text();
       return res.status(r.status).json({ error: err });
     }
-    return res.status(200).json({ ok: true });
+    const saved = await r.json();
+    return res.status(200).json({ ok: true, updated_at: saved?.[0]?.updated_at });
   }
 
   return res.status(405).json({ error: 'Method not allowed' });

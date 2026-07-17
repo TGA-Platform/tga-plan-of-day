@@ -58,6 +58,7 @@ interface RatioCheckSession {
     comment?: string;     // free-text note
   }>; // "${empId}" ? custom times
   roomVisitors: Record<string, RoomVisitor[]>; // "slot:roomId" ? visitor entries
+  updatedAt?: string;   // ISO timestamp from Supabase — used for cross-device sync
 }
 
 export interface LunchAlert {
@@ -547,6 +548,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const setSessionData = activeSession === 'morning' ? setMorningData : activeSession === 'midday' ? setMiddayData : setAfternoonData;
   const slots = activeSession === 'morning' ? MORNING_SLOTS : activeSession === 'midday' ? MIDDAY_SLOTS : AFTERNOON_SLOTS;
 
+  function setSessionUpdatedAt(session: 'morning' | 'midday' | 'afternoon', updatedAt: string) {
+    const patch = (prev: RatioCheckSession) => ({ ...prev, updatedAt });
+    if (session === 'morning') setMorningData(patch);
+    else if (session === 'midday') setMiddayData(patch);
+    else setAfternoonData(patch);
+  }
+
   // -- Load saved data --------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
@@ -593,6 +601,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             staffNotes: row.data.staffNotes ?? {},
             staffTimeOverrides: row.data.staffTimeOverrides ?? {},
             roomVisitors: (row.data as any).roomVisitors ?? {},
+            updatedAt: (row as any).updated_at,
           };
           // Migrate legacy FG staffIds (whole-grouping) to per-slot staffIdsBySlot
           if (d.familyGroupings) {
@@ -684,6 +693,69 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return () => { cancelled = true; };
   }, [centreId, date]);
 
+  // -- Cross-device sync: poll Supabase for newer ratio-check data ----------
+  // Directors edit on laptops; RPs/management view on iPads. Without polling,
+  // iPads only see changes made on other devices after a manual refresh.
+  const [remoteUpdateNotice, setRemoteUpdateNotice] = useState<'none' | 'applied' | 'pending'>('none');
+  useEffect(() => {
+    if (!centreId || !date) return;
+    let cancelled = false;
+    const applyIfNewer = (row: any, current: RatioCheckSession, setter: (d: RatioCheckSession) => void) => {
+      const serverTs = row?.updated_at;
+      if (!serverTs) return;
+      const localTs = current?.updatedAt;
+      if (localTs && new Date(serverTs).getTime() <= new Date(localTs).getTime()) return;
+      // If we have unsaved local changes, don't overwrite — show pending notice instead.
+      if (pendingSave.current || Object.keys(saveInFlight.current).length > 0) {
+        setRemoteUpdateNotice('pending');
+        return;
+      }
+      const legacyFG: FamilyGroupingConfig[] = (row.data as { familyGroupingSlots?: string[]; familyGroupingRooms?: string[] }).familyGroupingSlots?.length ?? 0 > 0 ? [{
+        id: 'legacy', label: 'FG 1',
+        roomIds: (row.data as { familyGroupingRooms?: string[] }).familyGroupingRooms ?? [],
+        slots: (row.data as { familyGroupingSlots?: string[] }).familyGroupingSlots ?? [],
+        color: '#7c3aed', staffIdsBySlot: {},
+      }] : [];
+      const d: RatioCheckSession = {
+        ...EMPTY_SESSION, ...row.data,
+        familyGroupings: row.data.familyGroupings ?? legacyFG,
+        staffMoves: row.data.staffMoves ?? {},
+        staffNotes: row.data.staffNotes ?? {},
+        staffTimeOverrides: row.data.staffTimeOverrides ?? {},
+        roomVisitors: (row.data as any).roomVisitors ?? {},
+        updatedAt: serverTs,
+      };
+      if (d.familyGroupings) {
+        d.familyGroupings = d.familyGroupings.map((fg: FamilyGroupingConfig) => {
+          if ((fg.staffIds?.length ?? 0) > 0 && !fg.staffIdsBySlot) {
+            const staffIdsBySlot: Record<string, number[]> = {};
+            for (const slot of fg.slots) staffIdsBySlot[slot] = [...fg.staffIds!];
+            return { ...fg, staffIdsBySlot, staffIds: undefined };
+          }
+          return fg;
+        });
+      }
+      setter(d);
+      setRemoteUpdateNotice('applied');
+      setTimeout(() => setRemoteUpdateNotice(prev => prev === 'applied' ? 'none' : prev), 2000);
+    };
+    async function poll() {
+      try {
+        const r = await fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centreId)}&date=${date}`);
+        if (!r.ok || cancelled) return;
+        const rows: any[] = await r.json();
+        if (cancelled) return;
+        rows.forEach(row => {
+          if (row.session === 'morning')   applyIfNewer(row, morningRef.current,   setMorningData);
+          if (row.session === 'midday')    applyIfNewer(row, middayRef.current,    setMiddayData);
+          if (row.session === 'afternoon') applyIfNewer(row, afternoonRef.current, setAfternoonData);
+        });
+      } catch { /* offline / transient */ }
+    }
+    const interval = setInterval(poll, 30_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [centreId, date]);
+
   // -- Periodic live attendance refresh (every 2 minutes) --------------------
   // Keeps child counts current as children sign in throughout the day.
   // This is especially important when Family Grouping is set up in advance �
@@ -748,11 +820,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       const dataWithRequired = { ...data, requiredByRoom };
 
       const result = await enqueueSave('/api/ratio-check', { centre_id: centreId, date, session, data: dataWithRequired });
+      const now = new Date().toISOString();
       if (result === 'saved') {
         setSaveStatus('saved');
+        setSessionUpdatedAt(session, now);
       } else if (result === 'queued') {
         // Saved locally, will sync when Supabase comes back
         setSaveStatus('saved'); // show saved - it IS saved locally and will sync
+        setSessionUpdatedAt(session, now); // prevent cross-device poll from overwriting queued data
         console.warn('[RatioCheck] Supabase unavailable - queued for retry');
       } else {
         setSaveStatus('error');
@@ -2003,6 +2078,34 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           </button>
         </div>
       </div>
+
+      {/* -- Cross-device sync notice -- */}
+      {remoteUpdateNotice !== 'none' && (
+        <div className="no-print" style={{
+          background: remoteUpdateNotice === 'pending' ? '#fff7ed' : '#f0fdf4',
+          border: `1px solid ${remoteUpdateNotice === 'pending' ? '#fdba74' : '#86efac'}`,
+          borderRadius: '8px',
+          padding: '8px 12px',
+          marginBottom: '10px',
+          fontSize: '12px',
+          color: remoteUpdateNotice === 'pending' ? '#9a3412' : '#166534',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+        }}>
+          {remoteUpdateNotice === 'pending' ? (
+            <>
+              <span>🔄</span>
+              <span>Newer data exists from another device. Save or clear your current changes to refresh.</span>
+            </>
+          ) : (
+            <>
+              <span>✅</span>
+              <span>Updated with latest changes from another device.</span>
+            </>
+          )}
+        </div>
+      )}
 
       {/* -- Family Groupings Management Panel -- */}
       {fgPanelOpen && (
