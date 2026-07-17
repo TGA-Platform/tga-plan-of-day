@@ -13,7 +13,7 @@ import RosterTabs from '../components/RosterTabs';
 import { isStagingOrPreview } from '../lib/env';
 import { CENTRES } from '../config';
 import { getUser, getAllowedCentres } from '../auth';
-import { fetchRosters } from '../deputy';
+import { fetchRosters, fetchEmployeeNames } from '../deputy';
 import type { Room, RosterShift, RosterWeek, RosterTemplate, RosterTemplateShift } from '../types';
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
@@ -545,26 +545,6 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
       staffIdToName[String(s.id)] = s.name || 'Unknown';
     }
 
-    // Fetch Deputy rosters for the reference week so we can name staff even if
-    // they aren't linked in the staff table (casuals, recent starters, etc.)
-    const deputyIdToName: Record<string, string> = {};
-    for (const day of refDays) {
-      const date = format(day, 'yyyy-MM-dd');
-      try {
-        const rr = await fetch('/api/deputy-rosters', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ date, unitIds: centre.rooms.map(r => r.deputyUnitId).filter(Boolean) }),
-        });
-        if (rr.ok) {
-          const rosters: any[] = await rr.json();
-          for (const r of rosters) {
-            if (r.employeeId && r.name) deputyIdToName[String(r.employeeId)] = r.name;
-          }
-        }
-      } catch { /* ignore */ }
-    }
-
     for (const day of refDays) {
       const date = format(day, 'yyyy-MM-dd');
       try {
@@ -588,6 +568,10 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
           if (data.staffTimeOverrides) Object.assign(mergedOverrides, data.staffTimeOverrides);
           if (data.staffMoves) Object.assign(mergedMoves, data.staffMoves);
         }
+
+        // Look up Deputy employee names so unlinked IDs still import with a real name
+        const deputyIds = Object.keys(mergedOverrides).map(id => Number(id)).filter(id => !isNaN(id));
+        const deputyIdToName = await fetchEmployeeNames(deputyIds);
 
         // Count room appearances per deputy ID across all sessions for primary room determination
         const deputyRoomCounts: Record<string, Record<string, number>> = {};
@@ -619,13 +603,11 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
 
         for (const [deputyId, ov] of Object.entries(mergedOverrides)) {
           const matchedStaffId = deputyToStaffId[deputyId];
+          const fallbackName = deputyIdToName[Number(deputyId)] || `Staff #${deputyId}`;
           const staffName = matchedStaffId
-            ? (staffIdToName[matchedStaffId] || staffList.find(s => s.id === matchedStaffId)?.name || 'Unknown')
-            : (deputyIdToName[deputyId] || 'Unknown');
+            ? (staffIdToName[matchedStaffId] || staffList.find(s => s.id === matchedStaffId)?.name || fallbackName)
+            : fallbackName;
           const staffId = matchedStaffId || `deputy_${deputyId}`;
-          if (!matchedStaffId && !deputyIdToName[deputyId]) {
-            warnings.push(`${date}: no name found for Deputy ID ${deputyId}`);
-          }
 
           // Round start/end to nearest 15 minutes
           const rawStart = ov.start || '08:00';
@@ -761,25 +743,6 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
       staffIdToName[String(s.id)] = s.name || 'Unknown';
     }
 
-    // Fetch Deputy rosters for the reference week so unlinked Deputy IDs still get a name
-    const deputyIdToName: Record<string, string> = {};
-    for (const day of refDays) {
-      const date = format(day, 'yyyy-MM-dd');
-      try {
-        const rr = await fetch('/api/deputy-rosters', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ date, unitIds: centre.rooms.map(r => r.deputyUnitId).filter(Boolean) }),
-        });
-        if (rr.ok) {
-          const rosters: any[] = await rr.json();
-          for (const r of rosters) {
-            if (r.employeeId && r.name) deputyIdToName[String(r.employeeId)] = r.name;
-          }
-        }
-      } catch { /* ignore */ }
-    }
-
     for (const day of refDays) {
       const date = format(day, 'yyyy-MM-dd');
       try {
@@ -803,6 +766,10 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
           if (data.staffMoves) Object.assign(mergedMoves, data.staffMoves);
         }
 
+        // Look up Deputy employee names so unlinked IDs still import with a real name
+        const deputyIds = Object.keys(mergedOverrides).map(id => Number(id)).filter(id => !isNaN(id));
+        const deputyIdToName = await fetchEmployeeNames(deputyIds);
+
         // Count room appearances + activities per deputy ID
         const deputyRoomCounts: Record<string, Record<string, number>> = {};
         const deputyActivityCounts: Record<string, Record<string, number>> = {};
@@ -824,9 +791,10 @@ export default function RosterBuilderPage({ centreId: propCentreId, embedded }: 
         const dayOfWeek = getISODay(day);
         for (const [deputyId, ov] of Object.entries(mergedOverrides)) {
           const matchedStaffId = deputyToStaffId[deputyId];
+          const fallbackName = deputyIdToName[Number(deputyId)] || `Staff #${deputyId}`;
           const staffName = matchedStaffId
-            ? (staffIdToName[matchedStaffId] || currentStaffList.find(s => s.id === matchedStaffId)?.name || 'Unknown')
-            : (deputyIdToName[deputyId] || 'Unknown');
+            ? (staffIdToName[matchedStaffId] || currentStaffList.find(s => s.id === matchedStaffId)?.name || fallbackName)
+            : fallbackName;
           const staffId = matchedStaffId || `deputy_${deputyId}`;
 
           // Round times to nearest 15 minutes

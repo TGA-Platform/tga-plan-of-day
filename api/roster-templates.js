@@ -18,7 +18,7 @@
  */
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SERVICE_KEY  = proces…KEY;
+const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const H = {
   apikey:        SERVICE_KEY,
@@ -113,10 +113,15 @@ export default async function handler(req, res) {
           roster_week_id: weekId,
           centre_id:      body.centreId,
           staff_id:       s.staff_id,
+          staff_name:     s.staff_name,
           date:           dayToDate[s.day_of_week],
           start_time:     s.start_time,
           end_time:       s.end_time,
-          room_name:      s.assignment,
+          room_id:        s.room_id || s.assignment || null,
+          room_name:      s.room_name || s.assignment || null,
+          lunch_start:    s.lunch_start || null,
+          lunch_duration: s.lunch_duration || 30,
+          notes:          s.notes || null,
           is_casual:      false,
         }));
 
@@ -143,12 +148,18 @@ export default async function handler(req, res) {
       if (shifts.length === 0) return res.status(200).json({ ok: true });
 
       const rows = shifts.map(s => ({
-        template_id:  id,
-        staff_id:     s.staff_id,
-        day_of_week:  s.day_of_week,
-        start_time:   s.start_time || null,
-        end_time:     s.end_time   || null,
-        assignment:   s.assignment || null,
+        template_id:    id,
+        centre_id:      body.centre_id || body.centreId || '',
+        staff_id:       s.staff_id,
+        staff_name:     s.staff_name || '',
+        day_of_week:    s.day_of_week,
+        start_time:     s.start_time || null,
+        end_time:       s.end_time   || null,
+        room_id:        s.room_id || s.assignment || null,
+        room_name:      s.room_name || s.assignment || null,
+        lunch_start:    s.lunch_start || null,
+        lunch_duration: s.lunch_duration || 30,
+        notes:          s.notes || null,
       }));
 
       const { ok, data } = await sb('roster_template_shifts', {

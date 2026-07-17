@@ -45,8 +45,8 @@ function sb(path) {
 
 // Exact same ratio calculation as calcRequiredStaff in ratioEngine.ts
 function calcRequired(children) {
-  // Sort by age ascending, then cascade
-  const sorted = [...children].sort((a, b) => a - b);
+  // Sort by age ascending, then cascade. Exclude unknown ages (age === -1).
+  const sorted = [...children].filter(a => a >= 0).sort((a, b) => a - b);
   let staff = 0, i = 0;
   while (i < sorted.length) {
     const age = sorted[i];
@@ -63,12 +63,14 @@ function calcRequired(children) {
 }
 
 function parseAgeMonths(ageStr) {
-  if (!ageStr) return 48; // default to 4yr if unknown
+  // Return -1 for unknown age — matches ratioEngine.ts behaviour.
+  // Children with age -1 are excluded from ratio calculations entirely.
+  if (!ageStr) return -1;
   const m = String(ageStr).match(/(\d+)\s*yr.*?(\d+)?\s*m/i);
   if (m) return parseInt(m[1]) * 12 + (parseInt(m[2]) || 0);
   const yr = String(ageStr).match(/^(\d+)/);
   if (yr) return parseInt(yr[1]) * 12;
-  return 48;
+  return -1;
 }
 
 export default async function handler(req, res) {

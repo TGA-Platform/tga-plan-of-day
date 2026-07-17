@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useCallback, useMemo, useContext } from 'react';
-import { format } from 'date-fns';
+import { format, startOfWeek, parseISO } from 'date-fns';
 function safeFormat(d: Date | string | null | undefined, fmt: string): string {
   try {
     if (!d) return '--';
@@ -25,6 +25,9 @@ import SummaryTab from '../components/SummaryTab';
 import RosterBuilderPage from './RosterBuilderPage';
 import type { AttendanceChild, RoomRatioStatus, RosteredStaff, FloatStaff, ExternalCasualMeta } from '../types';
 import type { FloatSchedule } from '../components/FloatSchedulePanel';
+
+const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
+const ANON_KEY = 'eyJhbG…_jTY';
 
 // Context for Deputy actual / manual staff time overrides surfaced by RatioCheckPanel.
 // Module-level staff chips (room lists, floats, ISS, support) read this so the whole
@@ -844,6 +847,7 @@ export default function RatioDashboardPage() {
   type ForecastData = { booked: number | null; capacity: number | null; rooms: Record<string, RoomForecast>; lastWeek?: string | null };
   const [forecast, setForecast] = useState<ForecastData | null>(null);
   const [forecastHistoricalDate, setForecastHistoricalDate] = useState<string | null>(null);
+  const [publishedWeek, setPublishedWeek] = useState<{ id: string; week_start: string; status: string } | null>(null);
 
   // -- Drag-and-drop: manual staff reallocation (persisted per centre+date) --------
   const movesKey = `tga_pod_moves:${selectedCentreId}:${date}`;
@@ -1321,9 +1325,26 @@ export default function RatioDashboardPage() {
     }
   }, [date, effectiveDate, viewMode, selectedCentreId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  async function loadPublishedWeek() {
+    const monday = format(startOfWeek(parseISO(date), { weekStartsOn: 1 }), 'yyyy-MM-dd');
+    try {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/roster_weeks?centre_id=eq.${encodeURIComponent(selectedCentreId)}&week_start=eq.${monday}&status=eq.published&select=id,week_start,status&limit=1`,
+        { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } }
+      );
+      if (res.ok) {
+        const rows = await res.json();
+        setPublishedWeek(rows?.[0] || null);
+      }
+    } catch (e) {
+      console.error('[loadPublishedWeek]', e);
+    }
+  }
+
   // Initial load + refresh every 5 minutes
   useEffect(() => {
     load();
+    loadPublishedWeek();
     const interval = setInterval(load, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [load]);
@@ -1393,6 +1414,11 @@ export default function RatioDashboardPage() {
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
                 style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
                 {date > todayStr() ? '📅 Predicted from' : '📊 Expected mode from'} {forecastHistoricalDate ?? effectiveDate}
+              </span>
+            ) : publishedWeek ? (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
+                style={{ backgroundColor: '#dcfce7', color: '#166534' }}>
+                ✅ Roster published
               </span>
             ) : ownaRefreshedAt ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"

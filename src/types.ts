@@ -152,6 +152,35 @@ export interface FloatStaff extends RosteredStaff {
 
 // ── Roster Builder ───────────────────────────────────────────────────────────
 
+// ── Roster Templates ───────────────────────────────────────────────────────
+
+export interface RosterTemplate {
+  id: string;
+  centre_id: string;
+  name: string; // e.g. 'Week A', 'Week B', 'School Holidays'
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RosterTemplateShift {
+  id: string;
+  template_id: string;
+  centre_id: string;
+  staff_id: string;
+  staff_name: string;
+  day_of_week: number; // 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri
+  start_time: string; // HH:MM
+  end_time: string; // HH:MM
+  room_id?: string;
+  room_name?: string;
+  lunch_start?: string;
+  lunch_duration: number;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RosterWeek {
   id: string;
   centre_id: string;
