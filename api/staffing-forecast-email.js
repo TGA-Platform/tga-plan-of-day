@@ -101,14 +101,18 @@ function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet,
     const owna = (room.ownaRoomName ?? '').toLowerCase();
     const displayName = (room.name ?? '').toLowerCase();
     let expected = 0;
+    let required = 0;
     for (const [roomName, data] of Object.entries(fc.rooms || {})) {
       const rn = roomName.toLowerCase();
       if (rn.includes(owna) || owna.includes(rn) || rn.includes(displayName) || displayName.includes(rn)) {
         expected += (data.expected ?? 0);
+        required += (data.required ?? 0);
       }
     }
-    const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
-    const required = expected > 0 ? Math.ceil(expected / ratio) : 0;
+    if (required === 0 && expected > 0) {
+      const ratio = ratioForRoom(room.ownaRoomName ?? room.name);
+      required = Math.ceil(expected / ratio);
+    }
     const roomStaff = rosters.filter(r => r.OperationalUnit === room.deputyUnitId && r.Employee && r.Employee !== 0).length;
     return { room: room.name, expected, required, staffCount: roomStaff };
   });
