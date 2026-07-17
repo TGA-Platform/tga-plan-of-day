@@ -122,7 +122,7 @@ function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet,
   const totalFloorStaff = roomData.reduce((s, r) => s + r.staffCount, 0);
 
   const floatIds = new Set(centre.floatUnitIds || []);
-  const internalFloatCount = rosters.filter(r => floatIds.has(r.OperationalUnit)).length;
+  const internalFloatCount = rosters.filter(r => floatIds.has(r.OperationalUnit) && !r.isSplitShift).length;
   const floatCount = internalFloatCount + zCasualFloatCount;
 
   const nonRatioIds = new Set([...(centre.nonRatioUnitIds || []), ...(centre.leaveUnitIds || [])]);
@@ -137,13 +137,12 @@ function calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet,
   const totalSurplus = roomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
   const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
   const bufferRequired = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
-  const roomNetSurplus = Math.max(0, totalSurplus - totalRatioShortage);
-  // Match the Plan of Day Float Pool panel: surplus = (floats + AD) - total floaters needed.
-  // Room surplus is displayed separately but not included in the final surplus number.
+    const roomNetSurplus = Math.max(0, totalSurplus - totalRatioShortage);
+  // Match the Plan of Day Float Pool panel: effective floats = rostered floats + room surplus.
   const effectiveFloatCount = floatCount + roomNetSurplus;
   const totalFloatersNeeded = Math.max(0, netShortageAfterRealloc + bufferRequired);
   const casualsNeeded = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
-  const floatSurplus = casualsNeeded <= 0 ? (floatCount + adAvailable - totalFloatersNeeded) : 0;
+  const floatSurplus = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
 
   return {
     centreId: centre.id,
