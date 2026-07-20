@@ -43,21 +43,31 @@ function sb(path) {
   }).then(r => r.ok ? r.json() : []);
 }
 
-// Exact same ratio calculation as calcRequiredStaff in ratioEngine.ts
+// Mirror calcRequiredStaff from src/utils/ratioEngine.ts, including the
+// cascade of unused capacity from younger age brackets into older brackets.
 function calcRequired(children) {
-  // Sort by age ascending, then cascade. Exclude unknown ages (age === -1).
-  const sorted = [...children].filter(a => a >= 0).sort((a, b) => a - b);
-  let staff = 0, i = 0;
-  while (i < sorted.length) {
-    const age = sorted[i];
-    let ratio, groupEnd;
-    if (age < 24)       { ratio = 4;  groupEnd = 24; }
-    else if (age < 36)  { ratio = 5;  groupEnd = 36; }
-    else                { ratio = 10; groupEnd = Infinity; }
-    // Count how many in this group
-    let count = 0;
-    while (i < sorted.length && sorted[i] < groupEnd) { count++; i++; }
-    staff += Math.ceil(count / ratio);
+  // Exclude unknown ages (age === -1)
+  const ageMonths = [...children].filter(a => a >= 0);
+  const groups = [
+    { min: 0, max: 24, ratio: 4 },
+    { min: 24, max: 36, ratio: 5 },
+    { min: 36, max: Infinity, ratio: 10 },
+  ];
+
+  let staff = 0;
+  let carryover = 0;
+  for (const group of groups) {
+    const count = ageMonths.filter(a => a >= group.min && a < group.max).length;
+    if (count === 0) continue;
+
+    const coveredByCarryover = Math.min(count, carryover);
+    const stillNeeded = count - coveredByCarryover;
+    const newStaff = Math.ceil(stillNeeded / group.ratio);
+    staff += newStaff;
+
+    const unusedFromNew = newStaff * group.ratio - stillNeeded;
+    const unusedFromCarryover = carryover - coveredByCarryover;
+    carryover = unusedFromNew + unusedFromCarryover;
   }
   return staff;
 }
