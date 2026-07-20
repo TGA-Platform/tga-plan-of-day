@@ -334,6 +334,26 @@ function shiftCoverage(
   return { pct, overlapStart: oStart, overlapEnd: oEnd, full: pct >= 0.95 };
 }
 
+type StaffingAnalysisSnapshot = {
+  surplusVal: number;
+  casualsNeeded: number;
+  floatSurplus: number;
+  totalFloatersNeeded: number;
+  effectiveFloatCount: number;
+  roomNetSurplus: number;
+  adAvailable: number;
+  totalRatioShortage: number;
+  totalSurplus: number;
+  netShortageAfterRealloc: number;
+  bufferRequired: number;
+  floorStaff: number;
+  requiredStaff: number;
+  floatCount: number;
+  childrenCount: number;
+  shortageRooms: { name: string; shortage: number }[];
+  surplusRooms: { name: string; surplus: number }[];
+};
+
 function FloatPoolSection({
   floats,
   onLeave,
@@ -348,6 +368,7 @@ function FloatPoolSection({
   onFloatClick,
   savedFloatIds,
   adStaff = [],
+  allDayAnalysis,
 }: {
   floats: FloatStaff[];
   onLeave: RosteredStaff[];
@@ -362,6 +383,7 @@ function FloatPoolSection({
   onFloatClick?: (f: FloatStaff) => void;
   savedFloatIds?: Set<number>;
   adStaff?: RosteredStaff[];
+  allDayAnalysis?: StaffingAnalysisSnapshot | null;
 }) {
   // -- Step 1: Identify short and surplus rooms ---------------------------
   const shortageRooms = [...roomStatuses]
@@ -375,7 +397,6 @@ function FloatPoolSection({
   const totalSurplus       = surplusRooms.reduce((sum, r) => sum + Math.abs(r.shortage), 0);
 
   // -- Step 2: Reallocate surplus staff to cover shortages first -----------
-  const surplusCoveringShortage = Math.min(totalSurplus, totalRatioShortage);
   const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
 
   // Which rooms still need a floater after surplus reallocation
@@ -458,8 +479,43 @@ function FloatPoolSection({
   const casualsNeeded = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
   const casualsFull   = Math.floor(casualsNeeded);
   const casualsHalf   = casualsNeeded - casualsFull >= 0.5 ? 1 : 0;
+  const floatSurplus  = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
 
-  const coverageOk = casualsNeeded <= 0;
+  // Source-of-truth Staffing Analysis is always all-day. When a snapshot is
+  // provided, use it for the summary numbers even when the dashboard is in
+  // Live mode. Float assignments below still respect the current view.
+  const analysis = allDayAnalysis ?? {
+    floorStaff: totalFloorStaff,
+    totalRatioShortage,
+    totalSurplus,
+    netShortageAfterRealloc,
+    bufferRequired,
+    roomNetSurplus,
+    effectiveFloatCount,
+    totalFloatersNeeded,
+    casualsNeeded,
+    floatSurplus,
+    shortageRooms: shortageRooms.map(r => ({ name: r.room.name, shortage: r.shortage })),
+    surplusRooms: surplusRooms.map(r => ({ name: r.room.name, surplus: Math.abs(r.shortage) })),
+    adAvailable,
+  };
+  const analysisCoverageOk = analysis.casualsNeeded <= 0;
+
+  // Recompute reallocation suggestions from the source-of-truth analysis.
+  const analysisReallocations: Reallocation[] = [];
+  {
+    let surplusPool = analysis.surplusRooms.map(r => ({ name: r.name, available: r.surplus }));
+    for (const short of analysis.shortageRooms) {
+      let toFill = short.shortage;
+      for (const src of surplusPool) {
+        if (toFill <= 0 || src.available <= 0) continue;
+        const n = Math.min(toFill, src.available);
+        analysisReallocations.push({ from: src.name, to: short.name, count: n });
+        src.available -= n;
+        toFill -= n;
+      }
+    }
+  }
 
   return (
     <div
@@ -491,60 +547,60 @@ function FloatPoolSection({
         {/* -- Staffing needs summary -- */}
         <div
           className="rounded-xl p-3 space-y-1.5"
-          style={{ backgroundColor: coverageOk ? '#F5FAF3' : '#fef2f2' }}
+          style={{ backgroundColor: analysisCoverageOk ? '#F5FAF3' : '#fef2f2' }}
         >
           <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: '#2d5c18' }}>Staffing Analysis</div>
 
           <div className="flex justify-between text-xs">
             <span style={{ color: '#596570' }}>Floor staff (ratio rooms)</span>
-            <span className="font-medium" style={{ color: '#2d5c18' }}>{totalFloorStaff}</span>
+            <span className="font-medium" style={{ color: '#2d5c18' }}>{analysis.floorStaff}</span>
           </div>
           <div className="flex justify-between text-xs">
             <span style={{ color: '#596570' }}>Ratio shortages</span>
-            <span className="font-medium" style={{ color: totalRatioShortage > 0 ? '#dc2626' : '#A0D083' }}>
-              {totalRatioShortage > 0 ? `${totalRatioShortage} staff (${shortageRooms.length} room${shortageRooms.length !== 1 ? 's' : ''} short)` : 'None'}
+            <span className="font-medium" style={{ color: analysis.totalRatioShortage > 0 ? '#dc2626' : '#A0D083' }}>
+              {analysis.totalRatioShortage > 0 ? `${analysis.totalRatioShortage} staff (${analysis.shortageRooms.length} room${analysis.shortageRooms.length !== 1 ? 's' : ''} short)` : 'None'}
             </span>
           </div>
-          {totalSurplus > 0 && (
+          {analysis.totalSurplus > 0 && (
             <div className="flex justify-between text-xs">
               <span style={{ color: '#596570' }}>Surplus from other rooms</span>
               <span className="font-medium" style={{ color: '#16a34a' }}>
-                -{surplusCoveringShortage} staff ({surplusRooms.length} room{surplusRooms.length !== 1 ? 's' : ''} over)
+                -{Math.min(analysis.totalSurplus, analysis.totalRatioShortage)} staff ({analysis.surplusRooms.length} room{analysis.surplusRooms.length !== 1 ? 's' : ''} over)
               </span>
             </div>
           )}
-          {totalSurplus > 0 && (
+          {analysis.totalSurplus > 0 && (
             <div className="flex justify-between text-xs">
               <span style={{ color: '#596570' }}>Net ratio shortfall</span>
-              <span className="font-medium" style={{ color: netShortageAfterRealloc > 0 ? '#dc2626' : '#16a34a' }}>
-                {netShortageAfterRealloc > 0 ? `${netShortageAfterRealloc} floater${netShortageAfterRealloc !== 1 ? 's' : ''} needed` : 'Covered by reallocation ✅'}
+              <span className="font-medium" style={{ color: analysis.netShortageAfterRealloc > 0 ? '#dc2626' : '#16a34a' }}>
+                {analysis.netShortageAfterRealloc > 0 ? `${analysis.netShortageAfterRealloc} floater${analysis.netShortageAfterRealloc !== 1 ? 's' : ''} needed` : 'Covered by reallocation ✅'}
               </span>
             </div>
           )}
           <div className="flex justify-between text-xs">
             <span style={{ color: '#596570' }}>Floor buffer (1 per 6 staff)</span>
-            <span className="font-medium" style={{ color: '#2d5c18' }}>{formatFTE(bufferRequired)} FTE</span>
+            <span className="font-medium" style={{ color: '#2d5c18' }}>{formatFTE(analysis.bufferRequired)} FTE</span>
           </div>
 
-          <div className="border-t pt-1.5 mt-1" style={{ borderColor: coverageOk ? '#D0E8B8' : '#fca5a5' }}>
+          <div className="border-t pt-1.5 mt-1" style={{ borderColor: analysisCoverageOk ? '#D0E8B8' : '#fca5a5' }}>
             <div className="flex justify-between text-xs">
               <span className="font-semibold" style={{ color: '#2d5c18' }}>Total floaters needed</span>
-              <span className="font-bold" style={{ color: '#2d5c18' }}>{formatFTE(totalFloatersNeeded)} FTE</span>
+              <span className="font-bold" style={{ color: '#2d5c18' }}>{formatFTE(analysis.totalFloatersNeeded)} FTE</span>
             </div>
             <div className="flex justify-between text-xs mt-0.5">
-              <span style={{ color: '#596570' }}>Available (floats{adAvailable > 0 ? ` + ${adAvailable} AD` : ''})</span>
-              <span className="font-medium" style={{ color: '#2d5c18' }}>{effectiveFloatCount + adAvailable}{roomNetSurplus > 0 && <span style={{ color: '#7c3aed', fontSize: '11px' }}> (+{roomNetSurplus} rm)</span>}</span>
+              <span style={{ color: '#596570' }}>Available (floats{analysis.adAvailable > 0 ? ` + ${analysis.adAvailable} AD` : ''})</span>
+              <span className="font-medium" style={{ color: '#2d5c18' }}>{analysis.effectiveFloatCount + analysis.adAvailable}{analysis.roomNetSurplus > 0 && <span style={{ color: '#7c3aed', fontSize: '11px' }}> (+{analysis.roomNetSurplus} rm)</span>}</span>
             </div>
           </div>
 
           {/* Float surplus / casual recommendation */}
-          {coverageOk ? (
+          {analysisCoverageOk ? (
             <div className="pt-0.5 space-y-0.5">
               <div className="flex justify-between text-xs">
                 <span style={{ color: '#16a34a', fontWeight: 600 }}>✅ No casuals needed</span>
-                {effectiveFloatCount + adAvailable > totalFloatersNeeded && (
+                {analysis.effectiveFloatCount + analysis.adAvailable > analysis.totalFloatersNeeded && (
                   <span style={{ color: '#16a34a', fontWeight: 600 }}>
-                    +{formatFTE(effectiveFloatCount + adAvailable - totalFloatersNeeded)} FTE over
+                    +{formatFTE(analysis.effectiveFloatCount + analysis.adAvailable - analysis.totalFloatersNeeded)} FTE over
                   </span>
                 )}
               </div>
@@ -554,7 +610,7 @@ function FloatPoolSection({
               className="rounded-lg px-2 py-1.5 mt-1"
               style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}
             >
-              <div className="text-xs font-bold">⚠️ Recommend {formatFTE(casualsNeeded)} casual FTE today</div>
+              <div className="text-xs font-bold">⚠️ Recommend {formatFTE(analysis.casualsNeeded)} casual FTE today</div>
               {(casualsFull > 0 || casualsHalf > 0) && (
                 <div className="text-xs mt-0.5" style={{ color: '#b91c1c' }}>
                   {[casualsFull > 0 && `${casualsFull} full shift${casualsFull !== 1 ? 's' : ''}`, casualsHalf > 0 && '1 half shift']
@@ -566,11 +622,11 @@ function FloatPoolSection({
         </div>
 
         {/* -- Surplus reallocation suggestions -- */}
-        {reallocations.length > 0 && (
+        {analysisReallocations.length > 0 && (
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: '#16a34a' }}>Surplus Reallocation</div>
             <div className="space-y-1">
-              {reallocations.map((r, i) => (
+              {analysisReallocations.map((r, i) => (
                 <div key={i} className="flex items-center justify-between text-xs py-0.5">
                   <span style={{ color: '#2d5c18' }}>{r.from}</span>
                   <span className="flex items-center gap-1" style={{ color: '#596570' }}>
@@ -1087,11 +1143,11 @@ export default function RatioDashboardPage() {
     return tagCasual(arr);
   }, [supportStaff, staffMoves, hasOverrides, tagCasual]);
 
-  // Persist the all-day Staffing Analysis figure so forecast emails and the
-  // morning briefing read the same surplus/deficit number shown on the Plan of
-  // Day Float Pool panel. Computed from full-day room statuses (not live view).
-  React.useEffect(() => {
-    if (!centre?.id || !date || !Array.isArray(roomStatuses)) return;
+  // All-day Staffing Analysis figure. This is the source of truth shown in the
+  // Float Pool panel and persisted for the forecast email + morning briefing.
+  // It is intentionally independent of the Live/Plan toggle.
+  const allDayStaffingAnalysis = useMemo(() => {
+    if (!centre?.id || !date || !Array.isArray(roomStatuses)) return null;
 
     const totalFloorStaff = roomStatuses.reduce((sum, r) => sum + r.staffCount, 0);
     const requiredStaff = roomStatuses.reduce((sum, r) => sum + r.requiredStaff, 0);
@@ -1115,7 +1171,7 @@ export default function RatioDashboardPage() {
     const casualsNeeded = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
     const floatSurplus = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
 
-    const payload = {
+    return {
       centreId: centre.id,
       campus: centre.ownaName ?? centre.name,
       date,
@@ -1134,11 +1190,24 @@ export default function RatioDashboardPage() {
       requiredStaff,
       floatCount,
       childrenCount: centreChildCount,
+      shortageRooms: shortageRooms.map(r => ({ name: r.room.name, shortage: r.shortage })),
+      surplusRooms: surplusRooms.map(r => ({ name: r.room.name, surplus: Math.abs(r.shortage) })),
+    };
+  }, [centre?.id, centre?.ownaName, centre?.name, date, roomStatuses, effectiveFloats, adStaff, children]);
+
+  // Persist the all-day Staffing Analysis figure.
+  React.useEffect(() => {
+    if (!allDayStaffingAnalysis) return;
+    const payload = {
+      ...allDayStaffingAnalysis,
       data: {
-        shortageRooms: shortageRooms.map(r => ({ name: r.room.name, shortage: r.shortage })),
-        surplusRooms: surplusRooms.map(r => ({ name: r.room.name, surplus: Math.abs(r.shortage) })),
+        shortageRooms: allDayStaffingAnalysis.shortageRooms.map(r => ({ name: r.name, shortage: r.shortage })),
+        surplusRooms: allDayStaffingAnalysis.surplusRooms.map(r => ({ name: r.name, surplus: r.surplus })),
       },
     };
+    // Strip non-serializable fields before sending.
+    delete (payload as any).shortageRooms;
+    delete (payload as any).surplusRooms;
 
     const t = setTimeout(() => {
       fetch('/api/staffing-analysis', {
@@ -1148,10 +1217,7 @@ export default function RatioDashboardPage() {
       }).catch(err => console.warn('[RatioDashboard] staffing-analysis save failed:', err));
     }, 1500);
     return () => clearTimeout(t);
-  }, [
-    centre?.id, centre?.ownaName, centre?.name, date, roomStatuses, effectiveFloats,
-    adStaff, children,
-  ]);
+  }, [allDayStaffingAnalysis]);
 
   const load = useCallback(async (forceRefresh = false) => {
     setLoading(true);
@@ -1905,6 +1971,7 @@ export default function RatioDashboardPage() {
               onFloatClick={f => setScheduledFloat(f)}
               savedFloatIds={savedFloatIds}
               adStaff={adStaff}
+              allDayAnalysis={allDayStaffingAnalysis}
             />
         )}
 
