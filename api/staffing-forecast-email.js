@@ -269,7 +269,40 @@ export default async function handler(req, res) {
       zCasualRowsByCentre[row.centre].push(row);
     }
 
-    const summary = CENTRES.map(centre => calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet, zCasualRowsByCentre));
+    // Prefer the Plan of Day Staffing Analysis figure when it has already been
+    // computed/saved by a director viewing the Ratio Dashboard. Fall back to the
+    // forecast-only calculation only when no saved analysis exists yet.
+    const staffingAnalysisByCentre = {};
+    await Promise.all(
+      CENTRES.map(async centre => {
+        try {
+          const saRes = await fetch(
+            `${proto}://${host}/api/staffing-analysis?centre=${encodeURIComponent(centre.id)}&date=${encodeURIComponent(date)}`
+          );
+          if (saRes.ok) {
+            const sa = await saRes.json();
+            if (sa?.analysis) staffingAnalysisByCentre[centre.id] = sa.analysis;
+          }
+        } catch (e) {
+          console.warn(`[staffing-forecast-email] could not fetch staffing-analysis for ${centre.id}:`, e.message);
+        }
+      })
+    );
+
+    const summary = CENTRES.map(centre => {
+      const base = calcCentreForecast(centre, date, forecasts, rosters, internalCasualSet, zCasualRowsByCentre);
+      const sa = staffingAnalysisByCentre[centre.id];
+      if (!base || !sa) return base;
+      return {
+        ...base,
+        surplusVal: Number(sa.surplus_val ?? base.surplusVal),
+        casualsNeeded: Number(sa.casuals_needed ?? base.casualsNeeded),
+        floatSurplus: Number(sa.float_surplus ?? base.floatSurplus),
+        totalFloatersNeeded: Number(sa.total_floaters_needed ?? base.totalFloatersNeeded),
+        effectiveFloatCount: Number(sa.effective_float_count ?? base.effectiveFloatCount),
+        roomNetSurplus: Number(sa.room_net_surplus ?? base.roomNetSurplus),
+      };
+    });
     const html = buildHtml(summary);
 
     return res.status(200).json({

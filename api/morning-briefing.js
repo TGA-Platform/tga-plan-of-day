@@ -149,6 +149,17 @@ export default async function handler(req, res) {
     }
   }
 
+  // Fetch saved Plan of Day Staffing Analysis (all-day) for all centres.
+  const staffingAnalysisByCentre = {};
+  try {
+    const saRows = await sb(`staffing_analysis?date=eq.${date}&select=centre_id,surplus_val,casuals_needed,float_surplus,total_floaters_needed,effective_float_count,room_net_surplus,ad_available,total_ratio_shortage,total_surplus,net_shortage_after_realloc,buffer_required,floor_staff,required_staff,float_count,children_count`);
+    for (const row of saRows) {
+      staffingAnalysisByCentre[row.centre_id] = row;
+    }
+  } catch (e) {
+    console.warn('[morning-briefing] staffing_analysis fetch failed:', e.message);
+  }
+
   const results = [];
 
   for (const centre of centres) {
@@ -241,6 +252,18 @@ export default async function handler(req, res) {
 
     const allDayPool   = calcFloatPool(makeRoomData(campusAttendance), allDayKids.length);
     const presentPool  = calcFloatPool(makeRoomData(presentAttendance), presentKids.length);
+
+    // Override all-day values with the saved Plan of Day Staffing Analysis
+    // when available. The dashboard is the source of truth for this figure.
+    const sa = staffingAnalysisByCentre[centre.id];
+    if (sa) {
+      allDayPool.casualsNeeded = Number(sa.casuals_needed ?? allDayPool.casualsNeeded);
+      allDayPool.floatSurplus = Number(sa.float_surplus ?? allDayPool.floatSurplus);
+      allDayPool.surplusVal = Number(sa.surplus_val ?? allDayPool.surplusVal);
+      allDayPool.totalFloatersNeeded = Number(sa.total_floaters_needed ?? allDayPool.totalFloatersNeeded);
+      allDayPool.effectiveFloatCount = Number(sa.effective_float_count ?? allDayPool.effectiveFloatCount);
+      allDayPool.roomNetSurplus = Number(sa.room_net_surplus ?? allDayPool.roomNetSurplus);
+    }
 
     // Default the report to currently-present, as requested.
     const totalRequired       = presentPool.totalRequired;

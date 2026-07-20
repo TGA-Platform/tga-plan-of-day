@@ -1087,6 +1087,72 @@ export default function RatioDashboardPage() {
     return tagCasual(arr);
   }, [supportStaff, staffMoves, hasOverrides, tagCasual]);
 
+  // Persist the all-day Staffing Analysis figure so forecast emails and the
+  // morning briefing read the same surplus/deficit number shown on the Plan of
+  // Day Float Pool panel. Computed from full-day room statuses (not live view).
+  React.useEffect(() => {
+    if (!centre?.id || !date || !Array.isArray(roomStatuses)) return;
+
+    const totalFloorStaff = roomStatuses.reduce((sum, r) => sum + r.staffCount, 0);
+    const requiredStaff = roomStatuses.reduce((sum, r) => sum + r.requiredStaff, 0);
+
+    const shortageRooms = [...roomStatuses].filter(r => r.shortage > 0).sort((a, b) => b.shortage - a.shortage);
+    const surplusRooms = [...roomStatuses].filter(r => r.shortage < 0).sort((a, b) => a.shortage - b.shortage);
+
+    const totalRatioShortage = shortageRooms.reduce((sum, r) => sum + r.shortage, 0);
+    const totalSurplus = surplusRooms.reduce((sum, r) => sum + Math.abs(r.shortage), 0);
+    const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
+
+    const bufferRequired = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
+    const roomNetSurplus = Math.max(0, totalSurplus - totalRatioShortage);
+    const floatCount = effectiveFloats.length;
+    const effectiveFloatCount = floatCount + roomNetSurplus;
+
+    const centreChildCount = children.filter(c => c.sign_in).length;
+    const adAvailable = (centreChildCount > 0 && centreChildCount < 100) ? (adStaff ?? []).length : 0;
+
+    const totalFloatersNeeded = Math.max(0, netShortageAfterRealloc + bufferRequired);
+    const casualsNeeded = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
+    const floatSurplus = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
+
+    const payload = {
+      centreId: centre.id,
+      campus: centre.ownaName ?? centre.name,
+      date,
+      surplusVal: casualsNeeded > 0 ? -casualsNeeded : floatSurplus,
+      casualsNeeded,
+      floatSurplus,
+      totalFloatersNeeded,
+      effectiveFloatCount,
+      roomNetSurplus,
+      adAvailable,
+      totalRatioShortage,
+      totalSurplus,
+      netShortageAfterRealloc,
+      bufferRequired,
+      floorStaff: totalFloorStaff,
+      requiredStaff,
+      floatCount,
+      childrenCount: centreChildCount,
+      data: {
+        shortageRooms: shortageRooms.map(r => ({ name: r.room.name, shortage: r.shortage })),
+        surplusRooms: surplusRooms.map(r => ({ name: r.room.name, surplus: Math.abs(r.shortage) })),
+      },
+    };
+
+    const t = setTimeout(() => {
+      fetch('/api/staffing-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(err => console.warn('[RatioDashboard] staffing-analysis save failed:', err));
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [
+    centre?.id, centre?.ownaName, centre?.name, date, roomStatuses, effectiveFloats,
+    adStaff, children,
+  ]);
+
   const load = useCallback(async (forceRefresh = false) => {
     setLoading(true);
     setError(null);
