@@ -53,17 +53,26 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const centreId = req.query.centre;
       const date = req.query.date;
-      if (!centreId || !date) {
-        return res.status(400).json({ error: 'Missing centre or date' });
+      if (!date) {
+        return res.status(400).json({ error: 'Missing date' });
       }
 
-      const rows = await sb(
-        `staffing_analysis?centre_id=eq.${encodeURIComponent(centreId)}&date=eq.${encodeURIComponent(date)}&limit=1`
-      );
+      let path;
+      if (centreId) {
+        path = `staffing_analysis?centre_id=eq.${encodeURIComponent(centreId)}&date=eq.${encodeURIComponent(date)}&limit=1`;
+      } else {
+        path = `staffing_analysis?date=eq.${encodeURIComponent(date)}`;
+      }
+
+      const rows = await sb(path);
       if (!Array.isArray(rows) || rows.length === 0) {
         return res.status(404).json({ error: 'Not computed yet' });
       }
-      return res.status(200).json({ ok: true, analysis: rows[0] });
+
+      if (centreId) {
+        return res.status(200).json({ ok: true, analysis: rows[0] });
+      }
+      return res.status(200).json({ ok: true, analyses: rows });
     }
 
     if (req.method === 'POST') {

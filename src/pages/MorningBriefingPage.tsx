@@ -142,7 +142,7 @@ export default function MorningBriefingPage() {
     setLoading(true);
     try {
       // Fetch today + last week attendance + last-snapshot time + all forecasts in parallel
-      const [todayAtt, lastWeekAtt, unitsRes, lastSnapshotRes, allForecasts] = await Promise.all([
+      const [todayAtt, lastWeekAtt, unitsRes, lastSnapshotRes, allForecasts, staffingAnalysisRows] = await Promise.all([
         withCache(`briefing-today:${date}`, () =>
           fetch(`/api/attendance?date=${date}`).then(r => r.json()), 3 * 60 * 1000),
         withCache(`briefing-lw:${lastWeek}`, () =>
@@ -157,11 +157,23 @@ export default function MorningBriefingPage() {
           fetch(`/api/room-forecast?campus=all&date=${date}`)
             .then(r => r.json())
             .catch(() => null), 5 * 60 * 1000),
+        // Fetch saved Plan of Day Staffing Analysis so the all-day surplus/deficit
+        // matches the Ratio Dashboard Float Pool panel exactly.
+        fetch(`/api/staffing-analysis?date=${date}`)
+          .then(r => r.ok ? r.json() : { analyses: [] })
+          .then(j => j?.analyses ?? [])
+          .catch(() => [] as any[]),
       ]);
 
       // Current Sydney time as HH:MM for predicted_sign_out comparison
       const nowSyd = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
       const nowHHMM = `${String(nowSyd.getHours()).padStart(2,'0')}:${String(nowSyd.getMinutes()).padStart(2,'0')}`;
+
+      // Index saved staffing analysis by centre id for fast lookup.
+      const staffingAnalysisByCentre: Record<string, any> = {};
+      for (const row of (staffingAnalysisRows || []) as { centre_id?: string; surplus_val?: number; casuals_needed?: number; float_surplus?: number; total_floaters_needed?: number; effective_float_count?: number; room_net_surplus?: number }[]) {
+        if (row?.centre_id) staffingAnalysisByCentre[row.centre_id] = row;
+      }
 
       // Index attendance: all-day AND currently-present
       const todayByCampus: Record<string,{room:string;age:string|null}[]> = {};
@@ -356,6 +368,18 @@ export default function MorningBriefingPage() {
 
         const allDayPool  = calcFloatPool(roomDataAllDay, kids.length);
         const presentPool = calcFloatPool(roomDataPresent, presentKids.length);
+
+        // Override all-day values with the saved Plan of Day Staffing Analysis
+        // when available. The dashboard is the source of truth for this figure.
+        const sa = staffingAnalysisByCentre[centre.id];
+        if (sa) {
+          allDayPool.casualsNeeded = Number(sa.casuals_needed ?? allDayPool.casualsNeeded);
+          allDayPool.floatSurplus = Number(sa.float_surplus ?? allDayPool.floatSurplus);
+          allDayPool.totalFloatersNeeded = Number(sa.total_floaters_needed ?? allDayPool.totalFloatersNeeded);
+          allDayPool.effectiveFloatCount = Number(sa.effective_float_count ?? allDayPool.effectiveFloatCount);
+          allDayPool.roomNetSurplus = Number(sa.room_net_surplus ?? allDayPool.roomNetSurplus);
+        }
+
         const poolToUse   = viewMode === 'present' ? presentPool : allDayPool;
 
         if (centre.id === 'spring-farm') {
