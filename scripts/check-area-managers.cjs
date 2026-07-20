@@ -22,7 +22,7 @@ const EXPECTED = {
   'South West':   { am: 'Lilian Slaibi', email: 'lilian@tga.edu.au' },
   'South Coast':  { am: 'Rebecca Sapienza', email: 'rebeccasapienza@tga.edu.au' },
   'South Sydney': { am: 'Olivia Al Askar', email: 'olivia@tga.edu.au' },
-  'North Coast':  { am: 'Kandas Brown', email: 'kandas@tga.edu.au' },
+  'North Coast':  { am: 'Carley Matthews', email: 'carleye@tga.edu.au' },
 };
 
 const CENTRE_TO_REGION = {
