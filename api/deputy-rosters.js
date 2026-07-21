@@ -119,10 +119,15 @@ export default async function handler(req, res) {
     groupedByEmp.set(entry.Employee, group);
   }
 
-  const isNonRatio = (e) => {
+  const isStudy = (e) => {
     const uName = (e._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
-    return uName.includes('study time') || uName.includes('staff meeting');
+    return uName.includes('study time');
   };
+  const isStaffMeeting = (e) => {
+    const uName = (e._DPMetaData?.OperationalUnitInfo?.OperationalUnitName || '').toLowerCase();
+    return uName.includes('staff meeting');
+  };
+  const isNonRatio = (e) => isStudy(e) || isStaffMeeting(e);
 
   const deduped = [];
   for (const [, entries] of groupedByEmp) {
@@ -138,13 +143,24 @@ export default async function handler(req, res) {
       continue;
     }
 
-    // Split-shift detection must only look at ratio entries.
-    // A staff meeting after a room shift should NOT mark someone as split.
+    // Split-shift detection looks at ratio entries, but a study block between
+    // two ratio entries is a real break and must force a split. A staff meeting
+    // after the last ratio entry should NOT mark someone as split.
     const sortedRatio = [...ratioEntries].sort((a, b) => String(a.StartTime).localeCompare(String(b.StartTime)));
     let isSplit = false;
     for (let i = 0; i < sortedRatio.length - 1; i++) {
-      const gap = toMins(sortedRatio[i + 1].StartTime) - toMins(sortedRatio[i].EndTime);
-      if (gap >= SPLIT_GAP_MINS) { isSplit = true; break; }
+      const prevEnd = toMins(sortedRatio[i].EndTime);
+      const nextStart = toMins(sortedRatio[i + 1].StartTime);
+      if (nextStart - prevEnd >= SPLIT_GAP_MINS) { isSplit = true; break; }
+      // Study time sitting between two ratio blocks turns a would-be merge
+      // into a split, so the two room/float segments stay separate.
+      for (const nr of nonRatioEntries) {
+        if (!isStudy(nr)) continue;
+        const nrStart = toMins(nr.StartTime);
+        const nrEnd   = toMins(nr.EndTime);
+        if (nrEnd > prevEnd && nrStart < nextStart) { isSplit = true; break; }
+      }
+      if (isSplit) break;
     }
 
     if (isSplit) {
@@ -158,15 +174,14 @@ export default async function handler(req, res) {
       }
     } else {
       // Not split — merge ratio entries into one (earliest start, latest end).
-      // Also merge in any overlapping/adjacent non-ratio entries (e.g., study
-      // time just before a room shift) so the staff member appears in the
-      // correct room for the full span.
       let mergedStart = sortedRatio[0].StartTime;
       let mergedEnd   = sortedRatio[sortedRatio.length - 1].EndTime;
       const mergedStartM = toMins(mergedStart);
       const mergedEndM   = toMins(mergedEnd);
 
       for (const nr of nonRatioEntries) {
+        // Study time is non-ratio and must not extend a room/float shift.
+        if (isStudy(nr)) continue;
         const nrStartM = toMins(nr.StartTime);
         const nrEndM   = toMins(nr.EndTime);
         if (nrStartM <= mergedEndM && nrEndM >= mergedStartM) {
