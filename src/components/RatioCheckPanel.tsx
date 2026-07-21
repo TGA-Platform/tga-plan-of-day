@@ -2046,16 +2046,33 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   function getVisitorKey(slot: string, roomId: string) { return `${slot}:${roomId}`; }
 
-  /** Return visitors stored under this exact slot:room bucket (used by the 7am summary). */
-  function getVisitorsForSlotRoom(slot: string, roomId: string): RoomVisitor[] {
-    return sessionData.roomVisitors?.[getVisitorKey(slot, roomId)] ?? [];
-  }
+  /** Merge roomVisitors from all three sessions. Room visits are physical events
+   *  that should be visible regardless of which session tab was active when they
+   *  were logged. */
+  const allRoomVisitors = useMemo(() => {
+    const merged: Record<string, RoomVisitor[]> = {};
+    const seenByKey = new Map<string, Set<string>>();
+    for (const sessionState of [morningData, middayData, afternoonData]) {
+      for (const [key, list] of Object.entries(sessionState.roomVisitors ?? {})) {
+        if (!merged[key]) { merged[key] = []; seenByKey.set(key, new Set<string>()); }
+        const seen = seenByKey.get(key)!;
+        for (const v of list ?? []) {
+          if (seen.has(v.id)) continue;
+          seen.add(v.id);
+          merged[key].push(v);
+        }
+      }
+    }
+    return merged;
+  }, [morningData.roomVisitors, middayData.roomVisitors, afternoonData.roomVisitors]);
 
   /** Find which slot bucket a visitor was originally stored in.
+   *  Searches across all sessions so exits/removes work even when the user has
+   *  switched tabs since the visit was logged.
    *  Key format is `${slot}:${roomId}`; slot itself contains a colon (HH:MM),
    *  so we take everything before the final colon. */
   function findVisitorStorageSlot(roomId: string, visitorId: string): string | null {
-    for (const [key, list] of Object.entries(sessionData.roomVisitors ?? {})) {
+    for (const [key, list] of Object.entries(allRoomVisitors)) {
       if (!key.endsWith(`:${roomId}`)) continue;
       if (list?.some(v => v.id === visitorId)) return key.slice(0, key.lastIndexOf(':'));
     }
@@ -2068,7 +2085,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const slotMins = slotToMins(slot);
     const active: RoomVisitor[] = [];
     const seen = new Set<string>();
-    for (const [key, list] of Object.entries(sessionData.roomVisitors ?? {})) {
+    for (const [key, list] of Object.entries(allRoomVisitors)) {
       if (!key.endsWith(`:${roomId}`)) continue;
       for (const v of list ?? []) {
         if (seen.has(v.id)) continue;
@@ -2090,6 +2107,23 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return getActiveVisitorsForSlotRoom(slot, roomId).length;
   }
 
+  /** Write visitor changes to ALL three sessions so logged room visits persist
+   *  across morning/midday/afternoon tabs. */
+  function syncRoomVisitorsToAllSessions(updater: (visitors: Record<string, RoomVisitor[]>) => Record<string, RoomVisitor[]>) {
+    hasUserEdited.current = true;
+    let nextMorning: RatioCheckSession | null = null;
+    let nextMidday: RatioCheckSession | null = null;
+    let nextAfternoon: RatioCheckSession | null = null;
+    setMorningData(prev => { nextMorning = { ...prev, roomVisitors: updater(prev.roomVisitors ?? {}) }; return nextMorning; });
+    setMiddayData(prev => { nextMidday = { ...prev, roomVisitors: updater(prev.roomVisitors ?? {}) }; return nextMidday; });
+    setAfternoonData(prev => { nextAfternoon = { ...prev, roomVisitors: updater(prev.roomVisitors ?? {}) }; return nextAfternoon; });
+    setTimeout(() => {
+      if (nextMorning) save('morning', morningRef.current);
+      if (nextMidday) save('midday', middayRef.current);
+      if (nextAfternoon) save('afternoon', afternoonRef.current);
+    }, 0);
+  }
+
   function addVisitor(slot: string, roomId: string, name: string, enteredAt: string, exitedAt?: string, wwccNumber?: string) {
     const key = getVisitorKey(slot, roomId);
     const newVisitor: RoomVisitor = {
@@ -2099,47 +2133,26 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       enteredAt,
       exitedAt,
     };
-    setSessionData(prev => {
-      const existing = prev.roomVisitors?.[key] ?? [];
-      const next: RatioCheckSession = {
-        ...prev,
-        roomVisitors: { ...(prev.roomVisitors ?? {}), [key]: [...existing, newVisitor] },
-      };
-      scheduleAutoSave(next);
-      return next;
-    });
+    syncRoomVisitorsToAllSessions(prev => ({
+      ...prev,
+      [key]: [...(prev[key] ?? []), newVisitor],
+    }));
   }
 
   function setVisitorExit(slot: string, roomId: string, visitorId: string, exitedAt: string) {
     const key = getVisitorKey(slot, roomId);
-    setSessionData(prev => {
-      const existing = prev.roomVisitors?.[key] ?? [];
-      const next: RatioCheckSession = {
-        ...prev,
-        roomVisitors: {
-          ...(prev.roomVisitors ?? {}),
-          [key]: existing.map(v => v.id === visitorId ? { ...v, exitedAt } : v),
-        },
-      };
-      scheduleAutoSave(next);
-      return next;
-    });
+    syncRoomVisitorsToAllSessions(prev => ({
+      ...prev,
+      [key]: (prev[key] ?? []).map(v => v.id === visitorId ? { ...v, exitedAt } : v),
+    }));
   }
 
   function removeVisitor(slot: string, roomId: string, visitorId: string) {
     const key = getVisitorKey(slot, roomId);
-    setSessionData(prev => {
-      const existing = prev.roomVisitors?.[key] ?? [];
-      const next: RatioCheckSession = {
-        ...prev,
-        roomVisitors: {
-          ...(prev.roomVisitors ?? {}),
-          [key]: existing.filter(v => v.id !== visitorId),
-        },
-      };
-      scheduleAutoSave(next);
-      return next;
-    });
+    syncRoomVisitorsToAllSessions(prev => ({
+      ...prev,
+      [key]: (prev[key] ?? []).filter(v => v.id !== visitorId),
+    }));
   }
 
   /** Open visitor modal pre-filled with actual current wall-clock time */
@@ -2876,21 +2889,23 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                       title="Log off-floor staff entering this room"
                     >➕</button>
                   </div>
-                  {/* Active visitors for this room (across all slots) */}
+                  {/* Active visitors for this room (across all sessions) */}
                   {(() => {
                     const allVisitors: Array<{ v: RoomVisitor; slot: string }> = [];
-                    for (const s of slots) {
-                      for (const v of getVisitorsForSlotRoom(s, room.id)) {
-                        if (!v.exitedAt) allVisitors.push({ v, slot: s });
+                    const seen = new Set<string>();
+                    for (const [key, list] of Object.entries(allRoomVisitors)) {
+                      if (!key.endsWith(`:${room.id}`)) continue;
+                      const entrySlot = key.slice(0, key.lastIndexOf(':'));
+                      for (const v of list ?? []) {
+                        if (v.exitedAt || seen.has(v.id)) continue;
+                        seen.add(v.id);
+                        allVisitors.push({ v, slot: entrySlot });
                       }
                     }
-                    // Deduplicate by visitorId
-                    const seen = new Set<string>();
-                    const unique = allVisitors.filter(({ v }) => { if (seen.has(v.id)) return false; seen.add(v.id); return true; });
-                    if (unique.length === 0) return null;
+                    if (allVisitors.length === 0) return null;
                     return (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', marginTop: '4px', justifyContent: 'center' }}>
-                        {unique.map(({ v, slot: entrySlot }) => (
+                        {allVisitors.map(({ v, slot: entrySlot }) => (
                           <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: '2px', background: '#f3e8ff', border: '1px solid #d8b4fe', borderRadius: '4px', padding: '1px 4px', fontSize: '9px', color: '#7e22ce' }}>
                             <span>{v.name.split(' ')[0]} ({v.enteredAt})</span>
                             <button
