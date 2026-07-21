@@ -33,13 +33,20 @@ interface CentreCard {
   staffRostered:    number;
   staffAbsent:      number;
   staffAvailable:   number;   // room + float staff, minus any who are also on leave
-  roomStaffAvailable: number; // room staff only (no floats) - matches staffing analysis surplus
+  staffRosteredPresent:  number; // room + float staff currently on shift
+  staffAbsentPresent:    number; // on-leave staff whose shift is right now
+  staffAvailablePresent: number; // room + float on-shift staff, minus leave conflicts
+  roomStaffAvailable:    number; // room staff only (no floats) - matches staffing analysis surplus
+  roomStaffAvailablePresent: number; // room staff on shift now
   floatsRostered:   number;
+  floatsRosteredPresent: number; // floats on shift now
   requiredStaff:    number;    // based on all-day
   requiredPresent:  number;    // based on currently present
   requiredExpected: number;    // based on expected (Day view)
   shortage:         number;   // positive = short, 0 = exact, negative = surplus (based on room+float)
+  shortagePresent:  number;   // same, for present view
   roomShortage:     number;   // positive = short, negative = surplus (room staff only)
+  roomShortagePresent: number; // same, for present view
   floatSurplus:        number;   // floats+AD available minus floaters needed (all-day view)
   casualsNeeded:       number;    // all-day view
   floatSurplusPresent: number;    // floats+AD available minus floaters needed (present view)
@@ -47,6 +54,7 @@ interface CentreCard {
   effectiveFloatCount: number;   // floats + room net surplus (surplus room staff act as floats)
   roomNetSurplus:      number;   // net room surplus carried into float pool
   status:           'green' | 'amber' | 'red' | 'unknown';
+  statusPresent:    'green' | 'amber' | 'red' | 'unknown';
 }
 
 function fmtFTE(n: number): string {
@@ -69,6 +77,13 @@ function isEffectiveFloat(start: string | null | undefined, end: string | null |
   const e = toMins(end);
   if (s === null || e === null) return true; // no time info, keep
   return e > CORE_WINDOW_START && s < CORE_WINDOW_LATEST_START;
+}
+
+function isOnShiftNow(start: string | null | undefined, end: string | null | undefined, currentMins: number): boolean {
+  const s = toMins(start);
+  const e = toMins(end);
+  if (s === null || e === null) return true; // no time info, include
+  return s <= currentMins && e > currentMins;
 }
 
 function todayStr() {
@@ -168,6 +183,7 @@ export default function MorningBriefingPage() {
       // Current Sydney time as HH:MM for predicted_sign_out comparison
       const nowSyd = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
       const nowHHMM = `${String(nowSyd.getHours()).padStart(2,'0')}:${String(nowSyd.getMinutes()).padStart(2,'0')}`;
+      const nowMins = toMins(nowHHMM) ?? 0;
 
       // Index saved staffing analysis by centre id for fast lookup.
       const staffingAnalysisByCentre: Record<string, any> = {};
@@ -282,71 +298,93 @@ export default function MorningBriefingPage() {
 
         const allDayCalc   = calcRoomRequired(kids);
         const presentCalc  = calcRoomRequired(presentKids);
+
+        // In "Currently Present" view we must compare present children with
+        // staff who are actually on shift right now — not the full-day roster.
+        const presentRosters = centreRosters.filter(r => isOnShiftNow(r.startTime, r.endTime, nowMins));
+
         // Per-room breakdown for each view mode so surplus/deficit matches the
         // displayed children/required numbers.
-        function makeRoomData(childSet: typeof kids) {
+        function makeRoomData(childSet: typeof kids, rosterSet: typeof centreRosters) {
           return centre.rooms.map(room => {
             const owna = (room.ownaRoomName ?? room.name).toLowerCase();
             const rk = childSet.filter(c => c.room.toLowerCase().includes(owna));
             const { required: roomRequired } = calcRequiredStaff(rk.map(c => ({ ageMonths: parseAgeMonths(c.age) } as any)));
             // Count staff whose RAW location is this room (ignore moves so card matches staffing analysis)
-            const roomStaff = centreRosters.filter(r => r.unitId === room.deputyUnitId);
+            const roomStaff = rosterSet.filter(r => r.unitId === room.deputyUnitId);
             return { required: roomRequired, staffCount: roomStaff.length };
           });
         }
-        const roomDataAllDay = makeRoomData(kids);
-        const roomDataPresent = makeRoomData(presentKids);
+        const roomDataAllDay = makeRoomData(kids, centreRosters);
+        const roomDataPresent = makeRoomData(presentKids, presentRosters);
         const required         = allDayCalc.total;
         const requiredPresent  = presentCalc.total;
         // For Day view use expected (last week) if available, else all-day
         const expectedCount    = lwByCampus[campus] ?? kids.length;
         const requiredExpected = Math.round(expectedCount / Math.max(kids.length, 1) * required);
 
-        // Staff counts from centreRosters using RAW unit type (ignore moves so card matches staffing analysis)
-        const staffIds = new Set(centreRosters
-          .filter(r => rawUnitType(r) === 'room')
-          .map(r => r.employeeId));
-        const absentIds = new Set(centreRosters
-          .filter(r => rawUnitType(r) === 'leave')
-          .map(r => r.employeeId));
-        // Use raw entry counts (not unique sets) to exactly match staffing analysis Float Pool:
-        // floats.length and adStaff.length are array lengths, not deduped employee counts.
-        // Split-shift staff have multiple entries and each counts.
-        const floatEntries = centreRosters.filter(r => rawUnitType(r) === 'float');
-        const floatIds = new Set(floatEntries.map(r => r.employeeId)); // still need set for absence calc
-        // Effective float count must match the Ratio Dashboard Float Pool panel:
-        // split-shift float entries don't count as cover, and only floats whose shift
-        // overlaps the 10:00–14:00 core window are useful.
-        const effectiveFloatEntries = floatEntries.filter(r => !r.isSplitShift && isEffectiveFloat(r.startTime, r.endTime));
-        const effectiveZCasualCount = zCasuals.filter((z: { start?: string; end?: string }) => isEffectiveFloat(z.start, z.end)).length;
-        const floatCount = effectiveFloatEntries.length + effectiveZCasualCount;
-        // AD = only 'Assistant Director' unitName entries (matches staffing analysis adStaff filter)
-        const adCount = centreRosters.filter(r =>
-          rawUnitType(r) === 'support' &&
-          (r.unitName?.toLowerCase().includes('assistant director') ||
-           r.unitName?.toLowerCase().includes('asst director') ||
-           r.unitName?.toLowerCase().includes('ass. director'))
-        ).length;
-        const totalStaff = new Set([...staffIds, ...floatIds]).size;
-        const absent = absentIds.size;
-        // AD availability is now computed per view mode inside calcFloatPool.
+        // Staff counts from a roster set using RAW unit type (ignore moves so card matches staffing analysis)
+        function calcStaffStats(rosterSet: typeof centreRosters, isPresent: boolean) {
+          const staffIds = new Set(rosterSet
+            .filter(r => rawUnitType(r) === 'room')
+            .map(r => r.employeeId));
+          const absentIds = new Set(rosterSet
+            .filter(r => rawUnitType(r) === 'leave')
+            .map(r => r.employeeId));
+          // Use raw entry counts (not unique sets) to exactly match staffing analysis Float Pool:
+          // floats.length and adStaff.length are array lengths, not deduped employee counts.
+          // Split-shift staff have multiple entries and each counts.
+          const floatEntries = rosterSet.filter(r => rawUnitType(r) === 'float');
+          const floatIds = new Set(floatEntries.map(r => r.employeeId)); // still need set for absence calc
+          // Effective float count: all-day uses core-window overlap; present view uses
+          // staff who are on shift right now.
+          const effectiveFloatEntries = isPresent
+            ? floatEntries.filter(r => !r.isSplitShift && isOnShiftNow(r.startTime, r.endTime, nowMins))
+            : floatEntries.filter(r => !r.isSplitShift && isEffectiveFloat(r.startTime, r.endTime));
+          const effectiveZCasualCount = isPresent
+            ? zCasuals.filter((z: { start?: string; end?: string }) => isOnShiftNow(z.start, z.end, nowMins)).length
+            : zCasuals.filter((z: { start?: string; end?: string }) => isEffectiveFloat(z.start, z.end)).length;
+          const floatCount = effectiveFloatEntries.length + effectiveZCasualCount;
+          // AD = only 'Assistant Director' unitName entries (matches staffing analysis adStaff filter)
+          const adCount = rosterSet.filter(r =>
+            rawUnitType(r) === 'support' &&
+            (r.unitName?.toLowerCase().includes('assistant director') ||
+             r.unitName?.toLowerCase().includes('asst director') ||
+             r.unitName?.toLowerCase().includes('ass. director'))
+          ).length;
+          const totalStaff = new Set([...staffIds, ...floatIds]).size;
+          const absent = absentIds.size;
+          // Only subtract absent staff who were ALSO rostered to a room or float
+          // (they called in sick from their scheduled shift).
+          const roomAndFloatAbsent = [...absentIds].filter(id => staffIds.has(id) || floatIds.has(id)).length;
+          const totalAvailable = totalStaff - roomAndFloatAbsent;
+          const roomAbsent = [...absentIds].filter(id => staffIds.has(id)).length;
+          const roomStaffAvailable = staffIds.size - roomAbsent;
+          return { staffIds, floatIds, floatCount, adCount, totalStaff, absent, totalAvailable, roomStaffAvailable };
+        }
 
-        // Only subtract absent staff who were ALSO rostered to a room or float
-        // (they called in sick from their scheduled shift).
-        // People who are ONLY in a leave unit (no room/float roster) should NOT be
-        // subtracted - they were never in totalStaff to begin with.
-        const roomAndFloatAbsent = [...absentIds].filter(id => staffIds.has(id) || floatIds.has(id)).length;
-        const totalAvailable = totalStaff - roomAndFloatAbsent;
-        const statusShortage = required - totalAvailable; // >0 = short, ==0 = exact, <0 = surplus
+        const allDayStats  = calcStaffStats(centreRosters, false);
+        const presentStats = calcStaffStats(presentRosters, true);
 
-        // Room-staff-only surplus - matches the staffing analysis (floats are a separate buffer)
-        const roomAbsent = [...absentIds].filter(id => staffIds.has(id)).length;
-        const roomStaffAvailable = staffIds.size - roomAbsent;
-        const roomShortage = required - roomStaffAvailable; // >0 = short, negative = surplus
+        // All-day stats (default view)
+        const totalStaff = allDayStats.totalStaff;
+        const absent = allDayStats.absent;
+        const totalAvailable = allDayStats.totalAvailable;
+        const statusShortage = required - totalAvailable;
+        const roomStaffAvailable = allDayStats.roomStaffAvailable;
+        const roomShortage = required - roomStaffAvailable;
+
+        // Present stats (currently signed-in view)
+        const totalStaffPresent = presentStats.totalStaff;
+        const absentPresent = presentStats.absent;
+        const totalAvailablePresent = presentStats.totalAvailable;
+        const statusShortagePresent = requiredPresent - totalAvailablePresent;
+        const roomStaffAvailablePresent = presentStats.roomStaffAvailable;
+        const roomShortagePresent = requiredPresent - roomStaffAvailablePresent;
 
         // Exact same logic as ratio dashboard Float Pool section:
         // Compute separately for all-day and currently-present so each view mode is internally consistent.
-        function calcFloatPool(roomData: { required: number; staffCount: number }[], childCount: number) {
+        function calcFloatPool(roomData: { required: number; staffCount: number }[], childCount: number, floatCount: number, adCount: number) {
           // 1. Per-room surplus reallocation
           const totalRatioShortage = roomData.reduce((s, r) => s + Math.max(0, r.required - r.staffCount), 0);
           const totalSurplus       = roomData.reduce((s, r) => s + Math.max(0, r.staffCount - r.required), 0);
@@ -366,8 +404,8 @@ export default function MorningBriefingPage() {
           return { totalFloatersNeeded, casualsNeeded, floatSurplus, effectiveFloatCount, roomNetSurplus, bufferRequired };
         }
 
-        const allDayPool  = calcFloatPool(roomDataAllDay, kids.length);
-        const presentPool = calcFloatPool(roomDataPresent, presentKids.length);
+        const allDayPool  = calcFloatPool(roomDataAllDay, kids.length, allDayStats.floatCount, allDayStats.adCount);
+        const presentPool = calcFloatPool(roomDataPresent, presentKids.length, presentStats.floatCount, presentStats.adCount);
 
         // Override all-day values with the saved Plan of Day Staffing Analysis
         // when available. The dashboard is the source of truth for this figure.
@@ -384,8 +422,8 @@ export default function MorningBriefingPage() {
 
         if (centre.id === 'spring-farm') {
           console.log('[briefing-debug] Spring Farm', {
-            required, staffIdsSize: staffIds.size, floatIdsSize: floatIds.size, totalStaff,
-            absent, roomAndFloatAbsent, totalAvailable,
+            required, requiredPresent,
+            allDayStats, presentStats,
             allDayPool, presentPool,
           });
         }
@@ -397,6 +435,10 @@ export default function MorningBriefingPage() {
           : statusShortage > 0   ? 'red'    // short on ratio
           : statusShortage === 0 ? 'amber'  // exactly meeting ratio
           : 'green';                        // surplus staff - compliant
+        const statusPresent: CentreCard['statusPresent'] = presentKids.length === 0 ? 'unknown'
+          : statusShortagePresent > 0   ? 'red'
+          : statusShortagePresent === 0 ? 'amber'
+          : 'green';
 
         result.push({
           centreId:         centre.id,
@@ -408,13 +450,20 @@ export default function MorningBriefingPage() {
           staffRostered:    totalStaff,
           staffAbsent:      absent,
           staffAvailable:   totalAvailable,
+          staffRosteredPresent:  totalStaffPresent,
+          staffAbsentPresent:    absentPresent,
+          staffAvailablePresent: totalAvailablePresent,
           roomStaffAvailable,
-          floatsRostered:   floatIds.size,
+          roomStaffAvailablePresent,
+          floatsRostered:   allDayStats.floatIds.size,
+          floatsRosteredPresent: presentStats.floatIds.size,
           requiredStaff:    required,
           requiredPresent,
           requiredExpected,
-          shortage:         statusShortage,  // positive = short, 0 = exact, negative = surplus (room+float)
-          roomShortage,                      // positive = short, negative = surplus (room staff only)
+          shortage:         statusShortage,
+          shortagePresent:  statusShortagePresent,
+          roomShortage,
+          roomShortagePresent,
           floatSurplus:       allDayPool.floatSurplus,
           casualsNeeded:      allDayPool.casualsNeeded,
           floatSurplusPresent:  presentPool.floatSurplus,
@@ -422,6 +471,7 @@ export default function MorningBriefingPage() {
           effectiveFloatCount:  poolToUse.effectiveFloatCount,
           roomNetSurplus:       poolToUse.roomNetSurplus,
           status,
+          statusPresent,
         });
       }
 
@@ -464,11 +514,17 @@ export default function MorningBriefingPage() {
     ? cards.reduce((s,c) => s+(c.childrenExpected ?? c.childrenToday), 0)
     : cards.reduce((s,c) => s+c.childrenToday, 0);
   const totalStaff     = viewMode === 'present'
-    ? cards.reduce((s,c) => s+c.staffAvailable, 0)
+    ? cards.reduce((s,c) => s+c.staffAvailablePresent, 0)
     : cards.reduce((s,c) => s+c.staffRostered, 0);
-  const totalAbsent    = cards.reduce((s,c) => s+c.staffAbsent, 0);
-  const totalRequired  = cards.reduce((s,c) => s+c.requiredStaff, 0);
-  const totalCasuals   = cards.reduce((s,c) => s+c.casualsNeeded, 0);
+  const totalAbsent    = viewMode === 'present'
+    ? cards.reduce((s,c) => s+c.staffAbsentPresent, 0)
+    : cards.reduce((s,c) => s+c.staffAbsent, 0);
+  const totalRequired  = viewMode === 'present'
+    ? cards.reduce((s,c) => s+c.requiredPresent, 0)
+    : cards.reduce((s,c) => s+c.requiredStaff, 0);
+  const totalCasuals   = viewMode === 'present'
+    ? cards.reduce((s,c) => s+c.casualsNeededPresent, 0)
+    : cards.reduce((s,c) => s+c.casualsNeeded, 0);
   void totalRequired; // used in per-card calculations
 
   return (
@@ -595,8 +651,8 @@ export default function MorningBriefingPage() {
               onClick={() => navigate(`/ratio?centre=${card.centreId}`)}
               className="rounded-2xl border shadow-sm overflow-hidden cursor-pointer transition-all hover:shadow-md"
               style={{
-                borderColor: card.status === 'red' ? '#fca5a5'
-                  : card.status === 'amber' ? '#fcd34d'
+                borderColor: (viewMode === 'present' ? card.statusPresent : card.status) === 'red' ? '#fca5a5'
+                  : (viewMode === 'present' ? card.statusPresent : card.status) === 'amber' ? '#fcd34d'
                   : '#E2F1DA',
                 backgroundColor: 'white',
               }}
@@ -604,19 +660,19 @@ export default function MorningBriefingPage() {
               {/* Card header */}
               <div className="px-5 py-3 flex items-center justify-between"
                 style={{
-                  backgroundColor: card.status === 'red' ? '#fef2f2'
-                    : card.status === 'amber' ? '#fffbeb'
+                  backgroundColor: (viewMode === 'present' ? card.statusPresent : card.status) === 'red' ? '#fef2f2'
+                    : (viewMode === 'present' ? card.statusPresent : card.status) === 'amber' ? '#fffbeb'
                     : '#F5FAF3',
                 }}>
                 <div>
                   <div className="font-bold text-sm" style={{ color: '#2d5c18' }}>{card.centreName}</div>
-                  {card.status !== 'unknown' && (
+                  {(viewMode === 'present' ? card.statusPresent : card.status) !== 'unknown' && (
                     <div className="text-xs mt-0.5" style={{ color: '#596570' }}>
-                      {card.requiredStaff} staff required
+                      {viewMode === 'present' ? card.requiredPresent : card.requiredStaff} staff required
                     </div>
                   )}
                 </div>
-                <StatusPill status={card.status} />
+                <StatusPill status={viewMode === 'present' ? card.statusPresent : card.status} />
               </div>
 
               {/* Stats */}
@@ -654,12 +710,18 @@ export default function MorningBriefingPage() {
                       <div className="text-xl font-bold" style={{ color: '#050505' }}>{viewRequired}</div>
                       <div className="text-xs" style={{ color: '#596570' }}>Required</div>
                     </div>
-                    {/* 3. Rostered (full rostered group; absence called out below) */}
+                    {/* 3. Rostered / Signed in */}
                     <div className="text-center">
-                      <div className="text-xl font-bold" style={{ color: '#050505' }}>{card.staffRostered}</div>
-                      <div className="text-xs" style={{ color: '#596570' }}>Rostered</div>
-                      {card.staffAbsent > 0 && (
-                        <div className="text-xs" style={{ color: '#dc2626' }}>{card.staffAbsent} absent</div>
+                      <div className="text-xl font-bold" style={{ color: '#050505' }}>
+                        {isPresentView ? card.staffRosteredPresent : card.staffRostered}
+                      </div>
+                      <div className="text-xs" style={{ color: '#596570' }}>
+                        {isPresentView ? 'Signed in' : 'Rostered'}
+                      </div>
+                      {(isPresentView ? card.staffAbsentPresent : card.staffAbsent) > 0 && (
+                        <div className="text-xs" style={{ color: '#dc2626' }}>
+                          {isPresentView ? card.staffAbsentPresent : card.staffAbsent} absent
+                        </div>
                       )}
                     </div>
                     {/* 4. Surplus / Deficit - matches staffing analysis float pool */}
@@ -682,11 +744,11 @@ export default function MorningBriefingPage() {
               <div
                 className="px-5 py-2.5 border-t flex items-center justify-between"
                 style={{
-                  borderColor: card.casualsNeeded > 0 ? '#fca5a5' : '#D0E8B8',
-                  backgroundColor: card.casualsNeeded > 0 ? '#fef2f2' : '#f2f9e8',
+                  borderColor: (viewMode === 'present' ? card.casualsNeededPresent : card.casualsNeeded) > 0 ? '#fca5a5' : '#D0E8B8',
+                  backgroundColor: (viewMode === 'present' ? card.casualsNeededPresent : card.casualsNeeded) > 0 ? '#fef2f2' : '#f2f9e8',
                 }}
               >
-                {card.status === 'unknown' ? (
+                {(viewMode === 'present' ? card.statusPresent : card.status) === 'unknown' ? (
                   <span className="text-xs" style={{ color: '#596570' }}>No data yet</span>
                 ) : (viewMode === 'present' ? card.casualsNeededPresent : card.casualsNeeded) > 0 ? (
                   <span className="text-xs font-semibold" style={{ color: '#dc2626' }}>
