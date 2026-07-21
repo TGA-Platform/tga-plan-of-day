@@ -1768,25 +1768,135 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   }
 
   function moveStaff(empId: number, slot: string, targetRoomId: string) {
-    setSessionData(prev => {
-      const newMoves = { ...prev.staffMoves, [`${empId}:${slot}`]: targetRoomId };
-      const next = { ...prev, staffMoves: newMoves };
-      scheduleAutoSave(next);
-      return next;
+    const staff = findRosteredStaff(empId);
+    const naturalRoom = staff ? rooms.find(rm => rm.deputyUnitId === staff.unitId) : undefined;
+    const isRoomMove = rooms.some(r => r.id === targetRoomId);
+    const shouldStick = isRoomMove && !naturalRoom;
+
+    if (!shouldStick || !staff) {
+      setSessionData(prev => {
+        const newMoves = { ...prev.staffMoves, [`${empId}:${slot}`]: targetRoomId };
+        const next = { ...prev, staffMoves: newMoves };
+        scheduleAutoSave(next);
+        return next;
+      });
+      removeStaffFromAllFGsAtSlot(empId, slot);
+      return;
+    }
+
+    // Sticky room move for staff with no natural room (float/ISS/admin).
+    // Fill forward to the end of the current effective shift segment so the
+    // user doesn't have to re-drag every 15 min slot.
+    const seg = getSegmentForSlot(staff, slot);
+    const slotMins = slotToMins(slot);
+    const segEndM = seg ? (slotToMins(seg.end) ?? slotMins) : slotMins;
+
+    const slotsToFill = allSlots.filter(s => {
+      const m = slotToMins(s);
+      return m >= slotMins && m < segEndM;
     });
-    // Moving to a room/activity means the staff is no longer explicitly assigned to any FG at this slot
-    removeStaffFromAllFGsAtSlot(empId, slot);
+
+    const morningSet = new Set(morningSlots);
+    const middaySet = new Set(MIDDAY_SLOTS);
+    const afternoonSet = new Set(AFTERNOON_SLOTS);
+
+    const applyToSession = (
+      session: 'morning' | 'midday' | 'afternoon',
+      current: RatioCheckSession,
+      setter: (d: RatioCheckSession) => void,
+      sessionSlots: string[]
+    ) => {
+      if (sessionSlots.length === 0) return;
+      const newMoves = { ...current.staffMoves };
+      for (const s of sessionSlots) {
+        const key = `${empId}:${s}`;
+        if (s === slot || newMoves[key] === undefined) {
+          newMoves[key] = targetRoomId;
+        }
+      }
+      const next = { ...current, staffMoves: newMoves };
+      setter(next);
+      save(session, next);
+    };
+
+    const bySession = { morning: [] as string[], midday: [] as string[], afternoon: [] as string[] };
+    for (const s of slotsToFill) {
+      if (morningSet.has(s)) bySession.morning.push(s);
+      else if (middaySet.has(s)) bySession.midday.push(s);
+      else if (afternoonSet.has(s)) bySession.afternoon.push(s);
+    }
+
+    applyToSession('morning', morningData, setMorningData, bySession.morning);
+    applyToSession('midday', middayData, setMiddayData, bySession.midday);
+    applyToSession('afternoon', afternoonData, setAfternoonData, bySession.afternoon);
+
+    for (const s of slotsToFill) {
+      removeStaffFromAllFGsAtSlot(empId, s);
+    }
   }
 
   function resetStaffMove(empId: number, slot: string) {
-    setSessionData(prev => {
-      const key = `${empId}:${slot}`;
-      const moves = { ...prev.staffMoves };
-      delete moves[key];
-      const next = { ...prev, staffMoves: moves };
-      scheduleAutoSave(next);
-      return next;
+    const staff = findRosteredStaff(empId);
+    const naturalRoom = staff ? rooms.find(rm => rm.deputyUnitId === staff.unitId) : undefined;
+    const shouldClearForward = staff && !naturalRoom;
+
+    if (!shouldClearForward) {
+      setSessionData(prev => {
+        const key = `${empId}:${slot}`;
+        const moves = { ...prev.staffMoves };
+        delete moves[key];
+        const next = { ...prev, staffMoves: moves };
+        scheduleAutoSave(next);
+        return next;
+      });
+      return;
+    }
+
+    // For staff with no natural room, a reset removes the sticky room assignment
+    // from this slot forward in the current segment (their natural state is unassigned).
+    const seg = getSegmentForSlot(staff, slot);
+    const slotMins = slotToMins(slot);
+    const segEndM = seg ? (slotToMins(seg.end) ?? slotMins) : slotMins;
+
+    const slotsToClear = allSlots.filter(s => {
+      const m = slotToMins(s);
+      return m >= slotMins && m < segEndM;
     });
+
+    const morningSet = new Set(morningSlots);
+    const middaySet = new Set(MIDDAY_SLOTS);
+    const afternoonSet = new Set(AFTERNOON_SLOTS);
+
+    const clearSession = (
+      session: 'morning' | 'midday' | 'afternoon',
+      current: RatioCheckSession,
+      setter: (d: RatioCheckSession) => void,
+      sessionSlots: string[]
+    ) => {
+      if (sessionSlots.length === 0) return;
+      const newMoves = { ...current.staffMoves };
+      for (const s of sessionSlots) {
+        const key = `${empId}:${s}`;
+        const move = newMoves[key];
+        if (s === slot || (move !== undefined && rooms.some(r => r.id === move))) {
+          delete newMoves[key];
+        }
+      }
+      const next = { ...current, staffMoves: newMoves };
+      setter(next);
+      save(session, next);
+    };
+
+    const bySession = { morning: [] as string[], midday: [] as string[], afternoon: [] as string[] };
+    for (const s of slotsToClear) {
+      if (morningSet.has(s)) bySession.morning.push(s);
+      else if (middaySet.has(s)) bySession.midday.push(s);
+      else if (afternoonSet.has(s)) bySession.afternoon.push(s);
+    }
+
+    clearSession('morning', morningData, setMorningData, bySession.morning);
+    clearSession('midday', middayData, setMiddayData, bySession.midday);
+    clearSession('afternoon', afternoonData, setAfternoonData, bySession.afternoon);
   }
 
   // Touch tap-to-select / tap-to-place helpers (iPad)
