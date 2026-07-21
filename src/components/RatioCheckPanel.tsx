@@ -1225,20 +1225,41 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   }, [staffAtSlotMap, sessionData.staffMoves, dayAllocations, rooms, floatCoveringRoomBySlot]);
 
   // Temporary diagnostic for Niulla Angela (emp 2266) missing from North Wollongong ratio check
-  const diagLoggedRef = useRef<Set<string>>(new Set());
+  const diagLastLogRef = useRef<number>(0);
   useEffect(() => {
     if (centreId !== 'north-wollongong' || date !== '2026-07-21') return;
     if (rosters.length === 0 || Object.keys(staffAtSlotMap).length === 0) return;
+    const now = Date.now();
+    if (now - diagLastLogRef.current < 2000) return;
+    diagLastLogRef.current = now;
     const empId = 2266;
     const slot = '08:30';
-    const key = `${centreId}:${date}:${rosters.length}:${Object.keys(staffAtSlotMap).length}`;
-    if (diagLoggedRef.current.has(key)) return;
-    diagLoggedRef.current.add(key);
     const rosterEntry = rosters.find(r => r.employeeId === empId);
     const inSlot = staffAtSlotMap[slot]?.find(s => s.employeeId === empId);
     const primaryRoom = staffPrimaryRoomBySlot[slot]?.[empId];
-    console.log('[DIAG Niulla]', { empId, slot, rosterEntry, inSlot, primaryRoom, dayAlloc: dayAllocations[empId], override: sharedTimeOverrides[String(empId)], staffMove: morningData.staffMoves[`${empId}:${slot}`] });
-  }, [centreId, date, rosters, staffAtSlotMap, staffPrimaryRoomBySlot, dayAllocations, sharedTimeOverrides, morningData]);
+    const achRoom = rooms.find(r => r.id === 'nw_3_5');
+    const creRoom = rooms.find(r => r.id === 'nw_2_3b');
+    const inAch = achRoom ? getStaffForRoom(slot, achRoom).some(s => s.employeeId === empId) : false;
+    const inCre = creRoom ? getStaffForRoom(slot, creRoom).some(s => s.employeeId === empId) : false;
+    const offFloorSet = offFloorBySlot[slot] ?? new Set<number>();
+    const activitySet = offFloorStaffBySlot[slot];
+    const inProg = activitySet?.programming.some(s => s.employeeId === empId);
+    const inLunch = activitySet?.lunch.some(s => s.employeeId === empId);
+    const inClean = activitySet?.cleaning.some(s => s.employeeId === empId);
+    console.log('[DIAG Niulla]', {
+      empId, slot,
+      rosterEntryExists: !!rosterEntry,
+      inSlotExists: !!inSlot,
+      primaryRoom,
+      dayAlloc: dayAllocations[empId],
+      override: sharedTimeOverrides[String(empId)],
+      staffMove: morningData.staffMoves[`${empId}:${slot}`],
+      inAch, inCre,
+      offFloor: offFloorSet.has(empId),
+      inProg, inLunch, inClean,
+      allFloatCoverIds: Array.from(floatCoveringRoomBySlot[slot] ? Object.values(floatCoveringRoomBySlot[slot]).flat() : []),
+    });
+  });
 
   // -- Computed getters -------------------------------------------------------
 

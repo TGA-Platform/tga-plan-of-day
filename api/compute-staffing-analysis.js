@@ -24,9 +24,9 @@
 
 import { CENTRES } from './_centres.js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SERVICE_KEY  = *** || 'eyJhbG…6f1c';
-const CRON_SECRET  = *** || '';
+const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
+const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
+const CRON_SECRET  = process.env.CRON_SECRET || '';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
