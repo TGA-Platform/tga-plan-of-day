@@ -80,7 +80,7 @@ export default async function handler(req, res) {
           campus:              centre.campus ?? centre.name,
           date,
           computed_at:         now,
-          present_surplus_val: centre.surplusVal,
+          present_surplus_val: centre.present?.surplusVal ?? centre.surplusVal,
           present_computed_at: now,
         };
 
