@@ -11,8 +11,8 @@
 import { CENTRES } from './_centres.js';
 
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SERVICE_KEY  = *** || 'eyJhbG…6f1c';
-const CRON_SECRET  = *** || '';
+const SERVICE_KEY  = proces…_KEY || 'eyJhbG…6f1c';
+const CRON_SECRET  = proces…CRET || '';
 
 function todaySydney() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
