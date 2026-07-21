@@ -302,31 +302,34 @@ export default async function handler(req, res) {
         const presentAtt = presentByCampus[campus] ?? [];
         const allDayAtt  = allDayByCampus[campus]  ?? [];
 
-        // Always skip if no data at all
+        // Skip if no attendance data at all
         if (allDayAtt.length === 0 && presentAtt.length === 0) {
           results.skipped.push({ centreId: centre.id, reason: 'no attendance data' });
           continue;
         }
 
-        // --- 1. PRESENT calculation (always run) ---
+        // --- PRESENT calculation (always run, every 15 min) ---
+        // This powers the "Currently Present" view on the dashboard.
+        // We only calculate the child count and required staff from attendance;
+        // the float pool logic (floats, buffer, AD) is the same as the dashboard.
         const presentCalc = calcFloatPool(centre, presentAtt, centreRosters, floatCount, adCount);
 
-        // --- 2. ALL-DAY LOCK calculation (only at 11am if not yet locked today) ---
+        // --- ALL-DAY: do NOT recalculate here ---
+        // The Ratio Dashboard Float Pool panel is the authoritative source for
+        // all-day surplus/deficit. It writes to surplus_val / casuals_needed etc.
+        // via POST /api/staffing-analysis every time a director views the page.
+        // The cron must NEVER overwrite those columns — it only writes present_*.
+        // The only exception is forcelock=1 (manual admin trigger, not used in
+        // normal operation) which is intentionally removed from this flow.
         const alreadyLocked = !!existingLocks[centre.id];
-        const shouldLock    = isLockRun && !alreadyLocked;
-        let allDayCalc      = null;
-        if (shouldLock) {
-          allDayCalc = calcFloatPool(centre, allDayAtt, centreRosters, floatCount, adCount);
-        }
 
         const now = new Date().toISOString();
 
-        // Build upsert row — always update present_* columns
+        // Only update present_* columns — never touch surplus_val or allday columns
         const row = {
-          centre_id:              centre.id,
+          centre_id:                      centre.id,
           campus,
           date,
-          // present_* columns — updated every run
           present_surplus_val:            presentCalc.surplusVal,
           present_casuals_needed:         presentCalc.casualsNeeded,
           present_float_surplus:          presentCalc.floatSurplus,
@@ -339,56 +342,6 @@ export default async function handler(req, res) {
           computed_at:                    now,
         };
 
-        // all-day lock columns — only written at 11am and not yet locked
-        if (shouldLock && allDayCalc) {
-          row.surplus_val               = allDayCalc.surplusVal;
-          row.casuals_needed            = allDayCalc.casualsNeeded;
-          row.float_surplus             = allDayCalc.floatSurplus;
-          row.total_floaters_needed     = allDayCalc.totalFloatersNeeded;
-          row.effective_float_count     = allDayCalc.effectiveFloatCount;
-          row.room_net_surplus          = allDayCalc.roomNetSurplus;
-          row.ad_available              = allDayCalc.adAvailable;
-          row.total_ratio_shortage      = allDayCalc.totalRatioShortage;
-          row.total_surplus             = allDayCalc.totalSurplus;
-          row.net_shortage_after_realloc= allDayCalc.netShortageAfterRealloc;
-          row.buffer_required           = allDayCalc.bufferRequired;
-          row.floor_staff               = allDayCalc.floorStaff;
-          row.required_staff            = allDayCalc.requiredStaff;
-          row.float_count               = allDayCalc.floatCount;
-          row.children_count            = allDayCalc.childrenCount;
-          row.allday_locked_at          = now;
-          row.data = JSON.stringify({
-            shortageRooms: allDayCalc.shortageRooms,
-            surplusRooms:  allDayCalc.surplusRooms,
-          });
-        } else if (!alreadyLocked) {
-          // Before 11am: pre-populate all-day columns with all-day calc
-          // (so email/consumers have something before the lock fires)
-          // but don't set allday_locked_at yet.
-          const preLock = calcFloatPool(centre, allDayAtt, centreRosters, floatCount, adCount);
-          row.surplus_val               = preLock.surplusVal;
-          row.casuals_needed            = preLock.casualsNeeded;
-          row.float_surplus             = preLock.floatSurplus;
-          row.total_floaters_needed     = preLock.totalFloatersNeeded;
-          row.effective_float_count     = preLock.effectiveFloatCount;
-          row.room_net_surplus          = preLock.roomNetSurplus;
-          row.ad_available              = preLock.adAvailable;
-          row.total_ratio_shortage      = preLock.totalRatioShortage;
-          row.total_surplus             = preLock.totalSurplus;
-          row.net_shortage_after_realloc= preLock.netShortageAfterRealloc;
-          row.buffer_required           = preLock.bufferRequired;
-          row.floor_staff               = preLock.floorStaff;
-          row.required_staff            = preLock.requiredStaff;
-          row.float_count               = preLock.floatCount;
-          row.children_count            = preLock.childrenCount;
-          row.data = JSON.stringify({
-            shortageRooms: preLock.shortageRooms,
-            surplusRooms:  preLock.surplusRooms,
-          });
-        }
-        // If already locked (allday_locked_at is set): do NOT touch surplus_val etc.
-        // The Prefer header merge-duplicates will only update columns we include in the row.
-
         await sb('staffing_analysis', {
           method: 'POST',
           headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
@@ -400,7 +353,6 @@ export default async function handler(req, res) {
           presentSurplus: Math.round(presentCalc.surplusVal * 100) / 100,
           presentCasuals: Math.round(presentCalc.casualsNeeded * 100) / 100,
           presentKids:    presentCalc.childrenCount,
-          locked:         shouldLock,
           alreadyLocked,
         });
       } catch (err) {
