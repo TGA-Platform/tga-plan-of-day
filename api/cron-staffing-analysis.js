@@ -189,7 +189,8 @@ export default async function handler(req, res) {
   const currentHHMM = nowHHMM();
 
   // Is this the 11am lock run? Lock fires between 11:00 and 11:14 Sydney time.
-  const isLockRun  = sydHour >= 11 && sydHour < 11.25;
+  // forcelock=1 query param overrides the time check (admin use only).
+  const isLockRun  = req.query.forcelock === '1' || (sydHour >= 11 && sydHour < 11.25);
 
   // Fetch existing rows to check if all-day is already locked today
   let existingLocks = {};
