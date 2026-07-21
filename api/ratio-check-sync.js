@@ -180,7 +180,7 @@ function buildBreakBlock(startTime, endTime, target) {
     roomName = 'Cleaning';
     notes = 'Cleaning duties';
   } else if (target === '__additional__') {
-    coverType = 'programming';
+    coverType = 'additional';
     roomId = 'other';
     roomName = 'Additional Duties';
     notes = 'Additional duties';

@@ -1087,9 +1087,18 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         for (const block of (fsRow.schedule ?? [])) {
           const ct = String(block.coverType ?? '').toLowerCase();
           const covId = block.coveringEmployeeId as number | undefined;
-          // Cleaning / own-lunch blocks are performed by the floater themselves,
-          // so the off-floor person is the floater when no covering employee is set.
-          const offFloorEmpId = covId ?? ((ct === 'cleaning' || ct === 'own-lunch') ? (fsRow.employee_id as number | undefined) : undefined);
+          // Additional-duties blocks (legacy coverType 'programming' + roomId 'other')
+          // should not push the floater into an activity column; they render in
+          // Additional Duties instead.
+          const isAdditionalBlock = ct === 'additional' ||
+            (ct === 'programming' && block.roomId === 'other' && block.notes === 'Additional duties');
+          // Programming / cleaning / own-lunch blocks are performed by the floater
+          // themselves when no specific staff member is being covered.
+          const offFloorEmpId = covId ?? (
+            ((ct === 'programming' && !isAdditionalBlock) || ct === 'cleaning' || ct === 'own-lunch')
+              ? (fsRow.employee_id as number | undefined)
+              : undefined
+          );
           if (!offFloorEmpId) continue;
           const bStart = slotToMins(String(block.startTime ?? '00:00'));
           const bEnd   = slotToMins(String(block.endTime   ?? '00:00'));
@@ -1127,8 +1136,17 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         for (const block of (fsRow.schedule ?? [])) {
           const ct = String(block.coverType ?? '').toLowerCase();
           const covId = block.coveringEmployeeId as number | undefined;
-          // Cleaning / own-lunch blocks are performed by the floater themselves
-          const offFloorEmpId = covId ?? ((ct === 'cleaning' || ct === 'own-lunch') ? (fsRow.employee_id as number | undefined) : undefined);
+          // Additional-duties blocks (legacy coverType 'programming' + roomId 'other')
+          // are not off-floor activity; they render in Additional Duties.
+          const isAdditionalBlock = ct === 'additional' ||
+            (ct === 'programming' && block.roomId === 'other' && block.notes === 'Additional duties');
+          // Programming / cleaning / own-lunch blocks are performed by the floater
+          // themselves when no specific staff member is being covered.
+          const offFloorEmpId = covId ?? (
+            ((ct === 'programming' && !isAdditionalBlock) || ct === 'cleaning' || ct === 'own-lunch')
+              ? (fsRow.employee_id as number | undefined)
+              : undefined
+          );
           if (!offFloorEmpId) continue;
           const bStart = slotToMins(String(block.startTime ?? '00:00'));
           const bEnd   = slotToMins(String(block.endTime   ?? '00:00'));
@@ -1156,8 +1174,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       for (const fsRow of floatScheds) {
         const floatEmpId = fsRow.employee_id as number;
         if (!floatEmpId) continue;
+        const validRoomIds = new Set(rooms.map(r => r.id));
         for (const block of (fsRow.schedule ?? [])) {
-          if (!block.roomId) continue;
+          // Only real room IDs count as "covering a room". Sentinels like
+          // 'other' (Additional Duties / Cleaning) and 'director' (Programming)
+          // should not assign a float to a non-existent room column.
+          if (!block.roomId || !validRoomIds.has(block.roomId)) continue;
           const bStart = slotToMins(String(block.startTime ?? '00:00'));
           const bEnd   = slotToMins(String(block.endTime   ?? '00:00'));
           if (slotMins < bStart || slotMins >= bEnd) continue;
@@ -1517,6 +1539,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           fsRow.employee_id === r.employeeId &&
           (fsRow.schedule ?? []).some((b: any) => {
             if (b.type === 'end') return false;
+            // Additional-duties blocks (new coverType 'additional' or the
+            // legacy coverType 'programming' + roomId 'other' sentinel) should
+            // not hide the floater from the Additional Duties column.
+            const ct = String(b.coverType ?? '').toLowerCase();
+            if (ct === 'additional') return false;
+            if (ct === 'programming' && b.roomId === 'other' && b.notes === 'Additional duties') return false;
             const bS = slotToMins(String(b.startTime ?? '00:00'));
             const bE = slotToMins(String(b.endTime   ?? '00:00'));
             return slotMins2 >= bS && slotMins2 < bE;
