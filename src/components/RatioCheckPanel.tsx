@@ -1224,6 +1224,22 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [staffAtSlotMap, sessionData.staffMoves, dayAllocations, rooms, floatCoveringRoomBySlot]);
 
+  // Temporary diagnostic for Niulla Angela (emp 2266) missing from North Wollongong ratio check
+  const diagLoggedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (centreId !== 'north-wollongong' || date !== '2026-07-21') return;
+    if (rosters.length === 0 || Object.keys(staffAtSlotMap).length === 0) return;
+    const empId = 2266;
+    const slot = '08:30';
+    const key = `${centreId}:${date}:${rosters.length}:${Object.keys(staffAtSlotMap).length}`;
+    if (diagLoggedRef.current.has(key)) return;
+    diagLoggedRef.current.add(key);
+    const rosterEntry = rosters.find(r => r.employeeId === empId);
+    const inSlot = staffAtSlotMap[slot]?.find(s => s.employeeId === empId);
+    const primaryRoom = staffPrimaryRoomBySlot[slot]?.[empId];
+    console.log('[DIAG Niulla]', { empId, slot, rosterEntry, inSlot, primaryRoom, dayAlloc: dayAllocations[empId], override: sharedTimeOverrides[String(empId)], staffMove: morningData.staffMoves[`${empId}:${slot}`] });
+  }, [centreId, date, rosters, staffAtSlotMap, staffPrimaryRoomBySlot, dayAllocations, sharedTimeOverrides, morningData]);
+
   // -- Computed getters -------------------------------------------------------
 
   function getChildCount(slot: string, roomId: string): number {
