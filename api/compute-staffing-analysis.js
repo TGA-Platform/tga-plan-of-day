@@ -63,7 +63,9 @@ export default async function handler(req, res) {
 
   try {
     // 1. Get surplus/deficit for all centres from morning-briefing
-    const mbRes = await fetch(`${proto}://${host}/api/morning-briefing?date=${date}`);
+    // Always use the canonical production host so internal fetch works on preview deployments too
+    const mbHost = host.includes('vercel.app') ? 'plan.tga.edu.au' : host;
+    const mbRes = await fetch(`https://${mbHost}/api/morning-briefing?date=${date}`);
     if (!mbRes.ok) throw new Error(`morning-briefing failed: ${mbRes.status}`);
     const centres = await mbRes.json();
 
