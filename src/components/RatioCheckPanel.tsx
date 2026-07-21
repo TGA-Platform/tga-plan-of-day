@@ -1224,43 +1224,6 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [staffAtSlotMap, sessionData.staffMoves, dayAllocations, rooms, floatCoveringRoomBySlot]);
 
-  // Temporary diagnostic for Niulla Angela (emp 2266) missing from North Wollongong ratio check
-  const diagLastLogRef = useRef<number>(0);
-  useEffect(() => {
-    if (centreId !== 'north-wollongong' || date !== '2026-07-21') return;
-    if (rosters.length === 0 || Object.keys(staffAtSlotMap).length === 0) return;
-    const now = Date.now();
-    if (now - diagLastLogRef.current < 2000) return;
-    diagLastLogRef.current = now;
-    const empId = 2266;
-    const slot = '08:30';
-    const rosterEntry = rosters.find(r => r.employeeId === empId);
-    const inSlot = staffAtSlotMap[slot]?.find(s => s.employeeId === empId);
-    const primaryRoom = staffPrimaryRoomBySlot[slot]?.[empId];
-    const achRoom = rooms.find(r => r.id === 'nw_3_5');
-    const creRoom = rooms.find(r => r.id === 'nw_2_3b');
-    const inAch = achRoom ? getStaffForRoom(slot, achRoom).some(s => s.employeeId === empId) : false;
-    const inCre = creRoom ? getStaffForRoom(slot, creRoom).some(s => s.employeeId === empId) : false;
-    const offFloorSet = offFloorBySlot[slot] ?? new Set<number>();
-    const activitySet = offFloorStaffBySlot[slot];
-    const inProg = activitySet?.programming.some(s => s.employeeId === empId);
-    const inLunch = activitySet?.lunch.some(s => s.employeeId === empId);
-    const inClean = activitySet?.cleaning.some(s => s.employeeId === empId);
-    console.log('[DIAG Niulla]', {
-      empId, slot,
-      rosterEntryExists: !!rosterEntry,
-      inSlotExists: !!inSlot,
-      primaryRoom,
-      dayAlloc: dayAllocations[empId],
-      override: sharedTimeOverrides[String(empId)],
-      staffMove: morningData.staffMoves[`${empId}:${slot}`],
-      inAch, inCre,
-      offFloor: offFloorSet.has(empId),
-      inProg, inLunch, inClean,
-      allFloatCoverIds: Array.from(floatCoveringRoomBySlot[slot] ? Object.values(floatCoveringRoomBySlot[slot]).flat() : []),
-    });
-  });
-
   // -- Computed getters -------------------------------------------------------
 
   function getChildCount(slot: string, roomId: string): number {
@@ -1407,14 +1370,14 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     for (const slot of allSlots) {
       const available = staffAtSlotMap[slot] ?? [];
       const offFloor  = offFloorBySlot[slot] ?? new Set<number>();
-      const floatCovers = floatCoveringRoomBySlot[slot] ?? {};
-      const allFloatCoverIds = new Set(Object.values(floatCovers).flat());
       const claimed   = new Set<number>();
       for (const s of available) {
         if (offFloor.has(s.employeeId)) continue;
-        // Staff assigned to cover a room via Plan Day float schedule should appear
-        // in the covered room, not their natural/moved room.
-        if (allFloatCoverIds.has(s.employeeId)) continue;
+        // Staff whose primary room is a float-cover room should appear in that
+        // covered room, not be claimed back by their natural/moved room.
+        const primaryRoom = staffPrimaryRoomBySlot[slot]?.[s.employeeId];
+        const coveringPrimaryViaFloat = primaryRoom && (floatCoveringRoomBySlot[slot]?.[primaryRoom] ?? []).includes(s.employeeId);
+        if (coveringPrimaryViaFloat) continue;
         const mv = sessionData.staffMoves[`${s.employeeId}:${slot}`];
         if (mv === '__programming__' || mv === '__lunch__' || mv === '__cleaning__' || mv === '__additional__') continue;
         const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
@@ -1427,7 +1390,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [staffAtSlotMap, offFloorBySlot, floatCoveringRoomBySlot, sessionData.staffMoves, rooms]);
+  }, [staffAtSlotMap, offFloorBySlot, floatCoveringRoomBySlot, sessionData.staffMoves, rooms, staffPrimaryRoomBySlot]);
 
   /** Staff explicitly assigned to any family grouping at a slot */
   function getExplicitFGStaffIdsAtSlot(slot: string): Set<number> {
@@ -1447,7 +1410,6 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const offFloor = offFloorBySlot[slot] ?? new Set<number>();
     const slotFloatCovers = floatCoveringRoomBySlot[slot] ?? {};
     const floatCovers = slotFloatCovers[room.id] ?? [];
-    const allFloatCoverIds = new Set(Object.values(slotFloatCovers).flat());
     const explicitFgIds = getExplicitFGStaffIdsAtSlot(slot);
     // Exclude anyone manually placed in an activity column or float pool
     const inActivity = new Set<number>(
@@ -1460,9 +1422,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const rosterInRoom = available.filter(s => {
       if (offFloor.has(s.employeeId)) return false;
       if (inActivity.has(s.employeeId)) return false;
-      // If a staff is covering a room via the Plan Day float schedule, they should
-      // appear only in the covered room, not back in their natural/moved room.
-      if (allFloatCoverIds.has(s.employeeId)) return false;
+      // If a staff's assigned primary room is actually a float-cover room, they
+      // should only render in that covered room, not back in their natural/moved
+      // room. This skips actual float/ISS coverers while not hiding room staff
+      // who happen to have stale float_schedules rows.
+      const primaryRoom = staffPrimaryRoomBySlot[slot]?.[s.employeeId];
+      const coveringPrimaryViaFloat = primaryRoom && (floatCoveringRoomBySlot[slot]?.[primaryRoom] ?? []).includes(s.employeeId);
+      if (coveringPrimaryViaFloat) return false;
       // Staff explicitly assigned to a family grouping at this slot should only
       // appear in the family grouping cell, not in a regular room column.
       if (explicitFgIds.has(s.employeeId)) return false;
