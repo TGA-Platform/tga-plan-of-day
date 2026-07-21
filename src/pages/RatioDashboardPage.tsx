@@ -1195,7 +1195,45 @@ export default function RatioDashboardPage() {
     };
   }, [centre?.id, centre?.ownaName, centre?.name, date, roomStatuses, effectiveFloats, adStaff, children]);
 
-  // Persist the all-day Staffing Analysis figure.
+  // Currently-present Staffing Analysis — mirrors allDayStaffingAnalysis but uses
+  // effectiveRoomStatuses (showCurrentOnly=true) so it reflects signed-in children.
+  // Saved to present_* columns in Supabase alongside the all-day figure.
+  const presentStaffingAnalysis = useMemo(() => {
+    if (!centre?.id || !date || !Array.isArray(effectiveRoomStatuses)) return null;
+    const presentChildren = children.filter(c => {
+      if (!c.sign_in) return false;
+      if (c.sign_out) return false;
+      return true;
+    });
+    const presentCount = presentChildren.length;
+    const totalFloorStaff = effectiveRoomStatuses.reduce((sum, r) => sum + r.staffCount, 0);
+    const requiredStaff   = effectiveRoomStatuses.reduce((sum, r) => sum + r.requiredStaff, 0);
+    const shortageRooms   = effectiveRoomStatuses.filter(r => r.shortage > 0);
+    const surplusRooms    = effectiveRoomStatuses.filter(r => r.shortage < 0);
+    const totalRatioShortage      = shortageRooms.reduce((sum, r) => sum + r.shortage, 0);
+    const totalSurplus            = surplusRooms.reduce((sum, r) => sum + Math.abs(r.shortage), 0);
+    const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
+    const bufferRequired          = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
+    const roomNetSurplus          = Math.max(0, totalSurplus - totalRatioShortage);
+    const floatCount              = effectiveFloats.length;
+    const effectiveFloatCount     = floatCount + roomNetSurplus;
+    const adAvailable             = (presentCount > 0 && presentCount < 100) ? (adStaff ?? []).length : 0;
+    const totalFloatersNeeded     = Math.max(0, netShortageAfterRealloc + bufferRequired);
+    const casualsNeeded           = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
+    const floatSurplus            = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
+    return {
+      surplusVal:           casualsNeeded > 0 ? -casualsNeeded : floatSurplus,
+      casualsNeeded,
+      floatSurplus,
+      totalFloatersNeeded,
+      effectiveFloatCount,
+      roomNetSurplus,
+      requiredStaff,
+      childrenCount:        presentCount,
+    };
+  }, [centre?.id, date, effectiveRoomStatuses, effectiveFloats, adStaff, children]);
+
+  // Persist the all-day Staffing Analysis figure + currently-present figures.
   React.useEffect(() => {
     if (!allDayStaffingAnalysis) return;
     const payload = {
@@ -1204,6 +1242,19 @@ export default function RatioDashboardPage() {
         shortageRooms: allDayStaffingAnalysis.shortageRooms.map(r => ({ name: r.name, shortage: r.shortage })),
         surplusRooms: allDayStaffingAnalysis.surplusRooms.map(r => ({ name: r.name, surplus: r.surplus })),
       },
+      // Include present_* so the morning briefing / dashboard cards always have
+      // an accurate currently-present figure without waiting for the cron.
+      ...(presentStaffingAnalysis ? {
+        present_surplus_val:           presentStaffingAnalysis.surplusVal,
+        present_casuals_needed:        presentStaffingAnalysis.casualsNeeded,
+        present_float_surplus:         presentStaffingAnalysis.floatSurplus,
+        present_total_floaters_needed: presentStaffingAnalysis.totalFloatersNeeded,
+        present_effective_float_count: presentStaffingAnalysis.effectiveFloatCount,
+        present_room_net_surplus:      presentStaffingAnalysis.roomNetSurplus,
+        present_children_count:        presentStaffingAnalysis.childrenCount,
+        present_required_staff:        presentStaffingAnalysis.requiredStaff,
+        present_computed_at:           new Date().toISOString(),
+      } : {}),
     };
     // Strip non-serializable fields before sending.
     delete (payload as any).shortageRooms;
@@ -1217,7 +1268,7 @@ export default function RatioDashboardPage() {
       }).catch(err => console.warn('[RatioDashboard] staffing-analysis save failed:', err));
     }, 1500);
     return () => clearTimeout(t);
-  }, [allDayStaffingAnalysis]);
+  }, [allDayStaffingAnalysis, presentStaffingAnalysis]);
 
   const load = useCallback(async (forceRefresh = false) => {
     setLoading(true);

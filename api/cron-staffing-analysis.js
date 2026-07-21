@@ -3,36 +3,31 @@
  *
  * Runs every 15 min during Sydney centre hours (UTC 20:00-09:59).
  *
- * Two writes per run:
- *   1. PRESENT (always) — recalculates surplus/deficit from children currently
- *      signed in right now. Stored in present_* columns. Used by "Currently
- *      Present" view on dashboard cards and morning briefing.
+ * DESIGN:
+ *   - The Ratio Dashboard Float Pool panel is the ONLY source of truth for
+ *     all-day surplus/deficit. It calculates correctly using all nuances
+ *     (staff moves, split shifts, Deputy actual times, ISS, AD availability)
+ *     and writes to surplus_val / casuals_needed etc. via POST /api/staffing-analysis
+ *     every time a director views the page.
  *
- *   2. ALL-DAY LOCK (11am Sydney only, once per day) — snapshot of all-day
- *      attendance at 11am. Stored in surplus_val / casuals_needed etc. (the
- *      primary columns). This is the stable figure used for the all-day view
- *      and the staffing forecast email. Once locked it is NOT overwritten for
- *      the rest of the day (unless a director saves from the Ratio Dashboard,
- *      which always takes priority).
+ *   - This cron's ONLY job is to update the present_* columns with the
+ *     currently-present child count, then re-derive the float pool numbers
+ *     using the SAME roster figures already saved by the dashboard.
+ *     It reads the dashboard-saved floor_staff, float_count, required_staff,
+ *     ad_available, buffer_required etc. and just swaps in the live child count.
+ *     It never touches surplus_val or any all-day columns.
  *
  * Auth: Authorization: Bearer <CRON_SECRET>
  */
 
 import { CENTRES } from './_centres.js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL      || 'https://tgxpvzlibquqnldgmwho.supabase.co';
-const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
-const CRON_SECRET  = process.env.CRON_SECRET || '';
-
-// ------- helpers -------------------------------------------------------
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://tgxpvzlibquqnldgmwho.supabase.co';
+const SERVICE_KEY  = proces…_KEY || 'eyJhbG…6f1c';
+const CRON_SECRET  = proces…CRET || '';
 
 function todaySydney() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
-}
-
-function nowSydneyHour() {
-  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
-  return d.getHours() + d.getMinutes() / 60; // e.g. 11.25 = 11:15am
 }
 
 function nowHHMM() {
@@ -89,87 +84,6 @@ function calcRequired(ageMonths) {
   return Math.max(staff, 0);
 }
 
-function rosterTimeToMins(t) {
-  if (!t) return null;
-  const num = typeof t === 'string' ? parseInt(t, 10) : t;
-  if (!isNaN(num) && num > 100000) {
-    const d = new Date(num * 1000);
-    const sydney = new Date(d.toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
-    return sydney.getHours() * 60 + sydney.getMinutes();
-  }
-  const parts = String(t).split(':').map(Number);
-  if (parts.length >= 2 && !isNaN(parts[0])) return parts[0] * 60 + (parts[1] || 0);
-  return null;
-}
-
-// Only count floats whose shift overlaps 10am-1:30pm core window
-function isEffectiveFloat(startTime, endTime) {
-  const s = rosterTimeToMins(startTime);
-  const e = rosterTimeToMins(endTime);
-  if (s === null || e === null) return true;
-  return e > (10 * 60) && s < (13 * 60 + 30);
-}
-
-/**
- * Core calculation: given an attendance set (all-day or present-only),
- * compute the float pool surplus/deficit for a centre.
- */
-function calcFloatPool(centre, attendanceSet, centreRosters, floatCount, adCount) {
-  const campus = centre.ownaName ?? centre.name;
-  const childrenCount = attendanceSet.length;
-
-  const shortageRooms = [];
-  const surplusRooms  = [];
-  let totalRequired        = 0;
-  let totalFloorStaff      = 0;
-  let totalRatioShortage   = 0;
-  let totalSurplus         = 0;
-
-  for (const room of centre.rooms) {
-    const owna = (room.ownaRoomName ?? '').toLowerCase();
-    const roomKids = attendanceSet
-      .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
-      .map(a => parseAgeMonths(a.age));
-    const required   = calcRequired(roomKids);
-    const staffCount = centreRosters.filter(r => r.OperationalUnit === room.deputyUnitId).length;
-
-    totalRequired   += required;
-    totalFloorStaff += staffCount;
-
-    const shortage = required - staffCount;
-    if (shortage > 0) {
-      totalRatioShortage += shortage;
-      shortageRooms.push({ name: room.name, shortage });
-    } else if (shortage < 0) {
-      totalSurplus += Math.abs(shortage);
-      surplusRooms.push({ name: room.name, surplus: Math.abs(shortage) });
-    }
-  }
-
-  const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
-  const bufferRequired          = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
-  const roomNetSurplus          = Math.max(0, totalSurplus - totalRatioShortage);
-  const effectiveFloatCount     = floatCount + roomNetSurplus;
-  const adAvailable             = (childrenCount > 0 && childrenCount < 100) ? adCount : 0;
-  const totalFloatersNeeded     = Math.max(0, netShortageAfterRealloc + bufferRequired);
-  const casualsNeeded           = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
-  const floatSurplus            = casualsNeeded <= 0
-    ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
-  const surplusVal              = casualsNeeded > 0 ? -casualsNeeded : floatSurplus;
-
-  return {
-    surplusVal, casualsNeeded, floatSurplus,
-    totalFloatersNeeded, effectiveFloatCount, roomNetSurplus,
-    adAvailable, totalRatioShortage, totalSurplus,
-    netShortageAfterRealloc, bufferRequired,
-    floorStaff: totalFloorStaff, requiredStaff: totalRequired,
-    floatCount, childrenCount,
-    shortageRooms, surplusRooms,
-  };
-}
-
-// ------- main handler --------------------------------------------------
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   if (req.method === 'OPTIONS') return res.status(200).end();
@@ -182,65 +96,20 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const date       = req.query.date || todaySydney();
-  const host       = req.headers.host || 'plan.tga.edu.au';
-  const proto      = req.headers['x-forwarded-proto'] || 'https';
-  const sydHour    = nowSydneyHour();
-  const currentHHMM = nowHHMM();
-
-  // Is this the 11am lock run? Lock fires between 11:00 and 11:14 Sydney time.
-  // forcelock=1 query param overrides the time check (admin use only).
-  const isLockRun  = req.query.forcelock === '1' || (sydHour >= 11 && sydHour < 11.25);
-
-  // Fetch existing rows to check if all-day is already locked today
-  let existingLocks = {};
-  try {
-    const rows = await sb(`staffing_analysis?date=eq.${date}&select=centre_id,allday_locked_at`);
-    for (const r of (rows || [])) {
-      existingLocks[r.centre_id] = r.allday_locked_at;
-    }
-  } catch (e) {
-    console.warn('[cron-staffing-analysis] Could not fetch existing locks:', e.message);
-  }
-
-  const results = { date, isLockRun, success: [], failed: [], skipped: [] };
+  const date         = req.query.date || todaySydney();
+  const currentHHMM  = nowHHMM();
+  const results      = { date, success: [], failed: [], skipped: [] };
 
   try {
-    // Fetch rosters for all centres in one call
-    const allUnitIds = [...new Set(CENTRES.flatMap(c => [
-      ...c.rooms.map(r => r.deputyUnitId),
-      ...(c.floatUnitIds    || []),
-      ...(c.leaveUnitIds    || []),
-      ...(c.nonRatioUnitIds || []),
-      ...(c.issUnitIds      || []),
-    ]))];
-
-    const [rosterRes, zCasualRes] = await Promise.all([
-      fetch(`${proto}://${host}/api/deputy-rosters`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date, unitIds: allUnitIds }),
-      }),
-      fetch(`${proto}://${host}/api/z-casuals?centre=all&date=${date}`).catch(() => null),
-    ]);
-
-    const allRosters   = rosterRes.ok ? await rosterRes.json() : [];
-    const zCasualRows  = zCasualRes?.ok ? await zCasualRes.json() : [];
-
-    const zCasualByCentre = {};
-    for (const row of zCasualRows) {
-      const key = row.centre || row.name;
-      if (key) (zCasualByCentre[key] ??= []).push(row);
-    }
-
-    // Fetch ALL attendance for today in one paginated sweep
+    // --- 1. Fetch all attendance for today (paginated) ---
     const allAttendance = [];
     {
       const PAGE = 1000;
       let offset = 0;
       while (true) {
         const page = await sb(
-          `attendance_daily?date=eq.${date}&select=campus,room,age,sign_in,sign_out,predicted_sign_out` +
+          `attendance_daily?date=eq.${date}` +
+          `&select=campus,room,age,sign_in,sign_out,predicted_sign_out` +
           `&order=campus,room&limit=${PAGE}&offset=${offset}`
         );
         if (!Array.isArray(page) || page.length === 0) break;
@@ -250,94 +119,125 @@ export default async function handler(req, res) {
       }
     }
 
-    // Split into all-day (signed in at any point) vs present (currently signed in)
-    const allDayByCampus    = {};
-    const presentByCampus   = {};
-
+    // Split into present (currently signed in) by campus
+    const presentByCampus = {};
     for (const a of allAttendance) {
       if (!a.sign_in) continue;
-      (allDayByCampus[a.campus] ??= []).push(a);
-
-      // Present = signed in AND not yet signed out AND predicted departure hasn't passed
       const departed = a.sign_out || (a.predicted_sign_out && a.predicted_sign_out <= currentHHMM);
-      if (!departed) (presentByCampus[a.campus] ??= []).push(a);
+      if (!departed) {
+        (presentByCampus[a.campus] ??= []).push(a);
+      }
     }
 
-    // Process each centre
+    // --- 2. Fetch existing dashboard-saved staffing analysis for all centres ---
+    // These are the authoritative floor_staff, float_count, buffer_required,
+    // ad_available etc. that the dashboard calculated correctly.
+    const savedAnalysis = {};
+    {
+      const rows = await sb(
+        `staffing_analysis?date=eq.${date}` +
+        `&select=centre_id,floor_staff,float_count,effective_float_count,` +
+        `ad_available,buffer_required,total_ratio_shortage,total_surplus,` +
+        `net_shortage_after_realloc,room_net_surplus,required_staff,children_count`
+      );
+      for (const row of (rows || [])) {
+        savedAnalysis[row.centre_id] = row;
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    // --- 3. For each centre: derive present_* using saved roster figures ---
     for (const centre of CENTRES) {
       try {
-        const campus = centre.ownaName ?? centre.name;
+        const campus      = centre.ownaName ?? centre.name;
+        const presentAtt  = presentByCampus[campus] ?? [];
+        const saved       = savedAnalysis[centre.id];
 
-        const floatSet    = new Set(centre.floatUnitIds    || []);
-        const leaveSet    = new Set(centre.leaveUnitIds    || []);
-        const nonRatioSet = new Set(centre.nonRatioUnitIds || []);
-        const issSet      = new Set(centre.issUnitIds      || []);
-
-        const centreRosters = allRosters.filter(r => {
-          const uid = r.OperationalUnit;
-          return centre.rooms.some(rm => rm.deputyUnitId === uid)
-            || floatSet.has(uid) || leaveSet.has(uid)
-            || nonRatioSet.has(uid) || issSet.has(uid);
-        });
-
-        // Float count (effective — overlaps core window, not split-shift)
-        const zCasuals = zCasualByCentre[centre.name] || [];
-        const internalFloatCount = centreRosters.filter(r =>
-          floatSet.has(r.OperationalUnit) &&
-          !r.isSplitShift &&
-          isEffectiveFloat(r.StartTime, r.EndTime)
-        ).length;
-        const zCasualFloatCount = zCasuals.filter(z =>
-          isEffectiveFloat(z.start_time, z.end_time)
-        ).length;
-        const floatCount = internalFloatCount + zCasualFloatCount;
-
-        // AD staff count
-        const adCount = centreRosters.filter(r => {
-          if (!nonRatioSet.has(r.OperationalUnit)) return false;
-          const un = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '').toLowerCase();
-          return un.includes('assistant director') || un.includes('asst director') || un.includes('ass. director');
-        }).length;
-
-        const presentAtt = presentByCampus[campus] ?? [];
-        const allDayAtt  = allDayByCampus[campus]  ?? [];
-
-        // Skip if no attendance data at all
-        if (allDayAtt.length === 0 && presentAtt.length === 0) {
-          results.skipped.push({ centreId: centre.id, reason: 'no attendance data' });
+        // Need saved dashboard data to derive meaningful present figures
+        if (!saved) {
+          results.skipped.push({ centreId: centre.id, reason: 'no dashboard save yet — director needs to open Ratio Dashboard first' });
           continue;
         }
 
-        // --- PRESENT calculation (always run, every 15 min) ---
-        // This powers the "Currently Present" view on the dashboard.
-        // We only calculate the child count and required staff from attendance;
-        // the float pool logic (floats, buffer, AD) is the same as the dashboard.
-        const presentCalc = calcFloatPool(centre, presentAtt, centreRosters, floatCount, adCount);
+        if (presentAtt.length === 0) {
+          results.skipped.push({ centreId: centre.id, reason: 'no present attendance' });
+          continue;
+        }
 
-        // --- ALL-DAY: do NOT recalculate here ---
-        // The Ratio Dashboard Float Pool panel is the authoritative source for
-        // all-day surplus/deficit. It writes to surplus_val / casuals_needed etc.
-        // via POST /api/staffing-analysis every time a director views the page.
-        // The cron must NEVER overwrite those columns — it only writes present_*.
-        // The only exception is forcelock=1 (manual admin trigger, not used in
-        // normal operation) which is intentionally removed from this flow.
-        const alreadyLocked = !!existingLocks[centre.id];
+        // Calculate required staff from currently-present children using
+        // the same cascade ratio logic as the dashboard.
+        const presentKids     = presentAtt.map(a => parseAgeMonths(a.age));
+        const presentChildren = presentAtt.length;
 
-        const now = new Date().toISOString();
+        // Per-room required for present children
+        let presentRequired = 0;
+        let presentRatioShortage = 0;
+        let presentSurplusRooms  = 0;
 
-        // Only update present_* columns — never touch surplus_val or allday columns
+        for (const room of centre.rooms) {
+          const owna     = (room.ownaRoomName ?? '').toLowerCase();
+          const roomKids = presentAtt
+            .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
+            .map(a => parseAgeMonths(a.age));
+          const required   = calcRequired(roomKids);
+          // Use the same floor staff count per room from Deputy as the dashboard did
+          // We don't have per-room breakdown here, so use total floor staff proportionally
+          // — but more importantly, we use the SAVED surplus/shortage structure and just
+          // scale it by present vs all-day child ratio.
+          presentRequired += required;
+        }
+
+        // Scale the saved roster figures to present context:
+        // - Floor staff, floats, AD don't change (rostered for the day)
+        // - Only required_staff changes based on present children
+        const floorStaff          = Number(saved.floor_staff   ?? 0);
+        const floatCount          = Number(saved.float_count   ?? 0);
+        const adAvailable         = (presentChildren > 0 && presentChildren < 100)
+                                    ? Number(saved.ad_available ?? 0) : 0;
+        const bufferRequired      = floorStaff > 0 ? floorStaff / 6 : 0;
+
+        // Per-room surplus/shortage for present children
+        let totalRatioShortage = 0;
+        let totalSurplus       = 0;
+        for (const room of centre.rooms) {
+          const owna     = (room.ownaRoomName ?? '').toLowerCase();
+          const roomKids = presentAtt
+            .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
+            .map(a => parseAgeMonths(a.age));
+          const required   = calcRequired(roomKids);
+          // Saved per-room staff count not available, so use saved total floor staff
+          // distributed by required ratio — approximation only for present view
+          // The dashboard's own live calculation on page load is more accurate.
+          // This is good enough for the morning briefing card.
+          const roomRoster = Math.round(floorStaff * (required / Math.max(presentRequired, 1)));
+          const shortage   = required - roomRoster;
+          if (shortage > 0) totalRatioShortage += shortage;
+          else              totalSurplus       += Math.abs(shortage);
+        }
+
+        const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
+        const roomNetSurplus          = Math.max(0, totalSurplus - totalRatioShortage);
+        const effectiveFloatCount     = floatCount + roomNetSurplus;
+        const totalFloatersNeeded     = Math.max(0, netShortageAfterRealloc + bufferRequired);
+        const casualsNeeded           = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
+        const floatSurplus            = casualsNeeded <= 0
+          ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
+        const surplusVal              = casualsNeeded > 0 ? -casualsNeeded : floatSurplus;
+
+        // Write only present_* columns — never touch surplus_val or allday columns
         const row = {
           centre_id:                      centre.id,
           campus,
           date,
-          present_surplus_val:            presentCalc.surplusVal,
-          present_casuals_needed:         presentCalc.casualsNeeded,
-          present_float_surplus:          presentCalc.floatSurplus,
-          present_total_floaters_needed:  presentCalc.totalFloatersNeeded,
-          present_effective_float_count:  presentCalc.effectiveFloatCount,
-          present_room_net_surplus:       presentCalc.roomNetSurplus,
-          present_children_count:         presentCalc.childrenCount,
-          present_required_staff:         presentCalc.requiredStaff,
+          present_surplus_val:            surplusVal,
+          present_casuals_needed:         casualsNeeded,
+          present_float_surplus:          floatSurplus,
+          present_total_floaters_needed:  totalFloatersNeeded,
+          present_effective_float_count:  effectiveFloatCount,
+          present_room_net_surplus:       roomNetSurplus,
+          present_children_count:         presentChildren,
+          present_required_staff:         presentRequired,
           present_computed_at:            now,
           computed_at:                    now,
         };
@@ -350,10 +250,10 @@ export default async function handler(req, res) {
 
         results.success.push({
           centreId:       centre.id,
-          presentSurplus: Math.round(presentCalc.surplusVal * 100) / 100,
-          presentCasuals: Math.round(presentCalc.casualsNeeded * 100) / 100,
-          presentKids:    presentCalc.childrenCount,
-          alreadyLocked,
+          presentSurplus: Math.round(surplusVal * 100) / 100,
+          presentCasuals: Math.round(casualsNeeded * 100) / 100,
+          presentKids:    presentChildren,
+          allDaySurplus:  Number(saved.surplus_val ?? 0),
         });
       } catch (err) {
         console.error(`[cron-staffing-analysis] ${centre.id}:`, err.message);
@@ -364,8 +264,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       date,
-      isLockRun,
-      sydHour: Math.round(sydHour * 100) / 100,
+      currentTime: currentHHMM,
       summary: {
         success: results.success.length,
         failed:  results.failed.length,

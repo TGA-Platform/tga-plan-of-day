@@ -97,6 +97,16 @@ export default async function handler(req, res) {
         floatCount,
         childrenCount,
         data = {},
+        // Present-view figures saved alongside all-day by the dashboard
+        present_surplus_val,
+        present_casuals_needed,
+        present_float_surplus,
+        present_total_floaters_needed,
+        present_effective_float_count,
+        present_room_net_surplus,
+        present_children_count,
+        present_required_staff,
+        present_computed_at,
       } = body;
 
       if (!centreId || !date) {
@@ -126,6 +136,18 @@ export default async function handler(req, res) {
         allday_locked_at: new Date().toISOString(), // director save = authoritative lock
         computed_at: new Date().toISOString(),
         data: typeof data === 'string' ? data : JSON.stringify(data),
+        // Present-view figures — included when dashboard sends them
+        ...(present_surplus_val !== undefined ? {
+          present_surplus_val:            toNum(present_surplus_val),
+          present_casuals_needed:         toNum(present_casuals_needed),
+          present_float_surplus:          toNum(present_float_surplus),
+          present_total_floaters_needed:  toNum(present_total_floaters_needed),
+          present_effective_float_count:  toNum(present_effective_float_count),
+          present_room_net_surplus:       toNum(present_room_net_surplus),
+          present_children_count:         toInt(present_children_count),
+          present_required_staff:         toInt(present_required_staff),
+          present_computed_at:            present_computed_at ?? new Date().toISOString(),
+        } : {}),
       };
 
       const rows = await sb('staffing_analysis', {
