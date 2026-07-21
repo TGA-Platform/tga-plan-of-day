@@ -1219,8 +1219,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         }
         // 2. Day-level allocation from Plan view
         const dayMove = dayAllocations[s.employeeId];
-        if (dayMove && dayMove !== 'float' && dayMove !== 'support' && roomIds.has(dayMove)) {
-          byEmp[s.employeeId] = dayMove;
+        if (dayMove) {
+          if (roomIds.has(dayMove)) {
+            byEmp[s.employeeId] = dayMove;
+          } else {
+            // 'support', 'float', 'iss' etc. — not assigned to a room
+            byEmp[s.employeeId] = null;
+          }
           continue;
         }
         // 3. Natural roster room
