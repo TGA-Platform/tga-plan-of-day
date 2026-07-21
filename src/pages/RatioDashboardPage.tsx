@@ -1139,9 +1139,15 @@ export default function RatioDashboardPage() {
 
   // Effective support staff: those not dragged into a room
   const effectiveSupportStaff = useMemo((): RosteredStaff[] => {
-    const arr = !hasOverrides ? supportStaff : supportStaff.filter(s => !staffMoves[s.employeeId] || staffMoves[s.employeeId] === 'support');
-    return tagCasual(arr);
-  }, [supportStaff, staffMoves, hasOverrides, tagCasual]);
+    const base = !hasOverrides
+      ? supportStaff
+      : supportStaff.filter(s => !staffMoves[s.employeeId] || staffMoves[s.employeeId] === 'support');
+    // Float / ISS / EC staff whose day allocation is "support" also belong here.
+    const fromFloats = !hasOverrides ? [] : floats.filter(f => staffMoves[f.employeeId] === 'support');
+    const fromIss = !hasOverrides ? [] : issStaff.filter(s => staffMoves[s.employeeId] === 'support');
+    const fromEc = !hasOverrides ? [] : externalCasuals.filter(ec => staffMoves[ec.employeeId] === 'support');
+    return tagCasual([...base, ...fromFloats, ...fromIss, ...fromEc]);
+  }, [supportStaff, floats, issStaff, externalCasuals, staffMoves, hasOverrides, tagCasual]);
 
   // All-day Staffing Analysis figure. This is the source of truth shown in the
   // Float Pool panel and persisted for the forecast email + morning briefing.
