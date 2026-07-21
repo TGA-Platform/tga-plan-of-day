@@ -159,10 +159,11 @@ export default async function handler(req, res) {
     }
   }
 
-  // Fetch saved Plan of Day Staffing Analysis (all-day) for all centres.
+  // Fetch saved Plan of Day Staffing Analysis for all centres.
+  // Includes both all-day locked columns and present_* live columns.
   const staffingAnalysisByCentre = {};
   try {
-    const saRows = await sb(`staffing_analysis?date=eq.${date}&select=centre_id,surplus_val,casuals_needed,float_surplus,total_floaters_needed,effective_float_count,room_net_surplus,ad_available,total_ratio_shortage,total_surplus,net_shortage_after_realloc,buffer_required,floor_staff,required_staff,float_count,children_count`);
+    const saRows = await sb(`staffing_analysis?date=eq.${date}&select=centre_id,surplus_val,casuals_needed,float_surplus,total_floaters_needed,effective_float_count,room_net_surplus,ad_available,total_ratio_shortage,total_surplus,net_shortage_after_realloc,buffer_required,floor_staff,required_staff,float_count,children_count,allday_locked_at,present_surplus_val,present_casuals_needed,present_float_surplus,present_total_floaters_needed,present_effective_float_count,present_room_net_surplus,present_children_count,present_required_staff,present_computed_at`);
     for (const row of saRows) {
       staffingAnalysisByCentre[row.centre_id] = row;
     }
@@ -263,21 +264,37 @@ export default async function handler(req, res) {
     const allDayPool   = calcFloatPool(makeRoomData(campusAttendance), allDayKids.length);
     const presentPool  = calcFloatPool(makeRoomData(presentAttendance), presentKids.length);
 
-    // Override all-day values with the saved Plan of Day Staffing Analysis
-    // when available. The dashboard is the source of truth for this figure.
+    // Apply saved Supabase figures when available — they are the source of truth.
+    // All-day: use the locked 11am snapshot (surplus_val etc.) if locked;
+    //          otherwise use the pre-lock all-day calc already in allDayPool.
+    // Present: use present_* columns from Supabase if fresh (< 20 min old),
+    //          otherwise fall back to the freshly-computed presentPool.
     const sa = staffingAnalysisByCentre[centre.id];
     if (sa) {
-      allDayPool.casualsNeeded = Number(sa.casuals_needed ?? allDayPool.casualsNeeded);
-      allDayPool.floatSurplus = Number(sa.float_surplus ?? allDayPool.floatSurplus);
-      allDayPool.surplusVal = Number(sa.surplus_val ?? allDayPool.surplusVal);
-      allDayPool.totalFloatersNeeded = Number(sa.total_floaters_needed ?? allDayPool.totalFloatersNeeded);
-      allDayPool.effectiveFloatCount = Number(sa.effective_float_count ?? allDayPool.effectiveFloatCount);
-      allDayPool.roomNetSurplus = Number(sa.room_net_surplus ?? allDayPool.roomNetSurplus);
+      // All-day override — prefer locked snapshot when it exists
+      if (sa.allday_locked_at || sa.surplus_val != null) {
+        allDayPool.casualsNeeded      = Number(sa.casuals_needed      ?? allDayPool.casualsNeeded);
+        allDayPool.floatSurplus       = Number(sa.float_surplus       ?? allDayPool.floatSurplus);
+        allDayPool.surplusVal         = Number(sa.surplus_val         ?? allDayPool.surplusVal);
+        allDayPool.totalFloatersNeeded= Number(sa.total_floaters_needed ?? allDayPool.totalFloatersNeeded);
+        allDayPool.effectiveFloatCount= Number(sa.effective_float_count ?? allDayPool.effectiveFloatCount);
+        allDayPool.roomNetSurplus     = Number(sa.room_net_surplus    ?? allDayPool.roomNetSurplus);
+      }
+      // Present override — use Supabase present_* if available and recent (< 20 min)
+      const presentAge = sa.present_computed_at
+        ? (Date.now() - new Date(sa.present_computed_at).getTime()) / 60000 : Infinity;
+      if (sa.present_surplus_val != null && presentAge < 20) {
+        presentPool.casualsNeeded      = Number(sa.present_casuals_needed      ?? presentPool.casualsNeeded);
+        presentPool.floatSurplus       = Number(sa.present_float_surplus       ?? presentPool.floatSurplus);
+        presentPool.surplusVal         = Number(sa.present_surplus_val         ?? presentPool.surplusVal);
+        presentPool.totalFloatersNeeded= Number(sa.present_total_floaters_needed ?? presentPool.totalFloatersNeeded);
+        presentPool.effectiveFloatCount= Number(sa.present_effective_float_count ?? presentPool.effectiveFloatCount);
+        presentPool.roomNetSurplus     = Number(sa.present_room_net_surplus    ?? presentPool.roomNetSurplus);
+      }
     }
 
-    // The primary surplus/deficit values returned are ALL-DAY (matching the
-    // Ratio Dashboard Float Pool panel which is the source of truth).
-    // present* fields are also included for callers that want the live view.
+    // Primary return values: all-day (locked at 11am, source of truth for email/forecast).
+    // present.* sub-object holds currently-present figures for live dashboard cards.
     const totalRequired       = allDayPool.totalRequired;
     const totalFloatersNeeded = allDayPool.totalFloatersNeeded;
     const casualsNeeded       = allDayPool.casualsNeeded;

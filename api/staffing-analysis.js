@@ -59,9 +59,9 @@ export default async function handler(req, res) {
 
       let path;
       if (centreId) {
-        path = `staffing_analysis?centre_id=eq.${encodeURIComponent(centreId)}&date=eq.${encodeURIComponent(date)}&limit=1`;
+        path = `staffing_analysis?centre_id=eq.${encodeURIComponent(centreId)}&date=eq.${encodeURIComponent(date)}&select=*&limit=1`;
       } else {
-        path = `staffing_analysis?date=eq.${encodeURIComponent(date)}`;
+        path = `staffing_analysis?date=eq.${encodeURIComponent(date)}&select=*`;
       }
 
       const rows = await sb(path);
@@ -107,6 +107,7 @@ export default async function handler(req, res) {
         centre_id: centreId,
         campus: campus ?? centreId,
         date,
+        // All-day locked values — director save is always authoritative
         surplus_val: toNum(surplusVal),
         casuals_needed: toNum(casualsNeeded),
         float_surplus: toNum(floatSurplus),
@@ -122,6 +123,7 @@ export default async function handler(req, res) {
         required_staff: toInt(requiredStaff),
         float_count: toInt(floatCount),
         children_count: toInt(childrenCount),
+        allday_locked_at: new Date().toISOString(), // director save = authoritative lock
         computed_at: new Date().toISOString(),
         data: typeof data === 'string' ? data : JSON.stringify(data),
       };

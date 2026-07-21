@@ -1,24 +1,43 @@
 /**
  * /api/cron-staffing-analysis
  *
- * Server-side computation and Supabase write of the staffing_analysis table
- * for all centres. This ensures the surplus/deficit figures are always
- * populated for the morning briefing email and morning-briefing API,
- * regardless of whether any director opened the Ratio Dashboard that day.
+ * Runs every 15 min during Sydney centre hours (UTC 20:00-09:59).
  *
- * Called by: Vercel cron or OpenClaw cron job (Mon–Fri, 7:30am Sydney)
+ * Two writes per run:
+ *   1. PRESENT (always) — recalculates surplus/deficit from children currently
+ *      signed in right now. Stored in present_* columns. Used by "Currently
+ *      Present" view on dashboard cards and morning briefing.
+ *
+ *   2. ALL-DAY LOCK (11am Sydney only, once per day) — snapshot of all-day
+ *      attendance at 11am. Stored in surplus_val / casuals_needed etc. (the
+ *      primary columns). This is the stable figure used for the all-day view
+ *      and the staffing forecast email. Once locked it is NOT overwritten for
+ *      the rest of the day (unless a director saves from the Ratio Dashboard,
+ *      which always takes priority).
  *
  * Auth: Authorization: Bearer <CRON_SECRET>
  */
 
 import { CENTRES } from './_centres.js';
 
-const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
+const SUPABASE_URL = process.env.SUPABASE_URL      || 'https://tgxpvzlibquqnldgmwho.supabase.co';
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
 const CRON_SECRET  = process.env.CRON_SECRET || '';
 
+// ------- helpers -------------------------------------------------------
+
 function todaySydney() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date());
+}
+
+function nowSydneyHour() {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+  return d.getHours() + d.getMinutes() / 60; // e.g. 11.25 = 11:15am
+}
+
+function nowHHMM() {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Sydney' }));
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
 async function sb(path, options = {}) {
@@ -50,6 +69,7 @@ function parseAgeMonths(ageStr) {
 // Mirror calcRequiredStaff from ratioEngine.ts (with cascade)
 function calcRequired(ageMonths) {
   const valid = ageMonths.filter(a => a >= 0);
+  if (valid.length === 0) return 0;
   const groups = [
     { min: 0,  max: 24,       ratio: 4  },
     { min: 24, max: 36,       ratio: 5  },
@@ -82,16 +102,73 @@ function rosterTimeToMins(t) {
   return null;
 }
 
-// Only count floats whose shift overlaps the 10am-1:30pm core window
-// (matches the RatioDashboardPage effectiveFloats filter)
+// Only count floats whose shift overlaps 10am-1:30pm core window
 function isEffectiveFloat(startTime, endTime) {
   const s = rosterTimeToMins(startTime);
   const e = rosterTimeToMins(endTime);
   if (s === null || e === null) return true;
-  const WINDOW_START        = 10 * 60; // 10:00
-  const USEFUL_START_CUTOFF = 13 * 60 + 30; // 13:30
-  return e > WINDOW_START && s < USEFUL_START_CUTOFF;
+  return e > (10 * 60) && s < (13 * 60 + 30);
 }
+
+/**
+ * Core calculation: given an attendance set (all-day or present-only),
+ * compute the float pool surplus/deficit for a centre.
+ */
+function calcFloatPool(centre, attendanceSet, centreRosters, floatCount, adCount) {
+  const campus = centre.ownaName ?? centre.name;
+  const childrenCount = attendanceSet.length;
+
+  const shortageRooms = [];
+  const surplusRooms  = [];
+  let totalRequired        = 0;
+  let totalFloorStaff      = 0;
+  let totalRatioShortage   = 0;
+  let totalSurplus         = 0;
+
+  for (const room of centre.rooms) {
+    const owna = (room.ownaRoomName ?? '').toLowerCase();
+    const roomKids = attendanceSet
+      .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
+      .map(a => parseAgeMonths(a.age));
+    const required   = calcRequired(roomKids);
+    const staffCount = centreRosters.filter(r => r.OperationalUnit === room.deputyUnitId).length;
+
+    totalRequired   += required;
+    totalFloorStaff += staffCount;
+
+    const shortage = required - staffCount;
+    if (shortage > 0) {
+      totalRatioShortage += shortage;
+      shortageRooms.push({ name: room.name, shortage });
+    } else if (shortage < 0) {
+      totalSurplus += Math.abs(shortage);
+      surplusRooms.push({ name: room.name, surplus: Math.abs(shortage) });
+    }
+  }
+
+  const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
+  const bufferRequired          = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
+  const roomNetSurplus          = Math.max(0, totalSurplus - totalRatioShortage);
+  const effectiveFloatCount     = floatCount + roomNetSurplus;
+  const adAvailable             = (childrenCount > 0 && childrenCount < 100) ? adCount : 0;
+  const totalFloatersNeeded     = Math.max(0, netShortageAfterRealloc + bufferRequired);
+  const casualsNeeded           = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
+  const floatSurplus            = casualsNeeded <= 0
+    ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
+  const surplusVal              = casualsNeeded > 0 ? -casualsNeeded : floatSurplus;
+
+  return {
+    surplusVal, casualsNeeded, floatSurplus,
+    totalFloatersNeeded, effectiveFloatCount, roomNetSurplus,
+    adAvailable, totalRatioShortage, totalSurplus,
+    netShortageAfterRealloc, bufferRequired,
+    floorStaff: totalFloorStaff, requiredStaff: totalRequired,
+    floatCount, childrenCount,
+    shortageRooms, surplusRooms,
+  };
+}
+
+// ------- main handler --------------------------------------------------
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -105,14 +182,30 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const date = req.query.date || todaySydney();
-  const host  = req.headers.host || 'plan.tga.edu.au';
-  const proto = req.headers['x-forwarded-proto'] || 'https';
+  const date       = req.query.date || todaySydney();
+  const host       = req.headers.host || 'plan.tga.edu.au';
+  const proto      = req.headers['x-forwarded-proto'] || 'https';
+  const sydHour    = nowSydneyHour();
+  const currentHHMM = nowHHMM();
 
-  const results = { date, success: [], failed: [], skipped: [] };
+  // Is this the 11am lock run? Lock fires between 11:00 and 11:14 Sydney time.
+  const isLockRun  = sydHour >= 11 && sydHour < 11.25;
+
+  // Fetch existing rows to check if all-day is already locked today
+  let existingLocks = {};
+  try {
+    const rows = await sb(`staffing_analysis?date=eq.${date}&select=centre_id,allday_locked_at`);
+    for (const r of (rows || [])) {
+      existingLocks[r.centre_id] = r.allday_locked_at;
+    }
+  } catch (e) {
+    console.warn('[cron-staffing-analysis] Could not fetch existing locks:', e.message);
+  }
+
+  const results = { date, isLockRun, success: [], failed: [], skipped: [] };
 
   try {
-    // Fetch all rosters and all-day attendance in parallel
+    // Fetch rosters for all centres in one call
     const allUnitIds = [...new Set(CENTRES.flatMap(c => [
       ...c.rooms.map(r => r.deputyUnitId),
       ...(c.floatUnitIds    || []),
@@ -130,30 +223,43 @@ export default async function handler(req, res) {
       fetch(`${proto}://${host}/api/z-casuals?centre=all&date=${date}`).catch(() => null),
     ]);
 
-    const allRosters = rosterRes.ok ? await rosterRes.json() : [];
+    const allRosters   = rosterRes.ok ? await rosterRes.json() : [];
+    const zCasualRows  = zCasualRes?.ok ? await zCasualRes.json() : [];
 
-    const zCasualRows = zCasualRes?.ok ? await zCasualRes.json() : [];
     const zCasualByCentre = {};
     for (const row of zCasualRows) {
-      if (row.start_time && row.end_time && row.centre) {
-        (zCasualByCentre[row.centre] ??= []).push(row);
-      }
+      const key = row.centre || row.name;
+      if (key) (zCasualByCentre[key] ??= []).push(row);
     }
 
-    // Fetch all-day attendance (all centres, paginated)
+    // Fetch ALL attendance for today in one paginated sweep
     const allAttendance = [];
     {
       const PAGE = 1000;
       let offset = 0;
       while (true) {
         const page = await sb(
-          `attendance_daily?date=eq.${date}&select=campus,room,age,sign_in&order=campus,room&limit=${PAGE}&offset=${offset}`
+          `attendance_daily?date=eq.${date}&select=campus,room,age,sign_in,sign_out,predicted_sign_out` +
+          `&order=campus,room&limit=${PAGE}&offset=${offset}`
         );
         if (!Array.isArray(page) || page.length === 0) break;
-        allAttendance.push(...page.filter(r => r.sign_in));
+        allAttendance.push(...page);
         if (page.length < PAGE) break;
         offset += PAGE;
       }
+    }
+
+    // Split into all-day (signed in at any point) vs present (currently signed in)
+    const allDayByCampus    = {};
+    const presentByCampus   = {};
+
+    for (const a of allAttendance) {
+      if (!a.sign_in) continue;
+      (allDayByCampus[a.campus] ??= []).push(a);
+
+      // Present = signed in AND not yet signed out AND predicted departure hasn't passed
+      const departed = a.sign_out || (a.predicted_sign_out && a.predicted_sign_out <= currentHHMM);
+      if (!departed) (presentByCampus[a.campus] ??= []).push(a);
     }
 
     // Process each centre
@@ -161,120 +267,126 @@ export default async function handler(req, res) {
       try {
         const campus = centre.ownaName ?? centre.name;
 
-        // Rosters for this centre
-        const leaveSet    = new Set(centre.leaveUnitIds    || []);
         const floatSet    = new Set(centre.floatUnitIds    || []);
+        const leaveSet    = new Set(centre.leaveUnitIds    || []);
         const nonRatioSet = new Set(centre.nonRatioUnitIds || []);
         const issSet      = new Set(centre.issUnitIds      || []);
 
         const centreRosters = allRosters.filter(r => {
           const uid = r.OperationalUnit;
           return centre.rooms.some(rm => rm.deputyUnitId === uid)
-            || floatSet.has(uid)
-            || leaveSet.has(uid)
-            || nonRatioSet.has(uid)
-            || issSet.has(uid);
+            || floatSet.has(uid) || leaveSet.has(uid)
+            || nonRatioSet.has(uid) || issSet.has(uid);
         });
 
-        function unitType(uid) {
-          if (leaveSet.has(uid))    return 'leave';
-          if (floatSet.has(uid))    return 'float';
-          if (nonRatioSet.has(uid)) return 'support';
-          if (issSet.has(uid))      return 'iss';
-          if (centre.rooms.some(rm => rm.deputyUnitId === uid)) return 'room';
-          return 'other';
-        }
-
-        // Floor staff (room units)
-        const roomStaffByRoom = {};
-        for (const room of centre.rooms) {
-          roomStaffByRoom[room.deputyUnitId] = centreRosters.filter(r => r.OperationalUnit === room.deputyUnitId).length;
-        }
-        const totalFloorStaff = Object.values(roomStaffByRoom).reduce((s, n) => s + n, 0);
-
-        // Floats (effective only — shift overlaps core window, not split-shift)
+        // Float count (effective — overlaps core window, not split-shift)
         const zCasuals = zCasualByCentre[centre.name] || [];
         const internalFloatCount = centreRosters.filter(r =>
-          unitType(r.OperationalUnit) === 'float' &&
+          floatSet.has(r.OperationalUnit) &&
           !r.isSplitShift &&
           isEffectiveFloat(r.StartTime, r.EndTime)
         ).length;
-        const zCasualFloatCount = zCasuals.filter(z => isEffectiveFloat(z.start_time, z.end_time)).length;
+        const zCasualFloatCount = zCasuals.filter(z =>
+          isEffectiveFloat(z.start_time, z.end_time)
+        ).length;
         const floatCount = internalFloatCount + zCasualFloatCount;
 
-        // AD staff (for centres <100 children)
+        // AD staff count
         const adCount = centreRosters.filter(r => {
-          if (unitType(r.OperationalUnit) !== 'support') return false;
+          if (!nonRatioSet.has(r.OperationalUnit)) return false;
           const un = (r._DPMetaData?.OperationalUnitInfo?.OperationalUnitName ?? '').toLowerCase();
           return un.includes('assistant director') || un.includes('asst director') || un.includes('ass. director');
         }).length;
 
-        // All-day attendance for this campus
-        const campusAtt = allAttendance.filter(a => a.campus === campus);
-        const childrenCount = campusAtt.length;
-        if (childrenCount === 0) {
+        const presentAtt = presentByCampus[campus] ?? [];
+        const allDayAtt  = allDayByCampus[campus]  ?? [];
+
+        // Always skip if no data at all
+        if (allDayAtt.length === 0 && presentAtt.length === 0) {
           results.skipped.push({ centreId: centre.id, reason: 'no attendance data' });
           continue;
         }
 
-        // Per-room required staff (all-day, age-cascade)
-        const shortageRooms = [];
-        const surplusRooms  = [];
-        let totalRequired   = 0;
-        let totalRatioShortage = 0;
-        let totalSurplus       = 0;
+        // --- 1. PRESENT calculation (always run) ---
+        const presentCalc = calcFloatPool(centre, presentAtt, centreRosters, floatCount, adCount);
 
-        for (const room of centre.rooms) {
-          const owna = (room.ownaRoomName ?? '').toLowerCase();
-          const roomKids = campusAtt
-            .filter(a => owna && a.room && a.room.toLowerCase().includes(owna))
-            .map(a => parseAgeMonths(a.age));
-          const required  = calcRequired(roomKids);
-          const staffCount = roomStaffByRoom[room.deputyUnitId] ?? 0;
-          const shortage   = required - staffCount; // positive = short, negative = surplus
-
-          totalRequired += required;
-          if (shortage > 0) {
-            totalRatioShortage += shortage;
-            shortageRooms.push({ name: room.name, shortage });
-          } else if (shortage < 0) {
-            totalSurplus += Math.abs(shortage);
-            surplusRooms.push({ name: room.name, surplus: Math.abs(shortage) });
-          }
+        // --- 2. ALL-DAY LOCK calculation (only at 11am if not yet locked today) ---
+        const alreadyLocked = !!existingLocks[centre.id];
+        const shouldLock    = isLockRun && !alreadyLocked;
+        let allDayCalc      = null;
+        if (shouldLock) {
+          allDayCalc = calcFloatPool(centre, allDayAtt, centreRosters, floatCount, adCount);
         }
 
-        const netShortageAfterRealloc = Math.max(0, totalRatioShortage - totalSurplus);
-        const bufferRequired          = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
-        const roomNetSurplus          = Math.max(0, totalSurplus - totalRatioShortage);
-        const effectiveFloatCount     = floatCount + roomNetSurplus;
-        const adAvailable             = (childrenCount > 0 && childrenCount < 100) ? adCount : 0;
-        const totalFloatersNeeded     = Math.max(0, netShortageAfterRealloc + bufferRequired);
-        const casualsNeeded           = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
-        const floatSurplus            = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
-        const surplusVal              = casualsNeeded > 0 ? -casualsNeeded : floatSurplus;
+        const now = new Date().toISOString();
 
+        // Build upsert row — always update present_* columns
         const row = {
-          centre_id:                  centre.id,
+          centre_id:              centre.id,
           campus,
           date,
-          surplus_val:                surplusVal,
-          casuals_needed:             casualsNeeded,
-          float_surplus:              floatSurplus,
-          total_floaters_needed:      totalFloatersNeeded,
-          effective_float_count:      effectiveFloatCount,
-          room_net_surplus:           roomNetSurplus,
-          ad_available:               adAvailable,
-          total_ratio_shortage:       totalRatioShortage,
-          total_surplus:              totalSurplus,
-          net_shortage_after_realloc: netShortageAfterRealloc,
-          buffer_required:            bufferRequired,
-          floor_staff:                totalFloorStaff,
-          required_staff:             totalRequired,
-          float_count:                floatCount,
-          children_count:             childrenCount,
-          computed_at:                new Date().toISOString(),
-          data: JSON.stringify({ shortageRooms, surplusRooms }),
+          // present_* columns — updated every run
+          present_surplus_val:            presentCalc.surplusVal,
+          present_casuals_needed:         presentCalc.casualsNeeded,
+          present_float_surplus:          presentCalc.floatSurplus,
+          present_total_floaters_needed:  presentCalc.totalFloatersNeeded,
+          present_effective_float_count:  presentCalc.effectiveFloatCount,
+          present_room_net_surplus:       presentCalc.roomNetSurplus,
+          present_children_count:         presentCalc.childrenCount,
+          present_required_staff:         presentCalc.requiredStaff,
+          present_computed_at:            now,
+          computed_at:                    now,
         };
+
+        // all-day lock columns — only written at 11am and not yet locked
+        if (shouldLock && allDayCalc) {
+          row.surplus_val               = allDayCalc.surplusVal;
+          row.casuals_needed            = allDayCalc.casualsNeeded;
+          row.float_surplus             = allDayCalc.floatSurplus;
+          row.total_floaters_needed     = allDayCalc.totalFloatersNeeded;
+          row.effective_float_count     = allDayCalc.effectiveFloatCount;
+          row.room_net_surplus          = allDayCalc.roomNetSurplus;
+          row.ad_available              = allDayCalc.adAvailable;
+          row.total_ratio_shortage      = allDayCalc.totalRatioShortage;
+          row.total_surplus             = allDayCalc.totalSurplus;
+          row.net_shortage_after_realloc= allDayCalc.netShortageAfterRealloc;
+          row.buffer_required           = allDayCalc.bufferRequired;
+          row.floor_staff               = allDayCalc.floorStaff;
+          row.required_staff            = allDayCalc.requiredStaff;
+          row.float_count               = allDayCalc.floatCount;
+          row.children_count            = allDayCalc.childrenCount;
+          row.allday_locked_at          = now;
+          row.data = JSON.stringify({
+            shortageRooms: allDayCalc.shortageRooms,
+            surplusRooms:  allDayCalc.surplusRooms,
+          });
+        } else if (!alreadyLocked) {
+          // Before 11am: pre-populate all-day columns with all-day calc
+          // (so email/consumers have something before the lock fires)
+          // but don't set allday_locked_at yet.
+          const preLock = calcFloatPool(centre, allDayAtt, centreRosters, floatCount, adCount);
+          row.surplus_val               = preLock.surplusVal;
+          row.casuals_needed            = preLock.casualsNeeded;
+          row.float_surplus             = preLock.floatSurplus;
+          row.total_floaters_needed     = preLock.totalFloatersNeeded;
+          row.effective_float_count     = preLock.effectiveFloatCount;
+          row.room_net_surplus          = preLock.roomNetSurplus;
+          row.ad_available              = preLock.adAvailable;
+          row.total_ratio_shortage      = preLock.totalRatioShortage;
+          row.total_surplus             = preLock.totalSurplus;
+          row.net_shortage_after_realloc= preLock.netShortageAfterRealloc;
+          row.buffer_required           = preLock.bufferRequired;
+          row.floor_staff               = preLock.floorStaff;
+          row.required_staff            = preLock.requiredStaff;
+          row.float_count               = preLock.floatCount;
+          row.children_count            = preLock.childrenCount;
+          row.data = JSON.stringify({
+            shortageRooms: preLock.shortageRooms,
+            surplusRooms:  preLock.surplusRooms,
+          });
+        }
+        // If already locked (allday_locked_at is set): do NOT touch surplus_val etc.
+        // The Prefer header merge-duplicates will only update columns we include in the row.
 
         await sb('staffing_analysis', {
           method: 'POST',
@@ -283,12 +395,12 @@ export default async function handler(req, res) {
         });
 
         results.success.push({
-          centreId: centre.id,
-          surplusVal: Math.round(surplusVal * 100) / 100,
-          casualsNeeded: Math.round(casualsNeeded * 100) / 100,
-          children: childrenCount,
-          floor: totalFloorStaff,
-          floats: floatCount,
+          centreId:       centre.id,
+          presentSurplus: Math.round(presentCalc.surplusVal * 100) / 100,
+          presentCasuals: Math.round(presentCalc.casualsNeeded * 100) / 100,
+          presentKids:    presentCalc.childrenCount,
+          locked:         shouldLock,
+          alreadyLocked,
         });
       } catch (err) {
         console.error(`[cron-staffing-analysis] ${centre.id}:`, err.message);
@@ -299,6 +411,8 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       date,
+      isLockRun,
+      sydHour: Math.round(sydHour * 100) / 100,
       summary: {
         success: results.success.length,
         failed:  results.failed.length,

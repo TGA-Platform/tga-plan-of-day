@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS staffing_analysis (
   centre_id                 TEXT NOT NULL,
   campus                    TEXT,
   date                      DATE NOT NULL,
+  -- ALL-DAY LOCKED snapshot (set at 11am Sydney, or when director views dashboard)
   surplus_val               NUMERIC NOT NULL DEFAULT 0,
   casuals_needed            NUMERIC NOT NULL DEFAULT 0,
   float_surplus             NUMERIC NOT NULL DEFAULT 0,
@@ -34,10 +35,33 @@ CREATE TABLE IF NOT EXISTS staffing_analysis (
   required_staff            INTEGER NOT NULL DEFAULT 0,
   float_count               INTEGER NOT NULL DEFAULT 0,
   children_count            INTEGER NOT NULL DEFAULT 0,
+  allday_locked_at          TIMESTAMPTZ,
+  -- CURRENTLY PRESENT snapshot (updated every 15 min throughout the day)
+  present_surplus_val               NUMERIC,
+  present_casuals_needed            NUMERIC,
+  present_float_surplus             NUMERIC,
+  present_total_floaters_needed     NUMERIC,
+  present_effective_float_count     NUMERIC,
+  present_room_net_surplus          NUMERIC,
+  present_children_count            INTEGER,
+  present_required_staff            INTEGER,
+  present_computed_at               TIMESTAMPTZ,
   computed_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
   data                      JSONB NOT NULL DEFAULT '{}',
   PRIMARY KEY (centre_id, date)
 );
+
+-- Add present_* columns if they don't exist yet (safe to run on existing table)
+ALTER TABLE staffing_analysis ADD COLUMN IF NOT EXISTS allday_locked_at TIMESTAMPTZ;
+ALTER TABLE staffing_analysis ADD COLUMN IF NOT EXISTS present_surplus_val NUMERIC;
+ALTER TABLE staffing_analysis ADD COLUMN IF NOT EXISTS present_casuals_needed NUMERIC;
+ALTER TABLE staffing_analysis ADD COLUMN IF NOT EXISTS present_float_surplus NUMERIC;
+ALTER TABLE staffing_analysis ADD COLUMN IF NOT EXISTS present_total_floaters_needed NUMERIC;
+ALTER TABLE staffing_analysis ADD COLUMN IF NOT EXISTS present_effective_float_count NUMERIC;
+ALTER TABLE staffing_analysis ADD COLUMN IF NOT EXISTS present_room_net_surplus NUMERIC;
+ALTER TABLE staffing_analysis ADD COLUMN IF NOT EXISTS present_children_count INTEGER;
+ALTER TABLE staffing_analysis ADD COLUMN IF NOT EXISTS present_required_staff INTEGER;
+ALTER TABLE staffing_analysis ADD COLUMN IF NOT EXISTS present_computed_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS staffing_analysis_date_idx
   ON staffing_analysis (date);
