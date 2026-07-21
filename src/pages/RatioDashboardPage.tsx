@@ -1222,6 +1222,9 @@ export default function RatioDashboardPage() {
     const casualsNeeded           = Math.max(0, totalFloatersNeeded - effectiveFloatCount - adAvailable);
     const floatSurplus            = casualsNeeded <= 0 ? (effectiveFloatCount + adAvailable - totalFloatersNeeded) : 0;
     return {
+      centreId:             centre.id,
+      campus:               centre.ownaName ?? centre.name,
+      date,
       surplusVal:           casualsNeeded > 0 ? -casualsNeeded : floatSurplus,
       casualsNeeded,
       floatSurplus,
@@ -1231,44 +1234,75 @@ export default function RatioDashboardPage() {
       requiredStaff,
       childrenCount:        presentCount,
     };
-  }, [centre?.id, date, effectiveRoomStatuses, effectiveFloats, adStaff, children]);
+  }, [centre?.id, centre?.ownaName, centre?.name, date, effectiveRoomStatuses, effectiveFloats, adStaff, children]);
 
-  // Persist the all-day Staffing Analysis figure + currently-present figures.
-  React.useEffect(() => {
-    if (!allDayStaffingAnalysis) return;
-    const payload = {
+  // Save staffing analysis to Supabase.
+  // - present_* columns: saved immediately on load, then every 15 min from the
+  //   currently-present calculation (the Float Pool panel numbers right now).
+  // - all-day columns: saved at 11am using the present figures at that moment
+  //   (locked for the day). Before/after 11am the all-day columns are left alone
+  //   once locked — only present_* keeps updating.
+  const saveStaffingAnalysis = React.useCallback((opts: { isLock: boolean }) => {
+    if (!presentStaffingAnalysis) return;
+    const now = new Date();
+    const sydHour = parseFloat(now.toLocaleString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: false, timeZone: 'Australia/Sydney' }).replace(':', '.'));
+    const isLockTime = sydHour >= 11 && sydHour < 11.25;
+    const shouldLock = opts.isLock || isLockTime;
+
+    // present_* always uses the live currently-present calculation
+    const presentFields = {
+      present_surplus_val:           presentStaffingAnalysis.surplusVal,
+      present_casuals_needed:        presentStaffingAnalysis.casualsNeeded,
+      present_float_surplus:         presentStaffingAnalysis.floatSurplus,
+      present_total_floaters_needed: presentStaffingAnalysis.totalFloatersNeeded,
+      present_effective_float_count: presentStaffingAnalysis.effectiveFloatCount,
+      present_room_net_surplus:      presentStaffingAnalysis.roomNetSurplus,
+      present_children_count:        presentStaffingAnalysis.childrenCount,
+      present_required_staff:        presentStaffingAnalysis.requiredStaff,
+      present_computed_at:           now.toISOString(),
+    };
+
+    // all-day lock: at 11am, use present figures as the all-day snapshot
+    const allDayFields = shouldLock && allDayStaffingAnalysis ? {
       ...allDayStaffingAnalysis,
       data: {
         shortageRooms: allDayStaffingAnalysis.shortageRooms.map(r => ({ name: r.name, shortage: r.shortage })),
-        surplusRooms: allDayStaffingAnalysis.surplusRooms.map(r => ({ name: r.name, surplus: r.surplus })),
+        surplusRooms:  allDayStaffingAnalysis.surplusRooms.map(r => ({ name: r.name, surplus: r.surplus })),
       },
-      // Include present_* so the morning briefing / dashboard cards always have
-      // an accurate currently-present figure without waiting for the cron.
-      ...(presentStaffingAnalysis ? {
-        present_surplus_val:           presentStaffingAnalysis.surplusVal,
-        present_casuals_needed:        presentStaffingAnalysis.casualsNeeded,
-        present_float_surplus:         presentStaffingAnalysis.floatSurplus,
-        present_total_floaters_needed: presentStaffingAnalysis.totalFloatersNeeded,
-        present_effective_float_count: presentStaffingAnalysis.effectiveFloatCount,
-        present_room_net_surplus:      presentStaffingAnalysis.roomNetSurplus,
-        present_children_count:        presentStaffingAnalysis.childrenCount,
-        present_required_staff:        presentStaffingAnalysis.requiredStaff,
-        present_computed_at:           new Date().toISOString(),
-      } : {}),
-    };
-    // Strip non-serializable fields before sending.
-    delete (payload as any).shortageRooms;
-    delete (payload as any).surplusRooms;
+      allday_locked_at: now.toISOString(),
+    } : {};
 
-    const t = setTimeout(() => {
-      fetch('/api/staffing-analysis', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }).catch(err => console.warn('[RatioDashboard] staffing-analysis save failed:', err));
-    }, 1500);
+    const payload = { ...allDayFields, ...presentFields };
+    if ((payload as any).shortageRooms) delete (payload as any).shortageRooms;
+    if ((payload as any).surplusRooms)  delete (payload as any).surplusRooms;
+
+    // Always include identity fields
+    if (!('centreId' in payload)) {
+      (payload as any).centreId = presentStaffingAnalysis.centreId ?? centre?.id;
+      (payload as any).campus   = presentStaffingAnalysis.campus   ?? centre?.ownaName ?? centre?.name;
+      (payload as any).date     = date;
+    }
+
+    fetch('/api/staffing-analysis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(err => console.warn('[RatioDashboard] staffing-analysis save failed:', err));
+  }, [presentStaffingAnalysis, allDayStaffingAnalysis, centre, date]);
+
+  // Save on initial load (after 1.5s debounce)
+  React.useEffect(() => {
+    if (!presentStaffingAnalysis) return;
+    const t = setTimeout(() => saveStaffingAnalysis({ isLock: false }), 1500);
     return () => clearTimeout(t);
-  }, [allDayStaffingAnalysis, presentStaffingAnalysis]);
+  }, [presentStaffingAnalysis, saveStaffingAnalysis]);
+
+  // Save every 15 min while the page is open
+  React.useEffect(() => {
+    if (!presentStaffingAnalysis) return;
+    const interval = setInterval(() => saveStaffingAnalysis({ isLock: false }), 15 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [presentStaffingAnalysis, saveStaffingAnalysis]);
 
   const load = useCallback(async (forceRefresh = false) => {
     setLoading(true);
