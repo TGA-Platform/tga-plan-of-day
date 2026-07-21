@@ -275,15 +275,17 @@ export default async function handler(req, res) {
       allDayPool.roomNetSurplus = Number(sa.room_net_surplus ?? allDayPool.roomNetSurplus);
     }
 
-    // Default the report to currently-present, as requested.
-    const totalRequired       = presentPool.totalRequired;
-    const totalFloatersNeeded = presentPool.totalFloatersNeeded;
-    const casualsNeeded       = presentPool.casualsNeeded;
-    const floatSurplus        = presentPool.floatSurplus;
-    const surplusVal          = presentPool.surplusVal;
-    const effectiveFloatCount = presentPool.effectiveFloatCount;
-    const roomNetSurplus      = presentPool.roomNetSurplus;
-    const adAvailable         = (presentKids.length > 0 && presentKids.length < 100) ? adCount : 0;
+    // The primary surplus/deficit values returned are ALL-DAY (matching the
+    // Ratio Dashboard Float Pool panel which is the source of truth).
+    // present* fields are also included for callers that want the live view.
+    const totalRequired       = allDayPool.totalRequired;
+    const totalFloatersNeeded = allDayPool.totalFloatersNeeded;
+    const casualsNeeded       = allDayPool.casualsNeeded;
+    const floatSurplus        = allDayPool.floatSurplus;
+    const surplusVal          = allDayPool.surplusVal;
+    const effectiveFloatCount = allDayPool.effectiveFloatCount;
+    const roomNetSurplus      = allDayPool.roomNetSurplus;
+    const adAvailable         = (allDayKids.length > 0 && allDayKids.length < 100) ? adCount : 0;
 
     const roomAbsent = [...absentIds].filter(id => staffIds.has(id)).length;
 
