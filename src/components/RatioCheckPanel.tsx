@@ -1508,6 +1508,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       // an active schedule block (covering a room, on lunch, programming etc).
       // If they're on shift but have NO active block (e.g. plan day didn't cover
       // the full shift), show them here so they're visible and assignable.
+      // 'end' blocks are just shift-end markers and must not hide the floater.
       const centreConfig2 = CENTRES.find(c => c.id === centreId);
       const floatUnitIds2 = new Set(centreConfig2?.floatUnitIds ?? []);
       if (floatUnitIds2.has(r.unitId)) {
@@ -1515,6 +1516,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         const hasActiveBlock = floatScheds.some(fsRow =>
           fsRow.employee_id === r.employeeId &&
           (fsRow.schedule ?? []).some((b: any) => {
+            if (b.type === 'end') return false;
             const bS = slotToMins(String(b.startTime ?? '00:00'));
             const bE = slotToMins(String(b.endTime   ?? '00:00'));
             return slotMins2 >= bS && slotMins2 < bE;
