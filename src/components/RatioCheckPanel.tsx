@@ -540,8 +540,28 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       if (!entry.lunchStart || !entry.lunchEnd) continue;
       map[entry.employeeId] = { lunchStart: entry.lunchStart, lunchEnd: entry.lunchEnd };
     }
+    // If no saved lunch schedule exists, derive planned breaks from float_schedules
+    // coverage blocks so Ratio Check still shows lunch chips for today.
+    if (Object.keys(map).length === 0) {
+      const rosterById = new Map<number, RosteredStaff>();
+      for (const r of rosters) {
+        if (!rosterById.has(r.employeeId)) rosterById.set(r.employeeId, r);
+      }
+      for (const fsRow of floatScheds) {
+        for (const block of (fsRow.schedule ?? [])) {
+          const ct = String(block.coverType ?? '').toLowerCase();
+          if (ct !== 'lunch' && ct !== 'own-lunch') continue;
+          const coveredId = block.coveringEmployeeId as number | undefined;
+          const empId = coveredId ?? fsRow.employee_id;
+          if (!empId || map[empId]) continue;
+          const staff = rosterById.get(empId);
+          if (!staff) continue;
+          map[empId] = { lunchStart: String(block.startTime ?? ''), lunchEnd: String(block.endTime ?? '') };
+        }
+      }
+    }
     return map;
-  }, [lunchSchedule]);
+  }, [lunchSchedule, floatScheds, rosters]);
 
   const sessionData    = activeSession === 'morning' ? morningData : activeSession === 'midday' ? middayData : afternoonData;
   const setSessionData = activeSession === 'morning' ? setMorningData : activeSession === 'midday' ? setMiddayData : setAfternoonData;
