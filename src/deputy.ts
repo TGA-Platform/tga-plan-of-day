@@ -44,12 +44,12 @@ export async function fetchEmployeeNames(ids: number[]): Promise<Record<number, 
   return result;
 }
 
-export async function fetchRosters(date: string, unitIds: number[], force = false): Promise<RosteredStaff[]> {
+export async function fetchRosters(date: string, unitIds: number[], force = false, centreId?: string): Promise<RosteredStaff[]> {
   try {
     const res = await fetch('/api/deputy-rosters', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, unitIds, ...(force ? { force: true } : {}) }),
+      body: JSON.stringify({ date, unitIds, ...(force ? { force: true } : {}), ...(centreId ? { centre: centreId } : {}) }),
     });
     
     if (!res.ok) {

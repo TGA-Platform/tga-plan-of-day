@@ -77,9 +77,11 @@ export default async function handler(req, res) {
     }).catch(() => {}); // ignore write errors
   }
 
-  // ── 3. Filter to requested unit IDs (client-side, same as before) ────────
+  // ── 3. Filter to requested unit IDs (client-side, same as before)
+  //    Always keep any employee referenced in float_schedules so cover staff
+  //    rostered under non-ratio units (e.g. Assistant Director) still appear.
   const filtered = unitSet.size > 0
-    ? allRosters.filter(r => unitSet.has(r.OperationalUnit))
+    ? allRosters.filter(r => unitSet.has(r.OperationalUnit) || floatEmployeeIds.has(r.Employee))
     : allRosters;
 
   // ── 4. Convert unix timestamps to HH:MM (Sydney) and dedup split shifts ──

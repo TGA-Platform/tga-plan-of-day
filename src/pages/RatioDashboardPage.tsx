@@ -1126,7 +1126,7 @@ export default function RatioDashboardPage() {
         useFutureEnrolled
           ? Promise.resolve([])
           : withCache(attKey, () => fetch(`/api/attendance?campus=${encodeURIComponent(campusName)}&date=${historicalDate}`).then(r => r.json())),
-        withCache(rosterKey, () => fetchRosters(date, allUnitIds, forceRefresh)),
+        withCache(rosterKey, () => fetchRosters(date, allUnitIds, forceRefresh, selectedCentreId)),
         withCache(forecastKey, () => fetch(`/api/room-forecast?campus=${encodeURIComponent(campusName)}&date=${date}`).then(r => r.json()).catch(() => null), 300000),
       ]);
       setForecast(forecastRes ?? null);
