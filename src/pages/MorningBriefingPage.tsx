@@ -51,13 +51,10 @@ interface CentreCard {
   casualsNeeded:       number;    // all-day view
   floatSurplusPresent: number;    // floats+AD available minus floaters needed (present view)
   casualsNeededPresent: number;   // present view
-  floatSurplusExpected: number;   // floats+AD available minus floaters needed (expected/day view)
-  casualsNeededExpected: number;  // expected/day view
   effectiveFloatCount: number;   // floats + room net surplus (surplus room staff act as floats)
   roomNetSurplus:      number;   // net room surplus carried into float pool
   status:           'green' | 'amber' | 'red' | 'unknown';
   statusPresent:    'green' | 'amber' | 'red' | 'unknown';
-  statusExpected:   'green' | 'amber' | 'red' | 'unknown';
 }
 
 function fmtFTE(n: number): string {
@@ -410,15 +407,6 @@ export default function MorningBriefingPage() {
         const allDayPool  = calcFloatPool(roomDataAllDay, kids.length, allDayStats.floatCount, allDayStats.adCount);
         const presentPool = calcFloatPool(roomDataPresent, presentKids.length, presentStats.floatCount, presentStats.adCount);
 
-        // Expected/day view: scale the all-day per-room required by the expected/all-day ratio
-        // so surplus/deficit reflects expected children vs today's full roster.
-        const expectedRatio = required > 0 ? requiredExpected / required : 1;
-        const roomDataExpected = roomDataAllDay.map(r => ({
-          required: Math.max(0, Math.round(r.required * expectedRatio)),
-          staffCount: r.staffCount,
-        }));
-        const expectedPool = calcFloatPool(roomDataExpected, expectedCount, allDayStats.floatCount, allDayStats.adCount);
-
         // Override all-day values with the saved Plan of Day Staffing Analysis
         // when available. The dashboard is the source of truth for this figure.
         const sa = staffingAnalysisByCentre[centre.id];
@@ -430,9 +418,7 @@ export default function MorningBriefingPage() {
           allDayPool.roomNetSurplus = Number(sa.room_net_surplus ?? allDayPool.roomNetSurplus);
         }
 
-        const poolToUse   = viewMode === 'present' ? presentPool
-          : viewMode === 'day' ? expectedPool
-          : allDayPool;
+        const poolToUse   = viewMode === 'present' ? presentPool : allDayPool;
 
         if (centre.id === 'spring-farm') {
           console.log('[briefing-debug] Spring Farm', {
@@ -452,10 +438,6 @@ export default function MorningBriefingPage() {
         const statusPresent: CentreCard['statusPresent'] = presentKids.length === 0 ? 'unknown'
           : statusShortagePresent > 0   ? 'red'
           : statusShortagePresent === 0 ? 'amber'
-          : 'green';
-        const statusExpected: CentreCard['statusExpected'] = expectedCount <= 0 ? 'unknown'
-          : (requiredExpected - totalAvailable) > 0   ? 'red'
-          : (requiredExpected - totalAvailable) === 0 ? 'amber'
           : 'green';
 
         result.push({
@@ -486,13 +468,10 @@ export default function MorningBriefingPage() {
           casualsNeeded:      allDayPool.casualsNeeded,
           floatSurplusPresent:  presentPool.floatSurplus,
           casualsNeededPresent: presentPool.casualsNeeded,
-          floatSurplusExpected:  expectedPool.floatSurplus,
-          casualsNeededExpected: expectedPool.casualsNeeded,
           effectiveFloatCount:  poolToUse.effectiveFloatCount,
           roomNetSurplus:       poolToUse.roomNetSurplus,
           status,
           statusPresent,
-          statusExpected,
         });
       }
 
@@ -545,8 +524,6 @@ export default function MorningBriefingPage() {
     : cards.reduce((s,c) => s+c.requiredStaff, 0);
   const totalCasuals   = viewMode === 'present'
     ? cards.reduce((s,c) => s+c.casualsNeededPresent, 0)
-    : viewMode === 'day'
-    ? cards.reduce((s,c) => s+c.casualsNeededExpected, 0)
     : cards.reduce((s,c) => s+c.casualsNeeded, 0);
   void totalRequired; // used in per-card calculations
 
@@ -674,8 +651,8 @@ export default function MorningBriefingPage() {
               onClick={() => navigate(`/ratio?centre=${card.centreId}`)}
               className="rounded-2xl border shadow-sm overflow-hidden cursor-pointer transition-all hover:shadow-md"
               style={{
-                borderColor: (viewMode === 'present' ? card.statusPresent : viewMode === 'day' ? card.statusExpected : card.status) === 'red' ? '#fca5a5'
-                  : (viewMode === 'present' ? card.statusPresent : viewMode === 'day' ? card.statusExpected : card.status) === 'amber' ? '#fcd34d'
+                borderColor: (viewMode === 'present' ? card.statusPresent : card.status) === 'red' ? '#fca5a5'
+                  : (viewMode === 'present' ? card.statusPresent : card.status) === 'amber' ? '#fcd34d'
                   : '#E2F1DA',
                 backgroundColor: 'white',
               }}
@@ -683,19 +660,19 @@ export default function MorningBriefingPage() {
               {/* Card header */}
               <div className="px-5 py-3 flex items-center justify-between"
                 style={{
-                  backgroundColor: (viewMode === 'present' ? card.statusPresent : viewMode === 'day' ? card.statusExpected : card.status) === 'red' ? '#fef2f2'
-                    : (viewMode === 'present' ? card.statusPresent : viewMode === 'day' ? card.statusExpected : card.status) === 'amber' ? '#fffbeb'
+                  backgroundColor: (viewMode === 'present' ? card.statusPresent : card.status) === 'red' ? '#fef2f2'
+                    : (viewMode === 'present' ? card.statusPresent : card.status) === 'amber' ? '#fffbeb'
                     : '#F5FAF3',
                 }}>
                 <div>
                   <div className="font-bold text-sm" style={{ color: '#2d5c18' }}>{card.centreName}</div>
-                  {(viewMode === 'present' ? card.statusPresent : viewMode === 'day' ? card.statusExpected : card.status) !== 'unknown' && (
+                  {(viewMode === 'present' ? card.statusPresent : card.status) !== 'unknown' && (
                     <div className="text-xs mt-0.5" style={{ color: '#596570' }}>
-                      {viewMode === 'present' ? card.requiredPresent : viewMode === 'day' ? card.requiredExpected : card.requiredStaff} staff required
+                      {viewMode === 'present' ? card.requiredPresent : card.requiredStaff} staff required
                     </div>
                   )}
                 </div>
-                <StatusPill status={viewMode === 'present' ? card.statusPresent : viewMode === 'day' ? card.statusExpected : card.status} />
+                <StatusPill status={viewMode === 'present' ? card.statusPresent : card.status} />
               </div>
 
               {/* Stats */}
@@ -708,13 +685,10 @@ export default function MorningBriefingPage() {
                   : viewMode === 'day'     ? card.requiredExpected
                   : card.requiredStaff;
                 // Surplus = float pool surplus from staffing analysis (floats+AD minus floaters needed)
-                // Match the view mode: present view uses present-based surplus, day view uses expected-based surplus, all-day uses all-day surplus.
-                const viewCasualsNeeded = viewMode === 'present' ? card.casualsNeededPresent
-                  : viewMode === 'day' ? card.casualsNeededExpected
-                  : card.casualsNeeded;
-                const viewFloatSurplus  = viewMode === 'present' ? card.floatSurplusPresent
-                  : viewMode === 'day' ? card.floatSurplusExpected
-                  : card.floatSurplus;
+                // Match the view mode: present view uses present-based surplus, all-day uses all-day surplus.
+                const isPresentView = viewMode === 'present';
+                const viewCasualsNeeded = isPresentView ? card.casualsNeededPresent : card.casualsNeeded;
+                const viewFloatSurplus  = isPresentView ? card.floatSurplusPresent : card.floatSurplus;
                 const hasCasuals = viewCasualsNeeded > 0;
                 const surplusVal = hasCasuals ? -viewCasualsNeeded : viewFloatSurplus;
                 const shortfall  = surplusVal < 0;
@@ -739,14 +713,14 @@ export default function MorningBriefingPage() {
                     {/* 3. Rostered / Signed in */}
                     <div className="text-center">
                       <div className="text-xl font-bold" style={{ color: '#050505' }}>
-                        {viewMode === 'present' ? card.staffRosteredPresent : card.staffRostered}
+                        {isPresentView ? card.staffRosteredPresent : card.staffRostered}
                       </div>
                       <div className="text-xs" style={{ color: '#596570' }}>
-                        {viewMode === 'present' ? 'Signed in' : 'Rostered'}
+                        {isPresentView ? 'Signed in' : 'Rostered'}
                       </div>
-                      {(viewMode === 'present' ? card.staffAbsentPresent : card.staffAbsent) > 0 && (
+                      {(isPresentView ? card.staffAbsentPresent : card.staffAbsent) > 0 && (
                         <div className="text-xs" style={{ color: '#dc2626' }}>
-                          {viewMode === 'present' ? card.staffAbsentPresent : card.staffAbsent} absent
+                          {isPresentView ? card.staffAbsentPresent : card.staffAbsent} absent
                         </div>
                       )}
                     </div>
@@ -770,15 +744,15 @@ export default function MorningBriefingPage() {
               <div
                 className="px-5 py-2.5 border-t flex items-center justify-between"
                 style={{
-                  borderColor: (viewMode === 'present' ? card.casualsNeededPresent : viewMode === 'day' ? card.casualsNeededExpected : card.casualsNeeded) > 0 ? '#fca5a5' : '#D0E8B8',
-                  backgroundColor: (viewMode === 'present' ? card.casualsNeededPresent : viewMode === 'day' ? card.casualsNeededExpected : card.casualsNeeded) > 0 ? '#fef2f2' : '#f2f9e8',
+                  borderColor: (viewMode === 'present' ? card.casualsNeededPresent : card.casualsNeeded) > 0 ? '#fca5a5' : '#D0E8B8',
+                  backgroundColor: (viewMode === 'present' ? card.casualsNeededPresent : card.casualsNeeded) > 0 ? '#fef2f2' : '#f2f9e8',
                 }}
               >
-                {(viewMode === 'present' ? card.statusPresent : viewMode === 'day' ? card.statusExpected : card.status) === 'unknown' ? (
+                {(viewMode === 'present' ? card.statusPresent : card.status) === 'unknown' ? (
                   <span className="text-xs" style={{ color: '#596570' }}>No data yet</span>
-                ) : (viewMode === 'present' ? card.casualsNeededPresent : viewMode === 'day' ? card.casualsNeededExpected : card.casualsNeeded) > 0 ? (
+                ) : (viewMode === 'present' ? card.casualsNeededPresent : card.casualsNeeded) > 0 ? (
                   <span className="text-xs font-semibold" style={{ color: '#dc2626' }}>
-                    ⚠️ {fmtFTE(viewMode === 'present' ? card.casualsNeededPresent : viewMode === 'day' ? card.casualsNeededExpected : card.casualsNeeded)} casual FTE recommended
+                    ⚠️ {fmtFTE(viewMode === 'present' ? card.casualsNeededPresent : card.casualsNeeded)} casual FTE recommended
                   </span>
                 ) : (
                   <span className="text-xs font-semibold" style={{ color: '#5a9228' }}>
