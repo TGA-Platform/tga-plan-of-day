@@ -163,7 +163,7 @@ export default async function handler(req, res) {
   // Includes both all-day locked columns and present_* live columns.
   const staffingAnalysisByCentre = {};
   try {
-    const saRows = await sb(`staffing_analysis?date=eq.${date}&select=centre_id,surplus_val,casuals_needed,float_surplus,total_floaters_needed,effective_float_count,room_net_surplus,ad_available,total_ratio_shortage,total_surplus,net_shortage_after_realloc,buffer_required,floor_staff,required_staff,float_count,children_count,allday_locked_at`);
+    const saRows = await sb(`staffing_analysis?date=eq.${date}&select=centre_id,surplus_val,casuals_needed,float_surplus,total_floaters_needed,effective_float_count,room_net_surplus,ad_available,total_ratio_shortage,total_surplus,net_shortage_after_realloc,buffer_required,floor_staff,required_staff,float_count,children_count,allday_locked_at,present_surplus_val,present_casuals_needed,present_float_surplus,present_total_floaters_needed,present_effective_float_count,present_room_net_surplus,present_children_count,present_required_staff,present_computed_at`);
     for (const row of saRows) {
       staffingAnalysisByCentre[row.centre_id] = row;
     }
@@ -280,12 +280,17 @@ export default async function handler(req, res) {
         allDayPool.effectiveFloatCount= Number(sa.effective_float_count ?? allDayPool.effectiveFloatCount);
         allDayPool.roomNetSurplus     = Number(sa.room_net_surplus    ?? allDayPool.roomNetSurplus);
       }
-      // Note: we intentionally do NOT override presentPool with saved Supabase
-      // present_* values here. The live present figures are computed from actual
-      // roster times and current attendance; stale or mis-classified saved rows
-      // (e.g. all-day surplus written into present_surplus_val) would otherwise
-      // corrupt the currently-present view. All-day remains authoritative via
-      // the locked dashboard snapshot above.
+      // Present override — use Supabase present_* if available and recent (< 20 min)
+      const presentAge = sa.present_computed_at
+        ? (Date.now() - new Date(sa.present_computed_at).getTime()) / 60000 : Infinity;
+      if (sa.present_surplus_val != null && presentAge < 20) {
+        presentPool.casualsNeeded      = Number(sa.present_casuals_needed      ?? presentPool.casualsNeeded);
+        presentPool.floatSurplus       = Number(sa.present_float_surplus       ?? presentPool.floatSurplus);
+        presentPool.surplusVal         = Number(sa.present_surplus_val         ?? presentPool.surplusVal);
+        presentPool.totalFloatersNeeded= Number(sa.present_total_floaters_needed ?? presentPool.totalFloatersNeeded);
+        presentPool.effectiveFloatCount= Number(sa.present_effective_float_count ?? presentPool.effectiveFloatCount);
+        presentPool.roomNetSurplus     = Number(sa.present_room_net_surplus    ?? presentPool.roomNetSurplus);
+      }
     }
 
     // Primary return values: all-day (locked at 11am, source of truth for email/forecast).
@@ -305,9 +310,8 @@ export default async function handler(req, res) {
       centreId:           centre.id,
       name:               centre.name,
       date,
-      childrenToday:      allDayKids.length,
+      childrenToday:      presentKids.length,
       childrenAllDay:     allDayKids.length,
-      childrenPresent:    presentKids.length,
       staffAvailable:     staffIds.size - roomAbsent,
       floatCount,
       adAvailable,
