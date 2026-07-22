@@ -17,10 +17,26 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { date, unitIds, force } = req.body;
+  const { date, unitIds, force, centre } = req.body;
   if (!date) return res.status(400).json({ error: 'date is required' });
 
   const unitSet = new Set(Array.isArray(unitIds) ? unitIds : []);
+
+  // ── 0. Load float_schedules so cover staff rostered in non-ratio units
+  // (e.g. Assistant Director covering a room) are not silently dropped.
+  let floatEmployeeIds = new Set();
+  if (centre) try {
+    const fsRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/float_schedules?centre_id=eq.${encodeURIComponent(centre)}&date=eq.${date}&select=employee_id`,
+      { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }
+    );
+    if (fsRes.ok) {
+      const fsRows = await fsRes.json();
+      floatEmployeeIds = new Set((fsRows || []).map(r => r.employee_id).filter(Boolean));
+    }
+  } catch {
+    // Non-fatal — fall through to unit-based filtering
+  }
 
   // ── 1. Try Supabase cache (skipped when force=true) ─────────────────────
   let allRosters = null;
