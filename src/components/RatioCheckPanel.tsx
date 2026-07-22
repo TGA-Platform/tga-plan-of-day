@@ -1003,13 +1003,39 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   const staffAtSlotMap = useMemo(() => {
     const map: Record<string, RosteredStaff[]> = {};
+
+    // Build synthetic roster entries for float_schedules staff who aren't in Deputy rosters.
+    // This ensures manually-added floaters (e.g. Gabby/Xiaoyue at North Wollongong) still
+    // appear in the Ratio Check grid and can cover rooms.
+    const existingIds = new Set(rosters.map(r => r.employeeId));
+    const syntheticRosters: RosteredStaff[] = [];
+    for (const fsRow of floatScheds) {
+      const empId = fsRow.employee_id as number;
+      if (!empId || existingIds.has(empId)) continue;
+      const times = (fsRow.schedule ?? [])
+        .map((b: any) => ({ start: String(b.startTime ?? ''), end: String(b.endTime ?? '') }))
+        .filter((t: any) => t.start && t.end);
+      if (times.length === 0) continue;
+      const startTime = times.reduce((min: string, t: any) => (t.start < min ? t.start : min), times[0].start);
+      const endTime = times.reduce((max: string, t: any) => (t.end > max ? t.end : max), times[0].end);
+      syntheticRosters.push({
+        employeeId: empId,
+        employeeName: fsRow.employee_name || `Float ${empId}`,
+        startTime,
+        endTime,
+        unitId: fsRow.unit_id ?? 0,
+        unitName: fsRow.unit_name || 'Float',
+      });
+    }
+    const allRosters = [...rosters, ...syntheticRosters];
+
     // Use allSlots (not just current session) so offFloorStaffBySlot can find
     // staff objects for any session's lunch/programming blocks
     const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
     for (const slot of allSlots) {
       const slotMins = slotToMins(slot);
       const seen = new Set<number>();
-      map[slot] = rosters.filter(r => {
+      map[slot] = allRosters.filter(r => {
         // Use time override if set, otherwise fall back to raw roster times
         const override = sharedTimeOverrides[String(r.employeeId)];
         const segments = getEffectiveSegments(r, override);
@@ -1026,7 +1052,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       });
     }
     return map;
-  }, [rosters, slots, sharedTimeOverrides]);
+  }, [rosters, slots, sharedTimeOverrides, floatScheds]);
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for future use
 
@@ -1158,6 +1184,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           byEmp[s.employeeId] = dayMove;
           continue;
         }
+        // If dayMove is a generic sentinel like 'float'/'iss'/'support', don't
+        // stop here — specific float_schedules room covers should still place
+        // the staff in the room they're covering.
+
         // 3. Natural roster room
         const naturalRoom = rooms.find(rm => rm.deputyUnitId === s.unitId);
         if (naturalRoom) {
@@ -1171,6 +1201,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           .map(([roomId]) => roomId);
         if (coveredRooms.length === 1) {
           byEmp[s.employeeId] = coveredRooms[0];
+          continue;
+        }
+        // 5. Generic day allocation (float/iss/support) only now means unassigned
+        if (dayMove) {
+          byEmp[s.employeeId] = null;
           continue;
         }
         byEmp[s.employeeId] = null;
