@@ -1696,7 +1696,6 @@ export default function ReportingPage() {
             outTime:    override.lunchEnd,
             blockType:  'lunch_break',
             staffType:  entry.staffType,
-            note:       override.source === 'deputy' ? 'Deputy actual' : 'Manual override',
           });
         }
         // Remove old positional lunch entries that will be replaced with actual times
