@@ -16,6 +16,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron-surplus-snapshot",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron-reporting-snapshot",
       "schedule": "0 * * * *"
     },
