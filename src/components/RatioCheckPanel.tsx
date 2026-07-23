@@ -815,8 +815,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   // -- Backfill lunch_schedules from float_schedules -------------------------
   // When no saved lunch schedule exists but float_schedules has lunch covers,
-  // derive the schedule and persist it so the Lunch Break panel is consistent
-  // with the Ratio Check grid.
+  // derive the schedule and use it as a display fallback.
+  // DO NOT auto-save this — it may contain wrong times derived from old float_schedules data.
+  // Only the Lunch Break panel (human-edited) should persist lunch times to Supabase.
   useEffect(() => {
     if (!centreId || !date) return;
     if (lunchBackfillAttempted.current) return;
@@ -827,12 +828,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const fallback = buildLunchScheduleFromFloats(rosters, floatScheds);
     if (fallback.length === 0) return;
 
+    // Use as display fallback only — do NOT persist to Supabase
     setLunchSchedule(fallback);
-    fetch('/api/lunch-schedules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ centre_id: centreId, date, schedule: fallback }),
-    }).catch(e => console.warn('[RatioCheck] lunch backfill save failed:', e));
   }, [centreId, date, lunchSchedule.length, floatScheds, rosters]);
 
   // Reset backfill tracker when centre/date changes
