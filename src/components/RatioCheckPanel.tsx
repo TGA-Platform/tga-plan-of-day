@@ -87,10 +87,10 @@ const MORNING_SLOTS = [
 ];
 
 const MIDDAY_SLOTS = [
-  '10:00','10:30',
-  '11:00','11:30',
-  '12:00','12:30',
-  '13:00','13:30',
+  '10:00','10:15','10:30','10:45',
+  '11:00','11:15','11:30','11:45',
+  '12:00','12:15','12:30','12:45',
+  '13:00','13:15','13:30','13:45',
 ];
 
 const AFTERNOON_SLOTS = [
@@ -1457,6 +1457,25 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return ids;
   }
 
+  /** Check if staff member is on lunch during a given slot */
+  function isStaffOnLunch(empId: number, slot: string): boolean {
+    const override = sessionData.staffTimeOverrides[String(empId)];
+    if (!override?.lunchStart || !override?.lunchEnd) return false;
+    
+    // Convert slot time and lunch times to minutes for comparison
+    const [slotH, slotM] = slot.split(':').map(Number);
+    const slotStartMins = slotH * 60 + slotM;
+    const slotEndMins = slotStartMins + 15; // 15-min slot
+    
+    const [lunchH, lunchMinutes] = override.lunchStart.split(':').map(Number);
+    const lunchStartMins = lunchH * 60 + lunchMinutes;
+    const [lunchEndH, lunchEndMins] = override.lunchEnd.split(':').map(Number);
+    const lunchEndTotal = lunchEndH * 60 + lunchEndMins;
+    
+    // Slot overlaps with lunch if: slot starts before lunch ends AND slot ends after lunch starts
+    return slotStartMins < lunchEndTotal && slotEndMins > lunchStartMins;
+  }
+
   /** Staff for a specific room at a slot - dedup ensures no-one appears in multiple places */
   function getStaffForRoom(slot: string, room: Room): RosteredStaff[] {
     const available = staffAtSlotMap[slot] ?? [];
@@ -1472,10 +1491,15 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         return mv === '__programming__' || mv === '__lunch__' || mv === '__cleaning__' || mv === '__additional__';
       }).map(s => s.employeeId)
     );
+    // Exclude anyone on lunch during this slot
+    const onLunch = new Set<number>(
+      available.filter(s => isStaffOnLunch(s.employeeId, slot)).map(s => s.employeeId)
+    );
     const roomFgId = getFgIdClaimingRoomAtSlot(slot, room.id);
     const rosterInRoom = available.filter(s => {
       if (offFloor.has(s.employeeId)) return false;
       if (inActivity.has(s.employeeId)) return false;
+      if (onLunch.has(s.employeeId)) return false; // Exclude staff on lunch during this slot
       // If a staff is covering a room via the Plan Day float schedule, they should
       // appear only in the covered room, not back in their natural/moved room.
       if (allFloatCoverIds.has(s.employeeId)) return false;
@@ -1579,11 +1603,32 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     });
   }
 
-  /** Staff manually assigned to an activity at a slot via drag */
+  /** Staff manually assigned to an activity at a slot via drag, OR staff on their scheduled lunch break */
   function getManualActivityStaff(slot: string, activity: '__programming__' | '__lunch__' | '__cleaning__'): RosteredStaff[] {
-    return (staffAtSlotMap[slot] ?? []).filter(r =>
+    const explicitly = (staffAtSlotMap[slot] ?? []).filter(r =>
       sessionData.staffMoves[`${r.employeeId}:${slot}`] === activity
     );
+    
+    // For lunch column: also include staff who have lunch times in their card during this slot
+    if (activity === '__lunch__') {
+      const available = staffAtSlotMap[slot] ?? [];
+      const onLunchBreak = available.filter(r => {
+        // Skip if already explicitly moved to lunch
+        if (sessionData.staffMoves[`${r.employeeId}:${slot}`] === '__lunch__') return false;
+        // Include if they have lunch times and this slot overlaps their lunch
+        return isStaffOnLunch(r.employeeId, slot);
+      });
+      // Deduplicate: combine explicit + break-time staff
+      const seen = new Set<number>();
+      const combined = [...explicitly, ...onLunchBreak];
+      return combined.filter(r => {
+        if (seen.has(r.employeeId)) return false;
+        seen.add(r.employeeId);
+        return true;
+      });
+    }
+    
+    return explicitly;
   }
 
   // -- Mutation helpers -------------------------------------------------------

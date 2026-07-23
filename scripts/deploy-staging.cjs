@@ -1,17 +1,10 @@
-const { spawn } = require('child_process');
+const { execSync } = require('child_process');
 const fs = require('fs');
-const path = require('path');
 
-const memoryPath = path.resolve(__dirname, '../../../workspace-dev/MEMORY.md');
-const content = fs.readFileSync(memoryPath, 'utf8');
-const tokenMatch = content.match(/vcp_[A-Za-z0-9]+/);
-const token = tokenMatch ? tokenMatch[0] : '';
-if (!token) throw new Error('Vercel token not found in MEMORY.md');
+const line = fs.readFileSync('C:\\Users\\ClaudeAI\\.openclaw\\workspace-dev\\MEMORY.md', 'utf8')
+  .split('\n')
+  .find(l => l.includes('Vercel token:'));
+const m = line.match(/(vcp_[A-Za-z0-9]+)/);
+const token = m ? m[1] : '';
 
-const proc = spawn('npx', ['vercel', '--token', token], {
-  cwd: path.resolve(__dirname, '..'),
-  stdio: 'inherit',
-  shell: true,
-});
-
-proc.on('exit', code => process.exit(code ?? 0));
+execSync(`npx vercel --token ${token}`, { stdio: 'inherit' });
