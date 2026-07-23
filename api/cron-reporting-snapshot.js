@@ -439,6 +439,16 @@ function computeDailyMetrics(centre, date, attendance, rosters, zCasuals, actual
     external_casual_hours: externalCasualHours,
     internal_casual_count: internalCasualCount,
     external_casual_count: externalCasualCount,
+    // present_* columns for staffing_analysis table
+    present_surplus_val: floatSurplus,
+    present_casuals_needed: totalFloatersNeeded,
+    present_float_surplus: floatSurplus,
+    present_total_floaters_needed: totalFloatersNeeded,
+    present_effective_float_count: totalFloatCount + adAvailable,
+    present_room_net_surplus: roomSurplus,
+    present_children_count: children,
+    present_required_staff: required,
+    present_computed_at: new Date().toISOString(),
   };
 }
 
@@ -505,6 +515,23 @@ async function snapshotCentreDate(centre, date, wwccAll, skipWwcc, internalCasua
 
   await sbPost('report_slot_30', slotRows, 'centre_id,date,time_slot');
   await sbPost('report_daily', [dailyRow], 'centre_id,date');
+
+  // Save present_* values to staffing_analysis table
+  const staffingAnalysisRow = {
+    centre_id: dailyRow.centre_id,
+    campus: dailyRow.campus,
+    date: dailyRow.date,
+    present_surplus_val: dailyRow.present_surplus_val,
+    present_casuals_needed: dailyRow.present_casuals_needed,
+    present_float_surplus: dailyRow.present_float_surplus,
+    present_total_floaters_needed: dailyRow.present_total_floaters_needed,
+    present_effective_float_count: dailyRow.present_effective_float_count,
+    present_room_net_surplus: dailyRow.present_room_net_surplus,
+    present_children_count: dailyRow.present_children_count,
+    present_required_staff: dailyRow.present_required_staff,
+    present_computed_at: dailyRow.present_computed_at,
+  };
+  await sbPost('staffing_analysis', [staffingAnalysisRow], 'centre_id,date');
 
   if (skipWwcc) {
     return { slotRows: slotRows.length, dailyRows: 1, wwccRows: 0 };
