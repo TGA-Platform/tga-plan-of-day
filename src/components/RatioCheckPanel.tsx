@@ -615,10 +615,15 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     if (autoSaveTimer.current) { clearTimeout(autoSaveTimer.current); autoSaveTimer.current = null; }
     pendingSave.current = null;
     hasUserEdited.current = false;
-    // Reset float schedules immediately so stale data from a previous centre
-    // doesn't bleed through while the new centre's data loads.
+    // CRITICAL: Reset float schedules and lunch schedule SYNCHRONOUSLY BEFORE the async load
+    // so that scheduledLunchByEmployee useMemo recomputes with empty data immediately.
+    // Without this, stale lunch times from previous dates persist because
+    // buildLunchScheduleFromFloats() re-derives lunch from old floatScheds.
+    // Also reset initialLoadDone so fetchActuals() waits for this date's data to load
+    // before saving (prevents clobbering new data with stale Deputy responses).
     setFloatScheds([]);
     setLunchSchedule([]);
+    initialLoadDone.current = false;
     async function load() {
       try {
         const r = await fetch(`/api/ratio-check?centre_id=${encodeURIComponent(centreId)}&date=${date}`);
