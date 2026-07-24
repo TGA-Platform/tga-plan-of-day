@@ -750,6 +750,41 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return () => { cancelled = true; };
   }, [centreId, date]);
 
+  // -- Float schedules → staffMoves sync -------------------------------------
+  // When float_schedules loads, create staffMoves entries for each cover block
+  // so the day plan is authoritative in the ratio check grid. Manual staffMoves
+  // always win — we only fill in gaps where no manual move exists.
+  useEffect(() => {
+    if (floatScheds.length === 0) return;
+    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    const newMoves: Record<string, string> = {};
+    for (const fsRow of floatScheds) {
+      const empId = fsRow.employee_id as number;
+      if (!empId) continue;
+      for (const block of (fsRow.schedule ?? [])) {
+        if (!block.roomId) continue;
+        const bStart = slotToMins(String(block.startTime ?? '00:00'));
+        const bEnd   = slotToMins(String(block.endTime   ?? '00:00'));
+        if (bStart === null || bEnd === null) continue;
+        for (const slot of allSlots) {
+          const slotMins = slotToMins(slot);
+          if (slotMins < bStart || slotMins >= bEnd) continue;
+          const key = `${empId}:${slot}`;
+          // Only set if no manual move exists for this slot
+          if (sessionData.staffMoves[key] === undefined) {
+            newMoves[key] = block.roomId;
+          }
+        }
+      }
+    }
+    if (Object.keys(newMoves).length > 0) {
+      setSessionData(prev => ({
+        ...prev,
+        staffMoves: { ...prev.staffMoves, ...newMoves },
+      }));
+    }
+  }, [floatScheds, sessionData.staffMoves]);
+
   // -- Cross-device sync: poll Supabase for newer ratio-check data ----------
   // Directors edit on laptops; RPs/management view on iPads. Without polling,
   // iPads only see changes made on other devices after a manual refresh.
@@ -2158,7 +2193,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             { key: 'midday'    as const, label: 'Midday',    sub: '10am - 2pm'  },
             { key: 'afternoon' as const, label: 'Afternoon', sub: '2pm - 6pm' },
           ]).map(({ key: s, label, sub }) => (
-            <button key={s} onClick={() => setActiveSession(s)}
+            <button key={s} onClick={() => {
+              // Cancel any pending auto-save before switching sessions — prevents
+              // a stale save from firing with the wrong session's data.
+              if (autoSaveTimer.current) { clearTimeout(autoSaveTimer.current); autoSaveTimer.current = null; }
+              pendingSave.current = null;
+              setActiveSession(s);
+            }}
               style={{ padding: '6px 14px', borderRadius: '8px', fontWeight: 600, fontSize: '12px', minHeight: '36px', border: 'none', cursor: 'pointer',
                 backgroundColor: activeSession === s ? TGA_GREEN : 'white',
                 color: activeSession === s ? 'white' : TGA_GREEN,
