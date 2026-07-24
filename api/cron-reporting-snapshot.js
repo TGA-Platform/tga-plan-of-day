@@ -12,6 +12,10 @@
 import { CENTRES } from './_centres.js';
 import { fetchActualTimesheets } from './_actual-timesheets.js';
 
+// Increase Vercel function timeout to 300s (5 min) — the default 10s is not
+// enough for 18 centres × 2 dates with Deputy API calls + Supabase writes.
+export const maxDuration = 300;
+
 const SUPABASE_URL = 'https://tgxpvzlibquqnldgmwho.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneHB2emxpYnF1cW5sZGdtd2hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0MTcyNSwiZXhwIjoyMDg5NTE3NzI1fQ.oDIv1ilQ3KiaCFnngllZcfEhv-9W0BJ8nFMyXyS6f1c';
 const CRON_SECRET = process.env.CRON_SECRET || '';
@@ -513,10 +517,8 @@ async function snapshotCentreDate(centre, date, wwccAll, skipWwcc, internalCasua
   const slotRows = computeSlotMetrics(centre, date, attendance, rosters, zCasuals, actuals);
   const dailyRow = computeDailyMetrics(centre, date, attendance, rosters, zCasuals, actuals, internalCasualNames);
 
-  await sbPost('report_slot_30', slotRows, 'centre_id,date,time_slot');
-  await sbPost('report_daily', [dailyRow], 'centre_id,date');
-
-  // Save present_* values to staffing_analysis table
+  // Save present_* values to staffing_analysis table FIRST — this is the most
+  // important save and must complete before the heavier report_slot_30 write.
   const staffingAnalysisRow = {
     centre_id: dailyRow.centre_id,
     campus: dailyRow.campus,
@@ -532,6 +534,9 @@ async function snapshotCentreDate(centre, date, wwccAll, skipWwcc, internalCasua
     present_computed_at: dailyRow.present_computed_at,
   };
   await sbPost('staffing_analysis', [staffingAnalysisRow], 'centre_id,date');
+
+  await sbPost('report_slot_30', slotRows, 'centre_id,date,time_slot');
+  await sbPost('report_daily', [dailyRow], 'centre_id,date');
 
   if (skipWwcc) {
     return { slotRows: slotRows.length, dailyRows: 1, wwccRows: 0 };
