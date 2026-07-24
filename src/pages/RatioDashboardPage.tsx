@@ -103,8 +103,11 @@ function AgeBreakdownRow({ label, count, ratio }: { label: string; count: number
 function StaffChip({ staff }: { staff: RosteredStaff }) {
   const overrides = useContext(StaffTimeOverridesContext);
   const override = overrides[String(staff.employeeId)];
-  const start = formatTime(override?.start ?? staff.startTime);
-  const end   = formatTime(override?.end ?? staff.endTime);
+  // Plan of Day shows rostered times, not actual clock-in/out. Ignore Deputy-sourced
+  // overrides — they are for the ratio check (actual times), not the plan (rostered times).
+  const effectiveOverride = (override as { source?: string })?.source === 'deputy' ? undefined : override;
+  const start = formatTime(effectiveOverride?.start ?? staff.startTime);
+  const end   = formatTime(effectiveOverride?.end ?? staff.endTime);
   // For split shifts each roster entry represents one segment, so show that
   // segment's time. The "SPLIT" badge indicates the full shift is split.
   const timeStr = start && end ? `${start}–${end}` : start || end || '';
