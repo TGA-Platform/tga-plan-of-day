@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { CENTRES } from '../config';
 
 // 24h ? 12h display: '14:30' ? '2:30pm', '07:00' ? '7am'
@@ -80,26 +80,24 @@ interface Props {
 
 // --- Constants ----------------------------------------------------------------
 
-const MORNING_SLOTS = [
-  '07:00','07:15','07:30','07:45',
-  '08:00','08:15','08:30','08:45',
-  '09:00','09:15','09:30','09:45',
-];
+// 5-minute slots so mid-break transitions (e.g. lunch ending at 10:40) land on
+// a real grid boundary.
+function generateSlots(startH: number, startM: number, endH: number, endM: number): string[] {
+  const slots: string[] = [];
+  let mins = startH * 60 + startM;
+  const end = endH * 60 + endM;
+  while (mins <= end) {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    slots.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    mins += 5;
+  }
+  return slots;
+}
 
-const MIDDAY_SLOTS = [
-  '10:00','10:15','10:30','10:45',
-  '11:00','11:15','11:30','11:45',
-  '12:00','12:15','12:30','12:45',
-  '13:00','13:15','13:30','13:45',
-];
-
-const AFTERNOON_SLOTS = [
-  '14:00','14:15','14:30','14:45',
-  '15:00','15:15','15:30','15:45',
-  '16:00','16:15','16:30','16:45',
-  '17:00','17:15','17:30','17:45',
-  '18:00',
-];
+const MORNING_SLOTS = generateSlots(7, 0, 9, 55);
+const MIDDAY_SLOTS = generateSlots(10, 0, 13, 55);
+const AFTERNOON_SLOTS = generateSlots(14, 0, 18, 0);
 
 const FG_COLOURS = ['#7c3aed','#0369a1','#047857','#b45309','#dc2626'];
 
@@ -393,228 +391,6 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [visitorExitModalState, setVisitorExitModalState] = useState<{ slot: string; roomId: string; roomName: string; visitorId: string; visitorName: string; exitTime: string } | null>(null);
   // showActivityCols removed - all three columns always visible
 
-  // 5-minute interval expansion state
-  const [expandedSlots, setExpandedSlots] = useState<Set<string>>(new Set());
-  const [expandAll, setExpandAll] = useState(false);
-
-  // Toggle expand state for a specific slot
-  function toggleSlotExpand(slot: string) {
-    setExpandedSlots(prev => {
-      const next = new Set(prev);
-      if (next.has(slot)) {
-        next.delete(slot);
-      } else {
-        next.add(slot);
-      }
-      return next;
-    });
-  }
-
-  // Handle expand-all toggle
-  function handleExpandAll() {
-    if (expandAll) {
-      setExpandedSlots(new Set());
-      setExpandAll(false);
-    } else {
-      setExpandedSlots(new Set(slots));
-      setExpandAll(true);
-    }
-  }
-
-  // Generate 5-minute boundary times for a 15-minute slot
-  // e.g. "08:00" => ["08:00", "08:05", "08:10"]
-  function getFiveMinSubSlots(slot: string): string[] {
-    const [h, m] = slot.split(':').map(Number);
-    const baseMins = h * 60 + m;
-    return [
-      formatMinsToTime(baseMins),
-      formatMinsToTime(baseMins + 5),
-      formatMinsToTime(baseMins + 10),
-    ];
-  }
-
-  // Helper to format minutes back to HH:MM
-  function formatMinsToTime(mins: number): string {
-    const h = Math.floor(mins / 60) % 24;
-    const m = mins % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  }
-
-  // Detect transitions (staff start/end/lunch times) within a 15-minute slot
-  function getSlotTransitions(slot: string): Array<{ empId: number; empName: string; event: string; time: string }> {
-    const slotMins = slotToMins(slot);
-    const slotEndMins = slotMins + 15;
-    const transitions: Array<{ empId: number; empName: string; event: string; time: string; sortMins: number }> = [];
-
-    // Check all rosters and overrides for transitions within this slot
-    const allRosters = rosters;
-    for (const r of allRosters) {
-      const override = sharedTimeOverrides[String(r.employeeId)];
-      const segments = getEffectiveSegments(r, override);
-      for (const seg of segments) {
-        const startMins = slotToMins(seg.start);
-        const endMins = slotToMins(seg.end);
-        if (startMins !== null && startMins > slotMins && startMins < slotEndMins) {
-          transitions.push({ empId: r.employeeId, empName: r.employeeName, event: 'start', time: seg.start, sortMins: startMins });
-        }
-        if (endMins !== null && endMins > slotMins && endMins < slotEndMins) {
-          transitions.push({ empId: r.employeeId, empName: r.employeeName, event: 'finish', time: seg.end, sortMins: endMins });
-        }
-      }
-      // Check lunch transitions
-      if (override?.lunchStart) {
-        const lunchStartMins = slotToMins(override.lunchStart);
-        if (lunchStartMins !== null && lunchStartMins > slotMins && lunchStartMins < slotEndMins) {
-          transitions.push({ empId: r.employeeId, empName: r.employeeName, event: 'lunch start', time: override.lunchStart, sortMins: lunchStartMins });
-        }
-      }
-      if (override?.lunchEnd) {
-        const lunchEndMins = slotToMins(override.lunchEnd);
-        if (lunchEndMins !== null && lunchEndMins > slotMins && lunchEndMins < slotEndMins) {
-          transitions.push({ empId: r.employeeId, empName: r.employeeName, event: 'lunch end', time: override.lunchEnd, sortMins: lunchEndMins });
-        }
-      }
-    }
-
-    // Sort by time and return
-    transitions.sort((a, b) => a.sortMins - b.sortMins);
-    return transitions.map(({ empId, empName, event, time }) => ({ empId, empName, event, time }));
-  }
-
-  // Get staff presence at a specific time (handles exact time boundaries, not just 15-min slots)
-  function getStaffAtExactTime(timeStr: string): RosteredStaff[] {
-    const timeMins = slotToMins(timeStr);
-    if (timeMins === null) return [];
-
-    const present: RosteredStaff[] = [];
-    const seen = new Set<number>();
-
-    for (const r of rosters) {
-      if (seen.has(r.employeeId)) continue;
-      const override = sharedTimeOverrides[String(r.employeeId)];
-      const segments = getEffectiveSegments(r, override);
-      for (const seg of segments) {
-        const startMins = slotToMins(seg.start);
-        const endMins = slotToMins(seg.end);
-        if (startMins !== null && endMins !== null && startMins <= timeMins && endMins > timeMins) {
-          present.push(r);
-          seen.add(r.employeeId);
-          break;
-        }
-      }
-    }
-
-    return present;
-  }
-
-  // Get staff assigned to a room at a specific time (not slot-based, for 5-min precision)
-  function getStaffForRoomAtTime(timeStr: string, room: Room): RosteredStaff[] {
-    const available = getStaffAtExactTime(timeStr);
-    const timeMins = slotToMins(timeStr);
-    if (timeMins === null) return [];
-
-    const onLunch = new Set<number>();
-
-    // Check lunch status at this exact time
-    for (const s of available) {
-      const override = sharedTimeOverrides[String(s.employeeId)];
-      if (override?.lunchStart && override?.lunchEnd) {
-        const lunchStartMins = slotToMins(override.lunchStart);
-        const lunchEndMins = slotToMins(override.lunchEnd);
-        if (lunchStartMins !== null && lunchEndMins !== null && lunchStartMins <= timeMins && lunchEndMins > timeMins) {
-          onLunch.add(s.employeeId);
-        }
-      }
-    }
-
-    // Filter for this room at this time
-    const naturalRoomMap = new Map(rosters.map(r => [r.employeeId, rooms.find(rm => rm.deputyUnitId === r.unitId)?.id || '']));
-    const result = available.filter(s => {
-      if (onLunch.has(s.employeeId)) return false;
-      const naturalRoomId = naturalRoomMap.get(s.employeeId) || '';
-      return naturalRoomId === room.id;
-    });
-
-    return result;
-  }
-
-  // Get total children at a 5-min time (use same count as the 15-min slot it belongs to)
-  function getChildCountAtTime(timeStr: string, roomId: string): number {
-    // Find the 15-min slot this time belongs to
-    const timeMins = slotToMins(timeStr);
-    if (timeMins === null) return 0;
-    
-    // Find the containing 15-min slot
-    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
-    for (const slot of allSlots) {
-      const slotMins = slotToMins(slot);
-      if (slotMins === null) continue;
-      if (slotMins <= timeMins && timeMins < slotMins + 15) {
-        return getChildCount(slot, roomId);
-      }
-    }
-    return 0;
-  }
-
-  // Get required staff at a 5-min time (compute per-room required based on exact presence)
-  function getRequiredStaffAtTime(timeStr: string, room: Room): number {
-    const childCount = getChildCountAtTime(timeStr, room.id);
-    if (childCount === 0) return 0;
-    
-    // Compute required based on room's age group
-    const bucket = roomAgeBucket(room.ageGroup);
-    const u24 = bucket === 'u24' ? childCount : 0;
-    const m24 = bucket === 'm24' ? childCount : 0;
-    const m36 = bucket === 'm36' ? childCount : 0;
-    return calcRequired(u24, m24, m36);
-  }
-
-  // Get total staff on floor at a specific time (across all rooms)
-  function getStaffOnFloorAtTime(timeStr: string): number {
-    const empIds = new Set<number>();
-    for (const room of rooms) {
-      getStaffForRoomAtTime(timeStr, room).forEach(s => {
-        if (!issUnitIdsSet.has(s.unitId)) empIds.add(s.employeeId);
-      });
-    }
-    return empIds.size;
-  }
-
-  // Get staff assigned to an off-floor activity at a specific 5-minute time.
-  // Uses the parent 15-minute slot for activity assignments (manual moves + float schedules)
-  // but filters to staff actually present at the exact boundary time.
-  function getActivityStaffAtTime(
-    timeStr: string,
-    parentSlot: string,
-    activity: 'additional' | 'programming' | 'lunch' | 'cleaning'
-  ): RosteredStaff[] {
-    const presentIds = new Set(getStaffAtExactTime(timeStr).map(s => s.employeeId));
-    const seen = new Set<number>();
-    const result: RosteredStaff[] = [];
-
-    const addIfPresent = (staff: RosteredStaff | undefined) => {
-      if (!staff) return;
-      if (seen.has(staff.employeeId)) return;
-      if (!presentIds.has(staff.employeeId)) return;
-      seen.add(staff.employeeId);
-      result.push(staff);
-    };
-
-    if (activity === 'additional') {
-      for (const s of getAdditionalDutiesStaff(parentSlot)) addIfPresent(s);
-    } else if (activity === 'programming') {
-      for (const s of getManualActivityStaff(parentSlot, '__programming__')) addIfPresent(s);
-      for (const s of offFloorStaffBySlot[parentSlot]?.programming ?? []) addIfPresent(s);
-    } else if (activity === 'lunch') {
-      for (const s of getManualActivityStaff(parentSlot, '__lunch__')) addIfPresent(s);
-      for (const s of offFloorStaffBySlot[parentSlot]?.lunch ?? []) addIfPresent(s);
-    } else if (activity === 'cleaning') {
-      for (const s of getManualActivityStaff(parentSlot, '__cleaning__')) addIfPresent(s);
-      for (const s of offFloorStaffBySlot[parentSlot]?.cleaning ?? []) addIfPresent(s);
-    }
-
-    return result;
-  }
 
   // --- Deputy actual timesheets - poll every 5 minutes -----------------------
   const allUnitIds = useMemo(() => {
@@ -1719,13 +1495,13 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
   /** Check if staff member is off-floor for lunch at the slot END boundary.
    *  Used by both the room columns and the lunch break panel so a staff member
-   *  appears in exactly one place per 15-minute row. Mid-slot lunch ends return
+   *  appears in exactly one place per 5-minute row. Mid-slot lunch ends return
    *  the educator to their room column; mid-slot lunch starts move them to lunch. */
   function isLunchCoveringSlotEnd(empId: number, slot: string): boolean {
     const override = sessionData.staffTimeOverrides[String(empId)];
     if (!override?.lunchStart || !override?.lunchEnd) return false;
 
-    const slotEndMins = slotToMins(slot) + 15;
+    const slotEndMins = slotToMins(slot) + 5;
     const lunchStartMins = slotToMins(override.lunchStart);
     const lunchEndTotal = slotToMins(override.lunchEnd);
 
@@ -2488,19 +2264,6 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           </button>
 
           <button
-            onClick={handleExpandAll}
-            style={{
-              padding: '8px 14px', borderRadius: '10px', fontWeight: 600, fontSize: '12px',
-              backgroundColor: expandAll ? '#0369a1' : 'white',
-              color: expandAll ? 'white' : '#0369a1',
-              border: '1px solid #0369a1', cursor: 'pointer',
-            }}
-            title="Expand/collapse 5-minute details for all slots"
-          >
-            {expandAll ? '▼' : '▶'} 5-min Details
-          </button>
-
-          <button
             onClick={() => save(activeSession, sessionData)}
             style={{
               padding: '8px 16px', borderRadius: '10px', fontWeight: 600, fontSize: '13px',
@@ -3030,36 +2793,6 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                   }}>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <button
-                          onClick={() => toggleSlotExpand(slot)}
-                          className="no-print"
-                          style={{
-                            border: 'none',
-                            background: 'none',
-                            cursor: 'pointer',
-                            fontSize: '10px',
-                            color: timeCellColor,
-                            padding: '0 2px',
-                            lineHeight: 1,
-                            fontWeight: 700,
-                          }}
-                          title="Expand/collapse 5-minute details"
-                        >
-                          {expandedSlots.has(slot) ? '▼' : '+'}
-                        </button>
-                        {getSlotTransitions(slot).length > 0 && (
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              width: '6px',
-                              height: '6px',
-                              borderRadius: '50%',
-                              backgroundColor: timeCellColor,
-                              opacity: 0.7,
-                            }}
-                            title="Transitions within this slot"
-                          />
-                        )}
                         <span>{to12h(slot)}</span>
                       </div>
 
@@ -3927,105 +3660,6 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                   })()}
 
                   </tr>
-
-                  {/* -- 5-minute expansion sub-rows -- */}
-                  {expandedSlots.has(slot) && getFiveMinSubSlots(slot).map((subSlot, subIdx) => {
-                    const totalChildrenAtTime = rooms.reduce((sum, room) => sum + getChildCountAtTime(subSlot, room.id), 0);
-                    const totalReqAtTime = rooms.reduce((sum, room) => sum + getRequiredStaffAtTime(subSlot, room), 0);
-                    const totalAvailAtTime = getStaffOnFloorAtTime(subSlot);
-                    const spareAtTime = totalAvailAtTime - totalReqAtTime;
-                    const expandRowBg = subIdx % 2 === 0 ? '#fafff8' : '#f5faf3';
-
-                    const spareStyleExpand: React.CSSProperties = {
-                      ...tdBase,
-                      backgroundColor: spareAtTime < 0 ? '#fee2e2' : spareAtTime > 0 ? '#dcfce7' : 'white',
-                      fontWeight: 700,
-                      color: spareAtTime < 0 ? '#dc2626' : spareAtTime > 0 ? '#166534' : 'inherit',
-                      textAlign: 'center',
-                      fontSize: '11px',
-                    };
-
-                    const additionalAtTime = getActivityStaffAtTime(subSlot, slot, 'additional');
-                    const programmingAtTime = getActivityStaffAtTime(subSlot, slot, 'programming');
-                    const lunchAtTime = getActivityStaffAtTime(subSlot, slot, 'lunch');
-                    const cleaningAtTime = getActivityStaffAtTime(subSlot, slot, 'cleaning');
-
-                    return (
-                      <tr key={`${slot}-5m-${subIdx}`} style={{ backgroundColor: expandRowBg, fontSize: '11px', opacity: 0.9 }}>
-                        {/* Time cell - condensed */}
-                        <td style={{ ...tdBase, fontSize: '10px', fontWeight: 600, textAlign: 'center', color: '#666', padding: '2px 4px', backgroundColor: 'rgba(22, 163, 74, 0.05)' }}>
-                          {to12h(subSlot)}
-                        </td>
-
-                        {/* Per-room cells - condensed */}
-                        {rooms.map((room, roomIdx) => {
-                          const childCountAtTime = getChildCountAtTime(subSlot, room.id);
-                          const reqAtTime = getRequiredStaffAtTime(subSlot, room);
-                          const staffAtRoom = getStaffForRoomAtTime(subSlot, room);
-                          const isShortStaffed = staffAtRoom.length < reqAtTime;
-
-                          return (
-                            <Fragment key={`${slot}-5m-${subIdx}-r${roomIdx}`}>
-                              {/* Children count */}
-                              <td style={{ ...tdBase, fontSize: '10px', textAlign: 'center', padding: '2px 3px', backgroundColor: '#f5f5f5' }}>
-                                <span style={{ fontSize: '10px', fontWeight: 600 }}>{childCountAtTime}</span>
-                              </td>
-                              {/* Required */}
-                              <td style={{ ...tdBase, fontSize: '10px', textAlign: 'center', padding: '2px 3px', backgroundColor: '#f5f5f5' }}>
-                                <span style={{ fontSize: '10px', fontWeight: 600 }}>{reqAtTime}</span>
-                              </td>
-                              {/* Staff in room - name-only chips */}
-                              <td style={{ ...tdBase, padding: '2px 4px', backgroundColor: isShortStaffed ? '#fee2e2' : '#fafff8', borderRight: '1px solid #d1d5db' }}>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1px', minHeight: '16px' }}>
-                                  {staffAtRoom.length > 0 ? staffAtRoom.map(s => (
-                                    <span key={s.employeeId} style={{ fontSize: '9px', padding: '1px 3px', backgroundColor: 'white', border: '1px solid #d0d8cc', borderRadius: '2px', whiteSpace: 'nowrap', color: '#374151' }}>
-                                      {shortName(s.employeeName)}
-                                    </span>
-                                  )) : (
-                                    <span style={{ fontSize: '9px', color: '#9ca3af' }}>-</span>
-                                  )}
-                                </div>
-                              </td>
-                            </Fragment>
-                          );
-                        })}
-
-                        {/* Totals section - condensed */}
-                        <td style={{ ...tdBase, fontSize: '10px', textAlign: 'center', padding: '2px 3px', backgroundColor: '#1a4a0a', color: 'white', fontWeight: 600 }}>
-                          {totalChildrenAtTime}
-                        </td>
-                        <td style={{ ...tdBase, fontSize: '10px', textAlign: 'center', padding: '2px 3px', backgroundColor: '#1a4a0a', color: 'white', fontWeight: 600 }}>
-                          {totalReqAtTime}
-                        </td>
-                        <td style={{ ...tdBase, fontSize: '10px', textAlign: 'center', padding: '2px 3px', backgroundColor: '#f5f5f5', fontWeight: 600 }}>
-                          {totalAvailAtTime}
-                        </td>
-                        <td style={spareStyleExpand}>
-                          {spareAtTime}
-                        </td>
-
-                        {/* Activity columns - populated for 5-min rows */}
-                        {[
-                          { staff: additionalAtTime, bg: '#fef3c7' },
-                          { staff: programmingAtTime, bg: '#bae6fd' },
-                          { staff: lunchAtTime, bg: '#ccfbf1' },
-                          { staff: cleaningAtTime, bg: '#ede9fe' },
-                        ].map((col, idx) => (
-                          <td key={idx} style={{ ...tdBase, fontSize: '9px', padding: '2px 3px', backgroundColor: col.bg, minWidth: '70px' }}>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1px', minHeight: '16px' }}>
-                              {col.staff.length > 0 ? col.staff.map(s => (
-                                <span key={s.employeeId} style={{ fontSize: '9px', padding: '1px 3px', backgroundColor: 'white', border: '1px solid #d0d8cc', borderRadius: '2px', whiteSpace: 'nowrap', color: '#374151' }}>
-                                  {shortName(s.employeeName)}
-                                </span>
-                              )) : (
-                                <span style={{ fontSize: '9px', color: '#9ca3af' }}>-</span>
-                              )}
-                            </div>
-                          </td>
-                        ))}
-                      </tr>
-                    );
-                  })}
                 </>
               );
             })}
