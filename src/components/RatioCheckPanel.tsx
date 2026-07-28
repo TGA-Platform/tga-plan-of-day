@@ -580,6 +580,42 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return empIds.size;
   }
 
+  // Get staff assigned to an off-floor activity at a specific 5-minute time.
+  // Uses the parent 15-minute slot for activity assignments (manual moves + float schedules)
+  // but filters to staff actually present at the exact boundary time.
+  function getActivityStaffAtTime(
+    timeStr: string,
+    parentSlot: string,
+    activity: 'additional' | 'programming' | 'lunch' | 'cleaning'
+  ): RosteredStaff[] {
+    const presentIds = new Set(getStaffAtExactTime(timeStr).map(s => s.employeeId));
+    const seen = new Set<number>();
+    const result: RosteredStaff[] = [];
+
+    const addIfPresent = (staff: RosteredStaff | undefined) => {
+      if (!staff) return;
+      if (seen.has(staff.employeeId)) return;
+      if (!presentIds.has(staff.employeeId)) return;
+      seen.add(staff.employeeId);
+      result.push(staff);
+    };
+
+    if (activity === 'additional') {
+      for (const s of getAdditionalDutiesStaff(parentSlot)) addIfPresent(s);
+    } else if (activity === 'programming') {
+      for (const s of getManualActivityStaff(parentSlot, '__programming__')) addIfPresent(s);
+      for (const s of offFloorStaffBySlot[parentSlot]?.programming ?? []) addIfPresent(s);
+    } else if (activity === 'lunch') {
+      for (const s of getManualActivityStaff(parentSlot, '__lunch__')) addIfPresent(s);
+      for (const s of offFloorStaffBySlot[parentSlot]?.lunch ?? []) addIfPresent(s);
+    } else if (activity === 'cleaning') {
+      for (const s of getManualActivityStaff(parentSlot, '__cleaning__')) addIfPresent(s);
+      for (const s of offFloorStaffBySlot[parentSlot]?.cleaning ?? []) addIfPresent(s);
+    }
+
+    return result;
+  }
+
   // --- Deputy actual timesheets - poll every 5 minutes -----------------------
   const allUnitIds = useMemo(() => {
     const centre = CENTRES.find(c => c.id === centreId);
@@ -3907,6 +3943,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                       fontSize: '11px',
                     };
 
+                    const additionalAtTime = getActivityStaffAtTime(subSlot, slot, 'additional');
+                    const programmingAtTime = getActivityStaffAtTime(subSlot, slot, 'programming');
+                    const lunchAtTime = getActivityStaffAtTime(subSlot, slot, 'lunch');
+                    const cleaningAtTime = getActivityStaffAtTime(subSlot, slot, 'cleaning');
+
                     return (
                       <tr key={`${slot}-5m-${subIdx}`} style={{ backgroundColor: expandRowBg, fontSize: '11px', opacity: 0.9 }}>
                         {/* Time cell - condensed */}
@@ -3961,19 +4002,25 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                           {spareAtTime}
                         </td>
 
-                        {/* Activity columns - empty/collapsed for 5-min rows */}
-                        <td style={{ ...tdBase, fontSize: '9px', padding: '2px 3px', backgroundColor: '#fef3c7', minWidth: '70px' }}>
-                          <span style={{ color: '#9ca3af' }}>-</span>
-                        </td>
-                        <td style={{ ...tdBase, fontSize: '9px', padding: '2px 3px', backgroundColor: '#bae6fd', minWidth: '70px' }}>
-                          <span style={{ color: '#9ca3af' }}>-</span>
-                        </td>
-                        <td style={{ ...tdBase, fontSize: '9px', padding: '2px 3px', backgroundColor: '#ccfbf1', minWidth: '70px' }}>
-                          <span style={{ color: '#9ca3af' }}>-</span>
-                        </td>
-                        <td style={{ ...tdBase, fontSize: '9px', padding: '2px 3px', backgroundColor: '#ede9fe', minWidth: '70px' }}>
-                          <span style={{ color: '#9ca3af' }}>-</span>
-                        </td>
+                        {/* Activity columns - populated for 5-min rows */}
+                        {[
+                          { staff: additionalAtTime, bg: '#fef3c7' },
+                          { staff: programmingAtTime, bg: '#bae6fd' },
+                          { staff: lunchAtTime, bg: '#ccfbf1' },
+                          { staff: cleaningAtTime, bg: '#ede9fe' },
+                        ].map((col, idx) => (
+                          <td key={idx} style={{ ...tdBase, fontSize: '9px', padding: '2px 3px', backgroundColor: col.bg, minWidth: '70px' }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1px', minHeight: '16px' }}>
+                              {col.staff.length > 0 ? col.staff.map(s => (
+                                <span key={s.employeeId} style={{ fontSize: '9px', padding: '1px 3px', backgroundColor: 'white', border: '1px solid #d0d8cc', borderRadius: '2px', whiteSpace: 'nowrap', color: '#374151' }}>
+                                  {shortName(s.employeeName)}
+                                </span>
+                              )) : (
+                                <span style={{ fontSize: '9px', color: '#9ca3af' }}>-</span>
+                              )}
+                            </div>
+                          </td>
+                        ))}
                       </tr>
                     );
                   })}
