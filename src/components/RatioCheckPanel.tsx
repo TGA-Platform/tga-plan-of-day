@@ -1717,24 +1717,10 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return ids;
   }
 
-  /** Check if staff member's scheduled lunch overlaps the slot at all
-   *  (used by the lunch break panel so partial overlaps are still shown). */
-  function isStaffOnLunch(empId: number, slot: string): boolean {
-    const override = sessionData.staffTimeOverrides[String(empId)];
-    if (!override?.lunchStart || !override?.lunchEnd) return false;
-
-    const [slotH, slotM] = slot.split(':').map(Number);
-    const slotStartMins = slotH * 60 + slotM;
-    const slotEndMins = slotStartMins + 15;
-
-    const lunchStartMins = slotToMins(override.lunchStart);
-    const lunchEndTotal = slotToMins(override.lunchEnd);
-
-    return slotStartMins < lunchEndTotal && slotEndMins > lunchStartMins;
-  }
-
-  /** Check if staff member is still off-floor for lunch at the slot END boundary
-   *  (used by room columns so mid-slot lunch ends return the educator to their room). */
+  /** Check if staff member is off-floor for lunch at the slot END boundary.
+   *  Used by both the room columns and the lunch break panel so a staff member
+   *  appears in exactly one place per 15-minute row. Mid-slot lunch ends return
+   *  the educator to their room column; mid-slot lunch starts move them to lunch. */
   function isLunchCoveringSlotEnd(empId: number, slot: string): boolean {
     const override = sessionData.staffTimeOverrides[String(empId)];
     if (!override?.lunchStart || !override?.lunchEnd) return false;
@@ -1883,14 +1869,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       sessionData.staffMoves[`${r.employeeId}:${slot}`] === activity
     );
     
-    // For lunch column: also include staff who have lunch times in their card during this slot
+    // For lunch column: also include staff whose scheduled lunch covers the end
+    // of this slot. Mid-slot lunch ends return the educator to their room column
+    // so they do not appear in both places at once.
     if (activity === '__lunch__') {
       const available = staffAtSlotMap[slot] ?? [];
       const onLunchBreak = available.filter(r => {
         // Skip if already explicitly moved to lunch
         if (sessionData.staffMoves[`${r.employeeId}:${slot}`] === '__lunch__') return false;
-        // Include if they have lunch times and this slot overlaps their lunch
-        return isStaffOnLunch(r.employeeId, slot);
+        // Include if their lunch still covers the slot-end boundary
+        return isLunchCoveringSlotEnd(r.employeeId, slot);
       });
       // Deduplicate: combine explicit + break-time staff
       const seen = new Set<number>();
