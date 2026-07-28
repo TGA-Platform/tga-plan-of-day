@@ -1717,24 +1717,32 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return ids;
   }
 
-  /** Check if staff member is on lunch during a given slot */
+  /** Check if staff member's scheduled lunch overlaps the slot at all
+   *  (used by the lunch break panel so partial overlaps are still shown). */
   function isStaffOnLunch(empId: number, slot: string): boolean {
     const override = sessionData.staffTimeOverrides[String(empId)];
     if (!override?.lunchStart || !override?.lunchEnd) return false;
 
-    // Convert slot time and lunch times to minutes for comparison
     const [slotH, slotM] = slot.split(':').map(Number);
     const slotStartMins = slotH * 60 + slotM;
-    const slotEndMins = slotStartMins + 15; // 15-min slot
+    const slotEndMins = slotStartMins + 15;
 
-    const [lunchH, lunchMinutes] = override.lunchStart.split(':').map(Number);
-    const lunchStartMins = lunchH * 60 + lunchMinutes;
-    const [lunchEndH, lunchEndMins] = override.lunchEnd.split(':').map(Number);
-    const lunchEndTotal = lunchEndH * 60 + lunchEndMins;
+    const lunchStartMins = slotToMins(override.lunchStart);
+    const lunchEndTotal = slotToMins(override.lunchEnd);
 
-    // Use the slot END as the authoritative boundary so lunch breaks that finish
-    // mid-slot (e.g. 10:40 in a 10:30 slot) no longer keep the educator off-floor
-    // for the whole 15-minute row. Lunch must cover the slot end to count here.
+    return slotStartMins < lunchEndTotal && slotEndMins > lunchStartMins;
+  }
+
+  /** Check if staff member is still off-floor for lunch at the slot END boundary
+   *  (used by room columns so mid-slot lunch ends return the educator to their room). */
+  function isLunchCoveringSlotEnd(empId: number, slot: string): boolean {
+    const override = sessionData.staffTimeOverrides[String(empId)];
+    if (!override?.lunchStart || !override?.lunchEnd) return false;
+
+    const slotEndMins = slotToMins(slot) + 15;
+    const lunchStartMins = slotToMins(override.lunchStart);
+    const lunchEndTotal = slotToMins(override.lunchEnd);
+
     return lunchStartMins < slotEndMins && lunchEndTotal >= slotEndMins;
   }
 
@@ -1753,15 +1761,16 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         return mv === '__programming__' || mv === '__lunch__' || mv === '__cleaning__' || mv === '__additional__';
       }).map(s => s.employeeId)
     );
-    // Exclude anyone on lunch during this slot
+    // Exclude anyone still on lunch at the end of this slot (mid-slot lunch ends
+    // return the educator to their room column).
     const onLunch = new Set<number>(
-      available.filter(s => isStaffOnLunch(s.employeeId, slot)).map(s => s.employeeId)
+      available.filter(s => isLunchCoveringSlotEnd(s.employeeId, slot)).map(s => s.employeeId)
     );
     const roomFgId = getFgIdClaimingRoomAtSlot(slot, room.id);
     const rosterInRoom = available.filter(s => {
       if (offFloor.has(s.employeeId)) return false;
       if (inActivity.has(s.employeeId)) return false;
-      if (onLunch.has(s.employeeId)) return false; // Exclude staff on lunch during this slot
+      if (onLunch.has(s.employeeId)) return false; // Exclude staff still on lunch at slot end
       // If a staff is covering a room via the Plan Day float schedule, they should
       // appear only in the covered room, not back in their natural/moved room.
       if (allFloatCoverIds.has(s.employeeId)) return false;
@@ -1835,8 +1844,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       if (move !== undefined) {
         return !roomIds.has(move) && !activityMoves.has(move) && move !== '__removed__';
       }
-      // Anyone on a scheduled lunch break belongs in the Lunch column, not Additional.
-      if (isStaffOnLunch(r.employeeId, slot)) return false;
+      // Anyone still on lunch at the end of this slot belongs in the Lunch column,
+      // not Additional. Mid-slot lunch ends return the educator to their room.
+      if (isLunchCoveringSlotEnd(r.employeeId, slot)) return false;
       // If the staff has a primary room assignment (day allocation, natural room,
       // or float cover), they belong in that room — not in Additional Duties.
       if (primaryRoomMap[r.employeeId] !== null && primaryRoomMap[r.employeeId] !== undefined) return false;
