@@ -393,6 +393,120 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [visitorExitModalState, setVisitorExitModalState] = useState<{ slot: string; roomId: string; roomName: string; visitorId: string; visitorName: string; exitTime: string } | null>(null);
   // showActivityCols removed - all three columns always visible
 
+  // 5-minute interval expansion state
+  const [expandedSlots, setExpandedSlots] = useState<Set<string>>(new Set());
+  const [expandAll, setExpandAll] = useState(false);
+
+  // Toggle expand state for a specific slot
+  function toggleSlotExpand(slot: string) {
+    setExpandedSlots(prev => {
+      const next = new Set(prev);
+      if (next.has(slot)) {
+        next.delete(slot);
+      } else {
+        next.add(slot);
+      }
+      return next;
+    });
+  }
+
+  // Handle expand-all toggle
+  function handleExpandAll() {
+    if (expandAll) {
+      setExpandedSlots(new Set());
+      setExpandAll(false);
+    } else {
+      setExpandedSlots(new Set(slots));
+      setExpandAll(true);
+    }
+  }
+
+  // Generate 5-minute boundary times for a 15-minute slot
+  // e.g. "08:00" => ["08:00", "08:05", "08:10"]
+  function getFiveMinSubSlots(slot: string): string[] {
+    const [h, m] = slot.split(':').map(Number);
+    const baseMins = h * 60 + m;
+    return [
+      formatMinsToTime(baseMins),
+      formatMinsToTime(baseMins + 5),
+      formatMinsToTime(baseMins + 10),
+    ];
+  }
+
+  // Helper to format minutes back to HH:MM
+  function formatMinsToTime(mins: number): string {
+    const h = Math.floor(mins / 60) % 24;
+    const m = mins % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+
+  // Detect transitions (staff start/end/lunch times) within a 15-minute slot
+  function getSlotTransitions(slot: string): Array<{ empId: number; empName: string; event: string; time: string }> {
+    const slotMins = slotToMins(slot);
+    const slotEndMins = slotMins + 15;
+    const transitions: Array<{ empId: number; empName: string; event: string; time: string; sortMins: number }> = [];
+
+    // Check all rosters and overrides for transitions within this slot
+    const allRosters = rosters;
+    for (const r of allRosters) {
+      const override = sharedTimeOverrides[String(r.employeeId)];
+      const segments = getEffectiveSegments(r, override);
+      for (const seg of segments) {
+        const startMins = slotToMins(seg.start);
+        const endMins = slotToMins(seg.end);
+        if (startMins !== null && startMins > slotMins && startMins < slotEndMins) {
+          transitions.push({ empId: r.employeeId, empName: r.employeeName, event: 'start', time: seg.start, sortMins: startMins });
+        }
+        if (endMins !== null && endMins > slotMins && endMins < slotEndMins) {
+          transitions.push({ empId: r.employeeId, empName: r.employeeName, event: 'finish', time: seg.end, sortMins: endMins });
+        }
+      }
+      // Check lunch transitions
+      if (override?.lunchStart) {
+        const lunchStartMins = slotToMins(override.lunchStart);
+        if (lunchStartMins !== null && lunchStartMins > slotMins && lunchStartMins < slotEndMins) {
+          transitions.push({ empId: r.employeeId, empName: r.employeeName, event: 'lunch start', time: override.lunchStart, sortMins: lunchStartMins });
+        }
+      }
+      if (override?.lunchEnd) {
+        const lunchEndMins = slotToMins(override.lunchEnd);
+        if (lunchEndMins !== null && lunchEndMins > slotMins && lunchEndMins < slotEndMins) {
+          transitions.push({ empId: r.employeeId, empName: r.employeeName, event: 'lunch end', time: override.lunchEnd, sortMins: lunchEndMins });
+        }
+      }
+    }
+
+    // Sort by time and return
+    transitions.sort((a, b) => a.sortMins - b.sortMins);
+    return transitions.map(({ empId, empName, event, time }) => ({ empId, empName, event, time }));
+  }
+
+  // Get staff presence at a specific 5-minute boundary time
+  function getStaffAtExactTime(timeStr: string): Array<{ empId: number; empName: string }> {
+    const timeMins = slotToMins(timeStr);
+    if (timeMins === null) return [];
+
+    const present: Array<{ empId: number; empName: string }> = [];
+    const seen = new Set<number>();
+
+    for (const r of rosters) {
+      if (seen.has(r.employeeId)) continue;
+      const override = sharedTimeOverrides[String(r.employeeId)];
+      const segments = getEffectiveSegments(r, override);
+      for (const seg of segments) {
+        const startMins = slotToMins(seg.start);
+        const endMins = slotToMins(seg.end);
+        if (startMins !== null && endMins !== null && startMins <= timeMins && endMins > timeMins) {
+          present.push({ empId: r.employeeId, empName: r.employeeName });
+          seen.add(r.employeeId);
+          break;
+        }
+      }
+    }
+
+    return present;
+  }
+
   // --- Deputy actual timesheets - poll every 5 minutes -----------------------
   const allUnitIds = useMemo(() => {
     const centre = CENTRES.find(c => c.id === centreId);
@@ -2263,6 +2377,19 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           </button>
 
           <button
+            onClick={handleExpandAll}
+            style={{
+              padding: '8px 14px', borderRadius: '10px', fontWeight: 600, fontSize: '12px',
+              backgroundColor: expandAll ? '#0369a1' : 'white',
+              color: expandAll ? 'white' : '#0369a1',
+              border: '1px solid #0369a1', cursor: 'pointer',
+            }}
+            title="Expand/collapse 5-minute details for all slots"
+          >
+            {expandAll ? '▼' : '▶'} 5-min Details
+          </button>
+
+          <button
             onClick={() => save(activeSession, sessionData)}
             style={{
               padding: '8px 16px', borderRadius: '10px', fontWeight: 600, fontSize: '13px',
@@ -2775,7 +2902,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
               const timeCellColor = hasFG ? activeFGs[0].color : TGA_GREEN;
 
               return (
-                <tr key={slot}>
+                <>
+                  <tr key={slot}>
                   {/* -- Time cell + FG badge(s) -- */}
                   <td style={{
                     ...tdBase,
@@ -2790,7 +2918,39 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                     zIndex: 1,
                   }}>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-                      <span>{to12h(slot)}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <button
+                          onClick={() => toggleSlotExpand(slot)}
+                          className="no-print"
+                          style={{
+                            border: 'none',
+                            background: 'none',
+                            cursor: 'pointer',
+                            fontSize: '10px',
+                            color: timeCellColor,
+                            padding: '0 2px',
+                            lineHeight: 1,
+                            fontWeight: 700,
+                          }}
+                          title="Expand/collapse 5-minute details"
+                        >
+                          {expandedSlots.has(slot) ? '▼' : '+'}
+                        </button>
+                        {getSlotTransitions(slot).length > 0 && (
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              width: '6px',
+                              height: '6px',
+                              borderRadius: '50%',
+                              backgroundColor: timeCellColor,
+                              opacity: 0.7,
+                            }}
+                            title="Transitions within this slot"
+                          />
+                        )}
+                        <span>{to12h(slot)}</span>
+                      </div>
 
                       {/* FG badges for active FGs */}
                       {activeFGs.length > 0 && (
@@ -3652,10 +3812,62 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                         {!manualClean.length && !(offFloorStaffBySlot[slot]?.cleaning?.length) && <span style={{ fontSize: '9px', color: dragOver === `clean:${slot}` ? '#7e22ce' : '#9ca3af' }}>{dragOver === `clean:${slot}` ? 'Drop here' : '-'}</span>}
                       </div>
                     </td>
-                    );
+                    );  
                   })()}
 
-                </tr>
+                  </tr>
+
+                  {/* -- 5-minute expansion detail row -- */}
+                  {expandedSlots.has(slot) && (
+                    <tr style={{ backgroundColor: '#fafbf9', borderTop: '1px dashed #c0d0c0' }}>
+                      <td colSpan={1 + rooms.length * 3 + 9} style={{ padding: '8px 12px', fontSize: '10px', color: '#6b7280' }}>
+                        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                          {getFiveMinSubSlots(slot).map((subSlot, idx) => {
+                            const subSlotMins = slotToMins(subSlot);
+                            const nextSubSlotMins = idx < 2 ? subSlotMins + 5 : subSlotMins + 5;
+                            const endLabel = formatMinsToTime(nextSubSlotMins > 1440 ? nextSubSlotMins - 1440 : nextSubSlotMins);
+                            const staffPresent = getStaffAtExactTime(subSlot);
+                            const transitions = getSlotTransitions(slot).filter(t => slotToMins(t.time) >= subSlotMins && slotToMins(t.time) < nextSubSlotMins);
+                            return (
+                              <div key={subSlot} style={{ flex: '0 1 auto', minWidth: '160px', padding: '6px 10px', backgroundColor: 'white', border: '1px solid #d0d8cc', borderRadius: '4px' }}>
+                                <div style={{ fontWeight: 700, fontSize: '10px', color: '#374151', marginBottom: '4px' }}>
+                                  {to12h(subSlot)} - {to12h(endLabel)}
+                                </div>
+                                {staffPresent.length > 0 && (
+                                  <div style={{ fontSize: '9px', color: '#166534', marginBottom: '3px' }}>
+                                    <div style={{ fontWeight: 600 }}>Present:</div>
+                                    <div style={{ marginLeft: '8px' }}>
+                                      {staffPresent.map((s, i) => (
+                                        <div key={i} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                          {s.empName}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {transitions.length > 0 && (
+                                  <div style={{ fontSize: '9px', color: '#d97706', marginBottom: '2px' }}>
+                                    <div style={{ fontWeight: 600 }}>Events:</div>
+                                    <div style={{ marginLeft: '8px' }}>
+                                      {transitions.map((t, i) => (
+                                        <div key={i} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                          {t.empName} {t.event} {t.time}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {staffPresent.length === 0 && transitions.length === 0 && (
+                                  <div style={{ fontSize: '9px', color: '#9ca3af', fontStyle: 'italic' }}>No activity</div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </>
               );
             })}
           </tbody>
