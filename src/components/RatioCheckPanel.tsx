@@ -1721,19 +1721,21 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   function isStaffOnLunch(empId: number, slot: string): boolean {
     const override = sessionData.staffTimeOverrides[String(empId)];
     if (!override?.lunchStart || !override?.lunchEnd) return false;
-    
+
     // Convert slot time and lunch times to minutes for comparison
     const [slotH, slotM] = slot.split(':').map(Number);
     const slotStartMins = slotH * 60 + slotM;
     const slotEndMins = slotStartMins + 15; // 15-min slot
-    
+
     const [lunchH, lunchMinutes] = override.lunchStart.split(':').map(Number);
     const lunchStartMins = lunchH * 60 + lunchMinutes;
     const [lunchEndH, lunchEndMins] = override.lunchEnd.split(':').map(Number);
     const lunchEndTotal = lunchEndH * 60 + lunchEndMins;
-    
-    // Slot overlaps with lunch if: slot starts before lunch ends AND slot ends after lunch starts
-    return slotStartMins < lunchEndTotal && slotEndMins > lunchStartMins;
+
+    // Use the slot END as the authoritative boundary so lunch breaks that finish
+    // mid-slot (e.g. 10:40 in a 10:30 slot) no longer keep the educator off-floor
+    // for the whole 15-minute row. Lunch must cover the slot end to count here.
+    return lunchStartMins < slotEndMins && lunchEndTotal >= slotEndMins;
   }
 
   /** Staff for a specific room at a slot - dedup ensures no-one appears in multiple places */
@@ -1833,6 +1835,8 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       if (move !== undefined) {
         return !roomIds.has(move) && !activityMoves.has(move) && move !== '__removed__';
       }
+      // Anyone on a scheduled lunch break belongs in the Lunch column, not Additional.
+      if (isStaffOnLunch(r.employeeId, slot)) return false;
       // If the staff has a primary room assignment (day allocation, natural room,
       // or float cover), they belong in that room — not in Additional Duties.
       if (primaryRoomMap[r.employeeId] !== null && primaryRoomMap[r.employeeId] !== undefined) return false;
