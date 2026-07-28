@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
 import { CENTRES } from '../config';
 
 // 24h ? 12h display: '14:30' ? '2:30pm', '07:00' ? '7am'
@@ -481,12 +481,12 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     return transitions.map(({ empId, empName, event, time }) => ({ empId, empName, event, time }));
   }
 
-  // Get staff presence at a specific 5-minute boundary time
-  function getStaffAtExactTime(timeStr: string): Array<{ empId: number; empName: string }> {
+  // Get staff presence at a specific time (handles exact time boundaries, not just 15-min slots)
+  function getStaffAtExactTime(timeStr: string): RosteredStaff[] {
     const timeMins = slotToMins(timeStr);
     if (timeMins === null) return [];
 
-    const present: Array<{ empId: number; empName: string }> = [];
+    const present: RosteredStaff[] = [];
     const seen = new Set<number>();
 
     for (const r of rosters) {
@@ -497,7 +497,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
         const startMins = slotToMins(seg.start);
         const endMins = slotToMins(seg.end);
         if (startMins !== null && endMins !== null && startMins <= timeMins && endMins > timeMins) {
-          present.push({ empId: r.employeeId, empName: r.employeeName });
+          present.push(r);
           seen.add(r.employeeId);
           break;
         }
@@ -505,6 +505,79 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     }
 
     return present;
+  }
+
+  // Get staff assigned to a room at a specific time (not slot-based, for 5-min precision)
+  function getStaffForRoomAtTime(timeStr: string, room: Room): RosteredStaff[] {
+    const available = getStaffAtExactTime(timeStr);
+    const timeMins = slotToMins(timeStr);
+    if (timeMins === null) return [];
+
+    const onLunch = new Set<number>();
+
+    // Check lunch status at this exact time
+    for (const s of available) {
+      const override = sharedTimeOverrides[String(s.employeeId)];
+      if (override?.lunchStart && override?.lunchEnd) {
+        const lunchStartMins = slotToMins(override.lunchStart);
+        const lunchEndMins = slotToMins(override.lunchEnd);
+        if (lunchStartMins !== null && lunchEndMins !== null && lunchStartMins <= timeMins && lunchEndMins > timeMins) {
+          onLunch.add(s.employeeId);
+        }
+      }
+    }
+
+    // Filter for this room at this time
+    const naturalRoomMap = new Map(rosters.map(r => [r.employeeId, rooms.find(rm => rm.deputyUnitId === r.unitId)?.id || '']));
+    const result = available.filter(s => {
+      if (onLunch.has(s.employeeId)) return false;
+      const naturalRoomId = naturalRoomMap.get(s.employeeId) || '';
+      return naturalRoomId === room.id;
+    });
+
+    return result;
+  }
+
+  // Get total children at a 5-min time (use same count as the 15-min slot it belongs to)
+  function getChildCountAtTime(timeStr: string, roomId: string): number {
+    // Find the 15-min slot this time belongs to
+    const timeMins = slotToMins(timeStr);
+    if (timeMins === null) return 0;
+    
+    // Find the containing 15-min slot
+    const allSlots = [...MORNING_SLOTS, ...MIDDAY_SLOTS, ...AFTERNOON_SLOTS];
+    for (const slot of allSlots) {
+      const slotMins = slotToMins(slot);
+      if (slotMins === null) continue;
+      if (slotMins <= timeMins && timeMins < slotMins + 15) {
+        return getChildCount(slot, roomId);
+      }
+    }
+    return 0;
+  }
+
+  // Get required staff at a 5-min time (compute per-room required based on exact presence)
+  function getRequiredStaffAtTime(timeStr: string, room: Room): number {
+    const childCount = getChildCountAtTime(timeStr, room.id);
+    if (childCount === 0) return 0;
+    
+    // Compute required based on room's age group
+    const bucket = roomAgeBucket(room.ageGroup);
+    const u24 = bucket === 'u24' ? childCount : 0;
+    const m24 = bucket === 'm24' ? childCount : 0;
+    const m36 = bucket === 'm36' ? childCount : 0;
+    return calcRequired(u24, m24, m36);
+  }
+
+  // Get total staff on floor at a specific time (across all rooms)
+  function getStaffOnFloorAtTime(timeStr: string): number {
+    const empIds = new Set<number>();
+    for (const room of rooms) {
+      getStaffForRoomAtTime(timeStr, room).forEach(s => {
+        if (!issUnitIdsSet.has(s.unitId)) empIds.add(s.employeeId);
+      });
+    }
+    return empIds.size;
   }
 
   // --- Deputy actual timesheets - poll every 5 minutes -----------------------
@@ -3817,56 +3890,93 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
 
                   </tr>
 
-                  {/* -- 5-minute expansion detail row -- */}
-                  {expandedSlots.has(slot) && (
-                    <tr style={{ backgroundColor: '#fafbf9', borderTop: '1px dashed #c0d0c0' }}>
-                      <td colSpan={1 + rooms.length * 3 + 9} style={{ padding: '8px 12px', fontSize: '10px', color: '#6b7280' }}>
-                        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-                          {getFiveMinSubSlots(slot).map((subSlot, idx) => {
-                            const subSlotMins = slotToMins(subSlot);
-                            const nextSubSlotMins = idx < 2 ? subSlotMins + 5 : subSlotMins + 5;
-                            const endLabel = formatMinsToTime(nextSubSlotMins > 1440 ? nextSubSlotMins - 1440 : nextSubSlotMins);
-                            const staffPresent = getStaffAtExactTime(subSlot);
-                            const transitions = getSlotTransitions(slot).filter(t => slotToMins(t.time) >= subSlotMins && slotToMins(t.time) < nextSubSlotMins);
-                            return (
-                              <div key={subSlot} style={{ flex: '0 1 auto', minWidth: '160px', padding: '6px 10px', backgroundColor: 'white', border: '1px solid #d0d8cc', borderRadius: '4px' }}>
-                                <div style={{ fontWeight: 700, fontSize: '10px', color: '#374151', marginBottom: '4px' }}>
-                                  {to12h(subSlot)} - {to12h(endLabel)}
+                  {/* -- 5-minute expansion sub-rows -- */}
+                  {expandedSlots.has(slot) && getFiveMinSubSlots(slot).map((subSlot, subIdx) => {
+                    const totalChildrenAtTime = rooms.reduce((sum, room) => sum + getChildCountAtTime(subSlot, room.id), 0);
+                    const totalReqAtTime = rooms.reduce((sum, room) => sum + getRequiredStaffAtTime(subSlot, room), 0);
+                    const totalAvailAtTime = getStaffOnFloorAtTime(subSlot);
+                    const spareAtTime = totalAvailAtTime - totalReqAtTime;
+                    const expandRowBg = subIdx % 2 === 0 ? '#fafff8' : '#f5faf3';
+
+                    const spareStyleExpand: React.CSSProperties = {
+                      ...tdBase,
+                      backgroundColor: spareAtTime < 0 ? '#fee2e2' : spareAtTime > 0 ? '#dcfce7' : 'white',
+                      fontWeight: 700,
+                      color: spareAtTime < 0 ? '#dc2626' : spareAtTime > 0 ? '#166534' : 'inherit',
+                      textAlign: 'center',
+                      fontSize: '11px',
+                    };
+
+                    return (
+                      <tr key={`${slot}-5m-${subIdx}`} style={{ backgroundColor: expandRowBg, fontSize: '11px', opacity: 0.9 }}>
+                        {/* Time cell - condensed */}
+                        <td style={{ ...tdBase, fontSize: '10px', fontWeight: 600, textAlign: 'center', color: '#666', padding: '2px 4px', backgroundColor: 'rgba(22, 163, 74, 0.05)' }}>
+                          {to12h(subSlot)}
+                        </td>
+
+                        {/* Per-room cells - condensed */}
+                        {rooms.map((room, roomIdx) => {
+                          const childCountAtTime = getChildCountAtTime(subSlot, room.id);
+                          const reqAtTime = getRequiredStaffAtTime(subSlot, room);
+                          const staffAtRoom = getStaffForRoomAtTime(subSlot, room);
+                          const isShortStaffed = staffAtRoom.length < reqAtTime;
+
+                          return (
+                            <Fragment key={`${slot}-5m-${subIdx}-r${roomIdx}`}>
+                              {/* Children count */}
+                              <td style={{ ...tdBase, fontSize: '10px', textAlign: 'center', padding: '2px 3px', backgroundColor: '#f5f5f5' }}>
+                                <span style={{ fontSize: '10px', fontWeight: 600 }}>{childCountAtTime}</span>
+                              </td>
+                              {/* Required */}
+                              <td style={{ ...tdBase, fontSize: '10px', textAlign: 'center', padding: '2px 3px', backgroundColor: '#f5f5f5' }}>
+                                <span style={{ fontSize: '10px', fontWeight: 600 }}>{reqAtTime}</span>
+                              </td>
+                              {/* Staff in room - name-only chips */}
+                              <td style={{ ...tdBase, padding: '2px 4px', backgroundColor: isShortStaffed ? '#fee2e2' : '#fafff8', borderRight: '1px solid #d1d5db' }}>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1px', minHeight: '16px' }}>
+                                  {staffAtRoom.length > 0 ? staffAtRoom.map(s => (
+                                    <span key={s.employeeId} style={{ fontSize: '9px', padding: '1px 3px', backgroundColor: 'white', border: '1px solid #d0d8cc', borderRadius: '2px', whiteSpace: 'nowrap', color: '#374151' }}>
+                                      {shortName(s.employeeName)}
+                                    </span>
+                                  )) : (
+                                    <span style={{ fontSize: '9px', color: '#9ca3af' }}>-</span>
+                                  )}
                                 </div>
-                                {staffPresent.length > 0 && (
-                                  <div style={{ fontSize: '9px', color: '#166534', marginBottom: '3px' }}>
-                                    <div style={{ fontWeight: 600 }}>Present:</div>
-                                    <div style={{ marginLeft: '8px' }}>
-                                      {staffPresent.map((s, i) => (
-                                        <div key={i} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                          {s.empName}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                                {transitions.length > 0 && (
-                                  <div style={{ fontSize: '9px', color: '#d97706', marginBottom: '2px' }}>
-                                    <div style={{ fontWeight: 600 }}>Events:</div>
-                                    <div style={{ marginLeft: '8px' }}>
-                                      {transitions.map((t, i) => (
-                                        <div key={i} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                          {t.empName} {t.event} {t.time}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                                {staffPresent.length === 0 && transitions.length === 0 && (
-                                  <div style={{ fontSize: '9px', color: '#9ca3af', fontStyle: 'italic' }}>No activity</div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
+                              </td>
+                            </Fragment>
+                          );
+                        })}
+
+                        {/* Totals section - condensed */}
+                        <td style={{ ...tdBase, fontSize: '10px', textAlign: 'center', padding: '2px 3px', backgroundColor: '#1a4a0a', color: 'white', fontWeight: 600 }}>
+                          {totalChildrenAtTime}
+                        </td>
+                        <td style={{ ...tdBase, fontSize: '10px', textAlign: 'center', padding: '2px 3px', backgroundColor: '#1a4a0a', color: 'white', fontWeight: 600 }}>
+                          {totalReqAtTime}
+                        </td>
+                        <td style={{ ...tdBase, fontSize: '10px', textAlign: 'center', padding: '2px 3px', backgroundColor: '#f5f5f5', fontWeight: 600 }}>
+                          {totalAvailAtTime}
+                        </td>
+                        <td style={spareStyleExpand}>
+                          {spareAtTime}
+                        </td>
+
+                        {/* Activity columns - empty/collapsed for 5-min rows */}
+                        <td style={{ ...tdBase, fontSize: '9px', padding: '2px 3px', backgroundColor: '#fef3c7', minWidth: '70px' }}>
+                          <span style={{ color: '#9ca3af' }}>-</span>
+                        </td>
+                        <td style={{ ...tdBase, fontSize: '9px', padding: '2px 3px', backgroundColor: '#bae6fd', minWidth: '70px' }}>
+                          <span style={{ color: '#9ca3af' }}>-</span>
+                        </td>
+                        <td style={{ ...tdBase, fontSize: '9px', padding: '2px 3px', backgroundColor: '#ccfbf1', minWidth: '70px' }}>
+                          <span style={{ color: '#9ca3af' }}>-</span>
+                        </td>
+                        <td style={{ ...tdBase, fontSize: '9px', padding: '2px 3px', backgroundColor: '#ede9fe', minWidth: '70px' }}>
+                          <span style={{ color: '#9ca3af' }}>-</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </>
               );
             })}
