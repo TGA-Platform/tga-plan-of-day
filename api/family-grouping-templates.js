@@ -1,4 +1,4 @@
-﻿/**
+/**
  * /api/family-grouping-templates
  *
  * GET  ?centre_id=xxx              -> list templates for centre
