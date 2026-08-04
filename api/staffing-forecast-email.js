@@ -14,6 +14,7 @@
 
 import { CENTRES } from './_centres.js';
 import { calculateStaffingAnalysis } from './_staffing-analysis.js';
+import { fetchCampusDetails, matchCentreToDetails } from './_campus-details.js';
 
 const DEFAULT_RECIPIENTS = Array.from(new Set([
   ...(process.env.FORECAST_EMAIL_TO || 'claude@tga.edu.au')
@@ -30,7 +31,9 @@ const CLUSTERS = {
   'North Coast':  ['glendale','edgeworth','charlestown','aberglasslyn','tuggerah'],
 };
 
-const AM_EMAILS = {
+// Legacy env-var fallbacks for AM emails, used only if Monday.com Campus Details
+// board is unreachable or missing an AM email for a cluster.
+const AM_EMAILS_FALLBACK = {
   'South West':   process.env.FORECAST_EMAIL_AM_SOUTH_WEST   || 'lilian@tga.edu.au',
   'South Coast':  process.env.FORECAST_EMAIL_AM_SOUTH_COAST  || 'rebeccasapienza@tga.edu.au',
   'South Sydney': process.env.FORECAST_EMAIL_AM_SOUTH_SYDNEY || 'olivia@tga.edu.au',
@@ -135,7 +138,7 @@ function buildHtml(summary, opts = {}) {
   `;
 }
 
-function buildEmails(summary, date, includeClusters = true) {
+function buildEmails(summary, date, campusDetails, includeClusters = true) {
   const dateLabel = formatDateLabel(date);
   const emails = [];
 
@@ -153,13 +156,29 @@ function buildEmails(summary, date, includeClusters = true) {
 
   if (!includeClusters) return emails;
 
-  // Cluster emails to area managers
+  // Cluster emails to area managers — resolve AM email from Monday.com Campus Details board.
+  // The board is the source of truth; fall back to env vars / hardcoded values only if the
+  // board is missing data for the cluster.
   for (const [clusterName, centreIds] of Object.entries(CLUSTERS)) {
-    const amEmail = AM_EMAILS[clusterName];
-    if (!amEmail) continue;
-
     const clusterSummary = summary.filter(s => centreIds.includes(s.centreId));
     if (clusterSummary.length === 0) continue;
+
+    // Pick the AM email from the first centre in the cluster that has one on Monday.com
+    let amEmail = '';
+    for (const centreId of centreIds) {
+      const centre = CENTRES.find(c => c.id === centreId);
+      if (!centre) continue;
+      const detail = matchCentreToDetails(centre, campusDetails);
+      if (detail?.areaManagerEmail) {
+        amEmail = detail.areaManagerEmail;
+        break;
+      }
+    }
+    if (!amEmail) {
+      amEmail = AM_EMAILS_FALLBACK[clusterName];
+      console.warn(`[staffing-forecast-email] No AM email on Monday.com for ${clusterName}; using fallback.`);
+    }
+    if (!amEmail) continue;
 
     emails.push({
       to: [amEmail],
@@ -167,6 +186,27 @@ function buildEmails(summary, date, includeClusters = true) {
       html: buildHtml(clusterSummary, {
         title: `TGA Staffing Forecast — ${clusterName} Cluster — ${dateLabel}`,
         subtitle: `Expected children and required staffing for the ${clusterName} cluster.`,
+      }),
+    });
+  }
+
+  // Per-centre emails to directors — source of truth is Monday.com Campus Details board.
+  for (const s of summary) {
+    if (!s) continue;
+    const centre = CENTRES.find(c => c.id === s.centreId);
+    if (!centre) continue;
+    const detail = matchCentreToDetails(centre, campusDetails);
+    if (!detail?.directorEmail) {
+      console.warn(`[staffing-forecast-email] No director email on Monday.com for ${centre.name}; skipping director email.`);
+      continue;
+    }
+
+    emails.push({
+      to: [detail.directorEmail],
+      subject: `TGA Staffing Forecast — ${centre.name} — ${dateLabel}`,
+      html: buildHtml([s], {
+        title: `TGA Staffing Forecast — ${centre.name} — ${dateLabel}`,
+        subtitle: `Expected children and required staffing for ${centre.name}.`,
       }),
     });
   }
@@ -185,6 +225,17 @@ export default async function handler(req, res) {
   try {
     const host = req.headers.host || 'plan.tga.edu.au';
     const proto = req.headers['x-forwarded-proto'] || 'https';
+
+    // Fetch fresh director + AM emails from Monday.com Campus Details board every run.
+    // If the board call fails, we still generate the email but fall back to env vars/hardcoded AMs
+    // and skip director emails. The board is the source of truth for these addresses.
+    let campusDetails = {};
+    try {
+      const { details } = await fetchCampusDetails();
+      campusDetails = details;
+    } catch (err) {
+      console.error('[staffing-forecast-email] Failed to fetch Monday.com Campus Details:', err.message);
+    }
 
     const [rosterRes, wwccRes, zCasualRes] = await Promise.all([
       fetch(`${proto}://${host}/api/deputy-rosters`, {
@@ -283,7 +334,7 @@ export default async function handler(req, res) {
 
     const includeClusters = req.query.clusters !== '0' && req.query.includeClusters !== 'false';
     const html = buildHtml(summary, { title: `TGA Staffing Forecast — ${formatDateLabel(date)}` });
-    const emails = buildEmails(summary, date, includeClusters);
+    const emails = buildEmails(summary, date, campusDetails, includeClusters);
 
     return res.status(200).json({
       ok: true,
