@@ -1144,7 +1144,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     for (const slot of allSlots) {
       const slotMins = slotToMins(slot);
       const seen = new Set<number>();
-      map[slot] = allRosters.filter(r => {
+      const slotStaff: RosteredStaff[] = [];
+      for (const r of allRosters) {
+        if (seen.has(r.employeeId)) continue;
         // Use time override if set, otherwise fall back to raw roster times
         const override = sharedTimeOverrides[String(r.employeeId)];
         const segments = getEffectiveSegments(r, override);
@@ -1153,12 +1155,25 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           const e = slotToMins(seg.end);
           return s !== null && e !== null && s <= slotMins && e > slotMins;
         });
-        if (!inShift) return false;
-        // Deduplicate: split shift staff have 2 roster entries — only show once per slot
-        if (seen.has(r.employeeId)) return false;
-        seen.add(r.employeeId);
-        return true;
-      });
+        if (inShift) {
+          // Deduplicate: split shift staff have 2 roster entries — only show once per slot
+          seen.add(r.employeeId);
+          slotStaff.push(r);
+          continue;
+        }
+        // Keep staff visible in Additional Duties after their planned day ends
+        // instead of disappearing from the grid. Only mark as ended when every
+        // effective segment for the day has finished by this slot.
+        const shiftEnded = segments.length > 0 && segments.every(seg => {
+          const e = slotToMins(seg.end);
+          return e !== null && e <= slotMins;
+        });
+        if (shiftEnded) {
+          seen.add(r.employeeId);
+          slotStaff.push({ ...r, shiftEnded: true });
+        }
+      }
+      map[slot] = slotStaff;
     }
     return map;
   }, [rosters, slots, sharedTimeOverrides, floatScheds]);
@@ -1191,6 +1206,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
           if (manualMove !== undefined) continue; // manual placement always wins
           const staffObj = (staffAtSlotMap[slot] ?? []).find(s => s.employeeId === offFloorEmpId);
           if (!staffObj) continue;
+          if (staffObj.shiftEnded) continue;
           // Deduplicate: only add once per employee per activity column
           if (ct === 'programming' && !progIds.has(offFloorEmpId)) {
             progIds.add(offFloorEmpId); progStaff.push(staffObj);
@@ -1276,6 +1292,11 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     for (const slot of allSlots) {
       const byEmp: Record<number, string | null> = {};
       for (const s of staffAtSlotMap[slot] ?? []) {
+        // Post-shift staff are never assigned to a room — they live in Additional Duties only.
+        if (s.shiftEnded) {
+          byEmp[s.employeeId] = null;
+          continue;
+        }
         // 1. Per-slot move from Ratio Check always wins over Plan-of-Day.
         //    Room moves put them in that room; activity/removed moves make them unassigned.
         const slotMove = sessionData.staffMoves[`${s.employeeId}:${slot}`];
@@ -1475,6 +1496,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
       const allFloatCoverIds = new Set(Object.values(floatCovers).flat());
       const claimed   = new Set<number>();
       for (const s of available) {
+        if (s.shiftEnded) continue;
         if (offFloor.has(s.employeeId)) continue;
         // Staff assigned to cover a room via Plan Day float schedule should appear
         // in the covered room, not their natural/moved room.
@@ -1542,6 +1564,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     );
     const roomFgId = getFgIdClaimingRoomAtSlot(slot, room.id);
     const rosterInRoom = available.filter(s => {
+      if (s.shiftEnded) return false;
       if (offFloor.has(s.employeeId)) return false;
       if (inActivity.has(s.employeeId)) return false;
       if (onLunch.has(s.employeeId)) return false; // Exclude staff still on lunch at slot end
@@ -1569,6 +1592,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const globalClaimed = rosterClaimedByRoomAtSlot[slot] ?? new Set<number>();
     const floatStaffInRoom = available.filter(s =>
       floatCovers.includes(s.employeeId) &&
+      !s.shiftEnded &&
       !offFloor.has(s.employeeId) &&
       !inActivity.has(s.employeeId) &&
       !globalClaimed.has(s.employeeId) &&
@@ -1593,6 +1617,7 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const available = staffAtSlotMap[slot] ?? [];
     const primaryRoomMap = staffPrimaryRoomBySlot[slot] ?? {};
     return available.filter(r => {
+      if (r.shiftEnded) return false;
       const moveKey = `${r.employeeId}:${slot}`;
       const move = sessionData.staffMoves[moveKey];
       if (move !== undefined && (move === '__additional__' || move === '__removed__')) return false;
@@ -1612,6 +1637,9 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
     const floatCovers = floatCoveringRoomBySlot[slot] ?? {};
     const floatsCoveringRoom = new Set(Object.values(floatCovers).flat());
     return available.filter(r => {
+      // Post-shift staff always belong in Additional Duties so they don't vanish
+      // from the grid after their planned day ends.
+      if (r.shiftEnded) return true;
       const moveKey = `${r.employeeId}:${slot}`;
       const move = sessionData.staffMoves[moveKey];
       // Explicit activity/removed moves never belong in Additional Duties.
@@ -3794,14 +3822,17 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                         return (
                           <div key={s.employeeId} style={{ position: 'relative', display: 'inline-block' }}>
                             <div
-                              draggable
-                              onDragStart={() => { dragState.current = { empId: s.employeeId, slot, fromSource: '__additional__' }; }}
+                              draggable={!s.shiftEnded}
+                              onDragStart={() => { if (s.shiftEnded) return; dragState.current = { empId: s.employeeId, slot, fromSource: '__additional__' }; }}
                               onClick={e => { e.stopPropagation(); handleChipTap(s.employeeId, slot, '__additional__'); }}
-                              title={s.employeeName + ' - drag or tap to reassign'}
+                              title={s.shiftEnded ? s.employeeName + ' - shift ended' : s.employeeName + ' - drag or tap to reassign'}
                               style={{
                                 fontSize: '11px', padding: '2px 5px', borderRadius: '4px',
-                                backgroundColor: '#fef3c7', color: '#92400e',
-                                border: `1px solid ${hasTimeOverride ? '#818cf8' : '#fcd34d'}`, cursor: 'grab',
+                                backgroundColor: s.shiftEnded ? '#f3f4f6' : '#fef3c7',
+                                color: s.shiftEnded ? '#4b5563' : '#92400e',
+                                opacity: s.shiftEnded ? 0.75 : 1,
+                                border: `1px solid ${hasTimeOverride ? '#818cf8' : s.shiftEnded ? '#d1d5db' : '#fcd34d'}`,
+                                cursor: s.shiftEnded ? 'default' : 'grab',
                                 display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start',
                                 userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none', minWidth: '54px',
                                 outline: touchSelected?.empId === s.employeeId && touchSelected?.slot === slot ? '2px solid #d97706' : undefined,

@@ -41,6 +41,7 @@ export interface RosteredStaff {
   externalCasualMeta?: ExternalCasualMeta; // extra data only on EC staff
   isSplitShift?: boolean;  // true when employee has 2 roster entries with a gap ≥ 2 hours
   splitSegments?: { startTime: string; endTime: string }[]; // both segments for display
+  shiftEnded?: boolean;    // true when displayed after their effective shift has ended (Additional Duties only)
 }
 
 /** Metadata stored alongside an EC (External Casual) roster entry */
