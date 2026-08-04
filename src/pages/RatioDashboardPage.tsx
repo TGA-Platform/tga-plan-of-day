@@ -337,7 +337,8 @@ function shiftCoverage(
 function FloatPoolSection({
   floats,
   onLeave,
-  roomStatuses,
+  roomStatuses: _roomStatuses,
+  analysisRoomStatuses,
   totalChildren: _totalChildren,
   children,
   onDragStart,
@@ -352,6 +353,7 @@ function FloatPoolSection({
   floats: FloatStaff[];
   onLeave: RosteredStaff[];
   roomStatuses: RoomRatioStatus[];
+  analysisRoomStatuses: RoomRatioStatus[];
   totalChildren: number;
   children: AttendanceChild[];
   onDragStart?: (e: React.DragEvent, staff: RosteredStaff, sourceId: string) => void;
@@ -364,10 +366,12 @@ function FloatPoolSection({
   adStaff?: RosteredStaff[];
 }) {
   // -- Step 1: Identify short and surplus rooms ---------------------------
-  const shortageRooms = [...roomStatuses]
+  // Use analysisRoomStatuses (always all-day) for the Staffing Analysis numbers
+  // so they don't fluctuate as children sign in/out during the day.
+  const shortageRooms = [...analysisRoomStatuses]
     .filter(r => r.shortage > 0)
     .sort((a, b) => b.shortage - a.shortage);
-  const surplusRooms = [...roomStatuses]
+  const surplusRooms = [...analysisRoomStatuses]
     .filter(r => r.shortage < 0)
     .sort((a, b) => a.shortage - b.shortage); // most surplus first
 
@@ -442,7 +446,7 @@ function FloatPoolSection({
   const bufferFloats = floats.filter(f => !assignedIds.has(`${f.employeeId}-${f.startTime}`));
 
   // -- Floor staff & buffer -------------------------------------------------
-  const totalFloorStaff = roomStatuses.reduce((sum, r) => sum + r.staffCount, 0);
+  const totalFloorStaff = analysisRoomStatuses.reduce((sum, r) => sum + r.staffCount, 0);
   const bufferRequired  = totalFloorStaff > 0 ? totalFloorStaff / 6 : 0;
 
   // AD staff available as floaters — ONLY for under-100 place centres
@@ -1005,6 +1009,37 @@ export default function RatioDashboardPage() {
       return buildRoomStatus(rs.room, children as any, tagCasual([...staying, ...movedIn, ...issMovedHere]), showCurrentOnly, nowM);
     });
   }, [roomStatuses, floats, issStaff, supportStaff, externalCasuals, staffMoves, children, showCurrentOnly, hasOverrides, tagCasual]);
+
+  // All-day room statuses — always showCurrentOnly=false, used for the Staffing Analysis
+  // summary numbers in FloatPoolSection so they don't change as children sign in/out.
+  const allDayRoomStatuses = useMemo((): RoomRatioStatus[] => {
+    if (!hasOverrides) {
+      return roomStatuses.map(rs =>
+        buildRoomStatus(rs.room, children as any, tagCasual(rs.rosteredStaff), false)
+      );
+    }
+    const staffOrigin = new Map<number, { staff: RosteredStaff; roomId: string }>();
+    roomStatuses.forEach(rs => rs.rosteredStaff.forEach(s => staffOrigin.set(s.employeeId, { staff: s, roomId: rs.room.id })));
+    floats.forEach(f => staffOrigin.set(f.employeeId, { staff: f, roomId: 'float' }));
+    supportStaff.forEach(s => staffOrigin.set(s.employeeId, { staff: s, roomId: 'support' }));
+    issStaff.forEach(s => staffOrigin.set(s.employeeId, { staff: s, roomId: 'iss' }));
+    externalCasuals.forEach(ec => staffOrigin.set(ec.employeeId, { staff: ec, roomId: 'float' }));
+    return roomStatuses.map(rs => {
+      const staying = rs.rosteredStaff.filter(s => {
+        const dest = staffMoves[s.employeeId];
+        return dest === undefined || dest === rs.room.id;
+      });
+      const movedIn = [...staffOrigin.values()]
+        .filter(({ staff: s, roomId }) => staffMoves[s.employeeId] === rs.room.id && roomId !== rs.room.id)
+        .map(({ staff }) => staff);
+      const issMovedHere = issStaff.filter(s =>
+        staffMoves[s.employeeId] === rs.room.id &&
+        !staying.some(x => x.employeeId === s.employeeId) &&
+        !movedIn.some(x => x.employeeId === s.employeeId)
+      );
+      return buildRoomStatus(rs.room, children as any, tagCasual([...staying, ...movedIn, ...issMovedHere]), false);
+    });
+  }, [roomStatuses, floats, issStaff, supportStaff, externalCasuals, staffMoves, children, hasOverrides, tagCasual]);
 
   // ISS staff: split into unassigned, moved-to-room, moved-to-float
   const effectiveIssStaff = useMemo((): FloatStaff[] => {
@@ -1806,6 +1841,7 @@ export default function RatioDashboardPage() {
               floats={effectiveFloats}
               onLeave={onLeave}
               roomStatuses={effectiveRoomStatuses}
+              analysisRoomStatuses={allDayRoomStatuses}
               totalChildren={children.length}
               children={children}
               onDragStart={onDragStart}

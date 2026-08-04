@@ -443,17 +443,21 @@ function computeDailyMetrics(centre, date, attendance, rosters, zCasuals, actual
     external_casual_hours: externalCasualHours,
     internal_casual_count: internalCasualCount,
     external_casual_count: externalCasualCount,
-    // present_* columns for staffing_analysis table
+  };
+  // present_* and surplus_val fields are for staffing_analysis only — NOT report_daily.
+  // Store them separately so they don't pollute the report_daily upsert.
+  dailyRow._staffingAnalysisExtra = {
     present_surplus_val: floatSurplus,
     present_casuals_needed: totalFloatersNeeded,
     present_float_surplus: floatSurplus,
     present_total_floaters_needed: totalFloatersNeeded,
     present_effective_float_count: totalFloatCount + adAvailable,
-    present_room_net_surplus: roomSurplus,
+    present_room_net_surplus: roomSurplus > 0 ? roomSurplus : 0,
     present_children_count: children,
     present_required_staff: required,
     present_computed_at: new Date().toISOString(),
   };
+  return dailyRow;
 }
 
 function computeWwccSnapshot(centre, wwccAll, activeStaffNames) {
@@ -519,10 +523,27 @@ async function snapshotCentreDate(centre, date, wwccAll, skipWwcc, internalCasua
 
   // Save present_* values to staffing_analysis table FIRST — this is the most
   // important save and must complete before the heavier report_slot_30 write.
+  // Compute all-day surplusVal to match the dashboard Float Pool panel formula:
+  // positive = float surplus (no casuals needed), negative = casuals needed
+  const allDayCasualsNeeded = Math.max(0, dailyRow.total_floaters_needed - (dailyRow.float_count + (dailyRow.room_surplus > 0 ? dailyRow.room_surplus : 0) + dailyRow.ad_available));
+  const allDaySurplusVal = allDayCasualsNeeded > 0 ? -allDayCasualsNeeded : dailyRow.float_surplus;
+
   const staffingAnalysisRow = {
     centre_id: dailyRow.centre_id,
     campus: dailyRow.campus,
     date: dailyRow.date,
+    // All-day figures (source of truth for email/reports)
+    surplus_val: allDaySurplusVal,
+    casuals_needed: allDayCasualsNeeded,
+    float_surplus: dailyRow.float_surplus,
+    total_floaters_needed: dailyRow.total_floaters_needed,
+    effective_float_count: dailyRow.float_count + dailyRow.ad_available,
+    room_net_surplus: Math.max(0, dailyRow.room_surplus),
+    children_count: dailyRow.children_attended,
+    required_staff: dailyRow.required_staff,
+    floor_staff: dailyRow.floor_staff,
+    buffer_required: dailyRow.buffer_required,
+    // Present/snapshot figures
     present_surplus_val: dailyRow.present_surplus_val,
     present_casuals_needed: dailyRow.present_casuals_needed,
     present_float_surplus: dailyRow.present_float_surplus,
@@ -622,16 +643,20 @@ export default async function handler(req, res) {
         console.error(`[cron-reporting-snapshot] actuals fetch failed for ${date}:`, err.message);
       }
 
+      const verbose = req.query?.verbose === '1';
       const results = await Promise.all(
         CENTRES.map(centre =>
           snapshotCentreDate(centre, date, wwccAll, skipWwcc, internalCasualNames, dateActuals)
-            .then(counts => ({ ok: true, counts }))
+            .then(counts => ({ ok: true, centre: centre.id, counts }))
             .catch(err => {
               console.error(`[cron-reporting-snapshot] ${centre.id} ${date} failed:`, err.message);
-              return { ok: false, counts: { slotRows: 0, dailyRows: 0, wwccRows: 0 } };
+              return { ok: false, centre: centre.id, error: err.message, counts: { slotRows: 0, dailyRows: 0, wwccRows: 0 } };
             })
         )
       );
+      if (verbose) {
+        return res.status(200).json({ dates, results });
+      }
       for (const r of results) {
         if (r.ok) {
           totalSlotRows += r.counts.slotRows;
