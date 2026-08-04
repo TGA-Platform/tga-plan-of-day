@@ -371,6 +371,17 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
   const [fgPanelOpen, setFgPanelOpen] = useState(false);
   const [editingFgId, setEditingFgId] = useState<string | null>(null);
   const [fgPopoverSlot, setFgPopoverSlot] = useState<string | null>(null);
+  const [fgTemplates, setFgTemplates] = useState<any[]>([]);
+  const [fgTemplatesLoading, setFgTemplatesLoading] = useState(false);
+  const [saveTemplateModal, setSaveTemplateModal] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState('');
+  const [saveTemplateLoading, setSaveTemplateLoading] = useState(false);
+  const [saveTemplateStatus, setSaveTemplateStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+  const [selectedDays, setSelectedDays] = useState<number[]>([]);
+  const [loadTemplateModal, setLoadTemplateModal] = useState(false);
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [editTemplateName, setEditTemplateName] = useState('');
+  const [editTemplateDays, setEditTemplateDays] = useState<number[]>([]);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Serialize saves per centre+date+session so two overlapping saves can't race
   // and cause the older payload to overwrite the newer one on the server.
@@ -2329,21 +2340,58 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
                 ? 'No groupings yet. Add one below.'
                 : `${sharedFamilyGroupings.length} grouping(s) configured.`}
             </span>
-            <button
-              onClick={addFamilyGrouping}
-              style={{
-                marginLeft: 'auto', padding: '5px 14px', borderRadius: '8px', fontWeight: 600,
-                fontSize: '12px', backgroundColor: '#7c3aed', color: 'white', border: 'none', cursor: 'pointer',
-              }}
-            >
-              + Add Grouping
-            </button>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                onClick={async () => {
+                  setFgTemplatesLoading(true);
+                  setLoadTemplateModal(true);
+                  try {
+                    const r = await fetch(`/api/family-grouping-templates?centre_id=${encodeURIComponent(centreId)}`);
+                    if (r.ok) {
+                      const templates = await r.json();
+                      setFgTemplates(templates);
+                    }
+                  } catch { /* network error */ }
+                  setFgTemplatesLoading(false);
+                }}
+                disabled={fgTemplatesLoading}
+                style={{
+                  padding: '5px 14px', borderRadius: '8px', fontWeight: 600,
+                  fontSize: '12px', backgroundColor: fgTemplatesLoading ? '#f3f4f6' : 'white',
+                  color: fgTemplatesLoading ? '#9ca3af' : '#7c3aed',
+                  border: '1px solid #c4b5fd', cursor: fgTemplatesLoading ? 'default' : 'pointer',
+                }}
+              >
+                {fgTemplatesLoading ? '⏳ Loading...' : '📋 Load'}
+              </button>
+              <button
+                onClick={() => { setSaveTemplateName(''); setSelectedDays([]); setSaveTemplateModal(true); }}
+                disabled={sharedFamilyGroupings.length === 0}
+                style={{
+                  padding: '5px 14px', borderRadius: '8px', fontWeight: 600,
+                  fontSize: '12px', backgroundColor: sharedFamilyGroupings.length === 0 ? '#f3f4f6' : '#10b981',
+                  color: sharedFamilyGroupings.length === 0 ? '#9ca3af' : 'white',
+                  border: 'none', cursor: sharedFamilyGroupings.length === 0 ? 'default' : 'pointer',
+                }}
+              >
+                💾 Save as Template
+              </button>
+              <button
+                onClick={addFamilyGrouping}
+                style={{
+                  padding: '5px 14px', borderRadius: '8px', fontWeight: 600,
+                  fontSize: '12px', backgroundColor: '#7c3aed', color: 'white', border: 'none', cursor: 'pointer',
+                }}
+              >
+                + Add Grouping
+              </button>
+            </div>
           </div>
 
           {/* FG list */}
           {sharedFamilyGroupings.length === 0 && (
             <div style={{ fontSize: '12px', color: '#9ca3af', textAlign: 'center', padding: '16px 0' }}>
-              No family groupings configured. Click "+ Add Grouping" to create one.
+              No family groupings configured. Click "+ Add Grouping" or "📋 Load" to get started.
             </div>
           )}
 
@@ -2551,6 +2599,252 @@ export default function RatioCheckPanel({ centreId, date, rooms, children, roste
             })}
           </div>
         </div>
+      )}
+
+      {/* -- Save Template Modal -- */}
+      {saveTemplateModal && (
+        <>
+          <div className="no-print" style={{ position: 'fixed', inset: 0, zIndex: 999, backgroundColor: 'rgba(0,0,0,0.35)' }} onClick={() => setSaveTemplateModal(false)} />
+          <div className="no-print" onClick={e => e.stopPropagation()} style={{
+            position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+            zIndex: 1000, background: 'white', borderRadius: '14px',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.22)', padding: '20px 22px', width: '320px',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <span style={{ fontWeight: 700, color: '#10b981', fontSize: '14px' }}>💾 Save as Template</span>
+              <button onClick={() => setSaveTemplateModal(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#9ca3af', padding: '0 2px', lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '14px' }}>
+              Save {sharedFamilyGroupings.length} grouping{sharedFamilyGroupings.length !== 1 ? 's' : ''} to reuse later
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, color: '#374151' }}>Template Name</span>
+                <input
+                  type="text"
+                  placeholder="e.g. Monday Setup"
+                  value={saveTemplateName}
+                  onChange={e => setSaveTemplateName(e.target.value)}
+                  style={{ fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '6px 8px', outline: 'none' }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, color: '#374151' }}>Apply to these days</span>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map((day, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setSelectedDays(prev => prev.includes(idx) ? prev.filter(d => d !== idx) : [...prev, idx])}
+                      style={{
+                        padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                        backgroundColor: selectedDays.includes(idx) ? '#10b981' : '#f3f4f6',
+                        color: selectedDays.includes(idx) ? 'white' : '#6b7280',
+                        border: '1px solid ' + (selectedDays.includes(idx) ? '#059669' : '#d1d5db'),
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {day}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            {saveTemplateStatus === 'saved' && (
+              <div style={{ background: '#f0fdf4', color: '#166534', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, marginBottom: '12px' }}>
+                ✅ Saved!
+              </div>
+            )}
+            {saveTemplateStatus === 'error' && (
+              <div style={{ background: '#fee2e2', color: '#dc2626', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, marginBottom: '12px' }}>
+                ❌ Save failed. Please try again.
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={async () => {
+                  if (!saveTemplateName.trim()) return;
+                  setSaveTemplateLoading(true);
+                  setSaveTemplateStatus('idle');
+                  try {
+                    const r = await fetch('/api/family-grouping-templates', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        centre_id: centreId,
+                        name: saveTemplateName,
+                        days_of_week: selectedDays,
+                        template_data: sharedFamilyGroupings.map(fg => ({
+                          label: fg.label,
+                          roomIds: fg.roomIds,
+                          slots: fg.slots,
+                          color: fg.color,
+                          heldInRoom: fg.heldInRoom,
+                        })),
+                      }),
+                    });
+                    if (r.ok) {
+                      setSaveTemplateStatus('saved');
+                      setTimeout(() => {
+                        setSaveTemplateModal(false);
+                        setSaveTemplateName('');
+                        setSelectedDays([]);
+                        setSaveTemplateStatus('idle');
+                      }, 1200);
+                    } else {
+                      setSaveTemplateStatus('error');
+                    }
+                  } catch {
+                    setSaveTemplateStatus('error');
+                  }
+                  setSaveTemplateLoading(false);
+                }}
+                disabled={!saveTemplateName.trim() || saveTemplateLoading || saveTemplateStatus === 'saved'}
+                style={{ flex: 1, padding: '9px', borderRadius: '8px', border: 'none', backgroundColor: !saveTemplateName.trim() || saveTemplateLoading || saveTemplateStatus === 'saved' ? '#d1d5db' : '#10b981', color: 'white', fontWeight: 700, fontSize: '13px', cursor: !saveTemplateName.trim() || saveTemplateLoading || saveTemplateStatus === 'saved' ? 'default' : 'pointer' }}
+              >
+                {saveTemplateStatus === 'saved' ? '✓ Saved' : saveTemplateLoading ? '⏳ Saving...' : '✓ Save'}
+              </button>
+              <button
+                onClick={() => { setSaveTemplateModal(false); setSaveTemplateStatus('idle'); }}
+                style={{ padding: '9px 14px', borderRadius: '8px', border: '1px solid #d1d5db', backgroundColor: 'white', color: '#6b7280', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* -- Load Template Modal -- */}
+      {loadTemplateModal && (
+        <>
+          <div className="no-print" style={{ position: 'fixed', inset: 0, zIndex: 999, backgroundColor: 'rgba(0,0,0,0.35)' }} onClick={() => { setLoadTemplateModal(false); setEditingTemplateId(null); }} />
+          <div className="no-print" onClick={e => e.stopPropagation()} style={{
+            position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+            zIndex: 1000, background: 'white', borderRadius: '14px',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.22)', padding: '20px 22px', width: '340px', maxHeight: '80vh', overflow: 'auto',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <span style={{ fontWeight: 700, color: '#7c3aed', fontSize: '14px' }}>📋 Load Template</span>
+              <button onClick={() => { setLoadTemplateModal(false); setEditingTemplateId(null); }} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#9ca3af', padding: '0 2px', lineHeight: 1 }}>✕</button>
+            </div>
+            {fgTemplatesLoading ? (
+              <div style={{ fontSize: '12px', color: '#6b7280', padding: '20px 0', textAlign: 'center' }}>⏳ Loading templates...</div>
+            ) : fgTemplates.length === 0 ? (
+              <div style={{ fontSize: '12px', color: '#9ca3af', padding: '20px 0', textAlign: 'center' }}>
+                No templates saved yet.<br />Create one with "💾 Save as Template".
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {fgTemplates.map(t => (
+                  <div key={t.id} style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '10px 12px' }}>
+                    {editingTemplateId === t.id ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <input
+                          type="text"
+                          value={editTemplateName}
+                          onChange={e => setEditTemplateName(e.target.value)}
+                          style={{ fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '5px 8px' }}
+                        />
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map((day, idx) => (
+                            <button
+                              key={idx}
+                              onClick={() => setEditTemplateDays(prev => prev.includes(idx) ? prev.filter(d => d !== idx) : [...prev, idx])}
+                              style={{
+                                padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 600,
+                                backgroundColor: editTemplateDays.includes(idx) ? '#7c3aed' : '#f3f4f6',
+                                color: editTemplateDays.includes(idx) ? 'white' : '#6b7280',
+                                border: '1px solid ' + (editTemplateDays.includes(idx) ? '#7c3aed' : '#d1d5db'),
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {day}
+                            </button>
+                          ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button
+                            onClick={async () => {
+                              try {
+                                const r = await fetch('/api/family-grouping-templates', {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ id: t.id, name: editTemplateName, days_of_week: editTemplateDays }),
+                                });
+                                if (r.ok) {
+                                  setFgTemplates(prev => prev.map(tm => tm.id === t.id ? { ...tm, name: editTemplateName, days_of_week: editTemplateDays } : tm));
+                                  setEditingTemplateId(null);
+                                }
+                              } catch { /* network error */ }
+                            }}
+                            disabled={!editTemplateName.trim()}
+                            style={{ flex: 1, padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600, backgroundColor: !editTemplateName.trim() ? '#d1d5db' : '#7c3aed', color: 'white', border: 'none', cursor: !editTemplateName.trim() ? 'default' : 'pointer' }}
+                          >
+                            ✓ Update
+                          </button>
+                          <button
+                            onClick={() => setEditingTemplateId(null)}
+                            style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '11px', backgroundColor: 'white', color: '#6b7280', border: '1px solid #d1d5db', cursor: 'pointer' }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: '12px', color: '#374151' }}>{t.name}</div>
+                          <div style={{ fontSize: '10px', color: '#6b7280' }}>
+                            {t.template_data?.length || 0} grouping{t.template_data?.length !== 1 ? 's' : ''}
+                            {t.days_of_week?.length > 0 && ` • ${t.days_of_week.map((d: number) => ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'][d]).join(', ')}`}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button
+                            onClick={() => {
+                              if (t.template_data && Array.isArray(t.template_data)) {
+                                syncFGToAllSessions(fgs => [...fgs, ...t.template_data.map((fgData: any, idx: number) => ({
+                                  id: `from-template-${Date.now()}-${idx}`,
+                                  label: fgData.label || `Template ${idx + 1}`,
+                                  roomIds: fgData.roomIds || [],
+                                  slots: fgData.slots || [],
+                                  color: fgData.color || FG_COLOURS[idx % FG_COLOURS.length],
+                                  heldInRoom: fgData.heldInRoom,
+                                }))]);
+                              }
+                              setLoadTemplateModal(false);
+                            }}
+                            style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600, backgroundColor: '#7c3aed', color: 'white', border: 'none', cursor: 'pointer' }}
+                          >
+                            Load
+                          </button>
+                          <button
+                            onClick={() => { setEditingTemplateId(t.id); setEditTemplateName(t.name); setEditTemplateDays(t.days_of_week || []); }}
+                            style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '11px', backgroundColor: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db', cursor: 'pointer' }}
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`Delete template "${t.name}"?`)) return;
+                              try {
+                                const r = await fetch(`/api/family-grouping-templates?id=${encodeURIComponent(t.id)}`, { method: 'DELETE' });
+                                if (r.ok) setFgTemplates(prev => prev.filter(tm => tm.id !== t.id));
+                              } catch { /* network error */ }
+                            }}
+                            style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '11px', backgroundColor: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5', cursor: 'pointer' }}
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {/* -- Print header -- */}
