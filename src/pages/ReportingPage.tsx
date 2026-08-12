@@ -1764,16 +1764,24 @@ export default function ReportingPage() {
           const saBufferRequired     = saTotalFloorStaff > 0 ? saTotalFloorStaff / 6 : 0;
           const saFloatUnitIds    = new Set(centre.floatUnitIds ?? []);
           const saNonRatioUnitIds = new Set(centre.nonRatioUnitIds ?? []);
-          // Match the Morning Briefing / Float Pool panel: count only floats that overlap
-          // the 10:00–14:00 core window, and include Z casuals that overlap that window.
+          // Match the Morning Briefing / Float Pool panel exactly:
+          //  – Exclude split-shift floats (they are routed to Support, not the float pool).
+          //  – Count only shifts that overlap the useful 10:00–13:30 core window
+          //    (a shift starting at 13:45 is not useful as a floater).
           function overlapsCoreWindow(start: any, end: any) {
             const sM = hhmm(fmtTime(start));
             const eM = hhmm(fmtTime(end));
             if (sM === null || eM === null) return false;
-            return sM < 14 * 60 && eM > 10 * 60;
+            const WINDOW_START = 10 * 60;
+            const USEFUL_START_CUTOFF = 13 * 60 + 30;
+            return sM < USEFUL_START_CUTOFF && eM > WINDOW_START;
           }
           const saFloatCount =
-            (rosters as any[]).filter(r => saFloatUnitIds.has(r.OperationalUnit) && overlapsCoreWindow(r.StartTime, r.EndTime)).length +
+            (rosters as any[]).filter(r =>
+              saFloatUnitIds.has(r.OperationalUnit) &&
+              !r.isSplitShift &&
+              overlapsCoreWindow(r.StartTime, r.EndTime)
+            ).length +
             (zCasuals as any[]).filter(z => overlapsCoreWindow(z.StartTime, z.EndTime)).length;
           const saAdCount         = (rosters as any[]).filter(r => {
             if (!saNonRatioUnitIds.has(r.OperationalUnit)) return false;
